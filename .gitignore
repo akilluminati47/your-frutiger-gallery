@@ -1,0 +1,10 @@
+# local tooling / preview server config
+.claude/
+
+# stale build archive (predates current source)
+index.zip
+
+# OS cruft
+Thumbs.db
+desktop.ini
+.DS_Store

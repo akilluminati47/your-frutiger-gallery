@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Digital Realm ● 3D Gallery</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  <link rel="stylesheet" href="styles.css" />
+
+  <!-- Three.js loaded from CDN via import map -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <!-- WebGL canvas gets appended here -->
+  <div id="scene"></div>
+
+  <!-- White "swoop" overlay used for the fade-in / fade-out transitions -->
+  <div id="fade"></div>
+
+  <!-- Frutiger Aero / Vista sunshine glare beaming over your shoulder -->
+  <div id="sunGlare" aria-hidden="true"></div>
+
+  <!-- In-world HUD -->
+  <div id="hud" class="hidden">
+    <div id="crosshair"><span class="dot"></span></div>
+    <div id="prompt"></div>
+    <div id="legend">
+      <b>WASD</b> / arrows move &nbsp;·&nbsp; <b>mouse</b> look &nbsp;·&nbsp;
+      <b>E</b> / click visit &nbsp;·&nbsp; <b>Esc</b> pause
+    </div>
+  </div>
+
+  <!-- Landing / entry card -->
+  <div id="enter">
+    <div class="glass card">
+      <div class="bubbles" aria-hidden="true">
+        <span></span><span></span><span></span><span></span><span></span>
+      </div>
+      <h1 id="title">DIGITAL REALM</h1>
+      <p id="subtitle">choose a world to enter</p>
+      <button id="enterBtn" class="aero-btn" disabled>✦ Enter the realm ✦</button>
+      <p class="fineprint" id="loadnote">Loading the world…</p>
+    </div>
+  </div>
+
+  <!-- Pause overlay (shown when pointer-lock is released) -->
+  <div id="pause" class="hidden">
+    <div class="glass card small">
+      <h2>Paused</h2>
+      <p>Take a breath.</p>
+      <button id="resumeBtn" class="aero-btn">Resume</button>
+    </div>
+  </div>
+
+  <!-- Fatal-error notice if WebGL / network fails -->
+  <div id="oops" class="hidden">
+    <div class="glass card small">
+      <h2>Couldn't open the realm</h2>
+      <p id="oopsmsg"></p>
+    </div>
+  </div>
+
+  <script type="module" src="gallery.js"></script>
+</body>
+</html>
