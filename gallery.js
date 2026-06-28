@@ -39,16 +39,20 @@ function withProtocol(u){ return /^https?:\/\//i.test(u) ? u : 'https://' + u; }
 function screenshotURL(url, w, h){
   const full = withProtocol(url);
   const enc  = encodeURIComponent(full);
+  // every provider is asked for the VISITOR's exact viewport (w×h) and given a
+  // few seconds to finish loading, so the capture is the visitor's aspect ratio
+  // and fully painted rather than a half-loaded frame.
   switch (CONFIG.screenshotProvider){
     case 'mshots':
-      return `https://s.wordpress.com/mshots/v1/${enc}?w=${w}&h=${h}`;
+      return `https://s.wordpress.com/mshots/v1/${enc}?w=${w}&h=${h}&vpw=${w}&vph=${h}`;
     case 'microlink':
       return `https://api.microlink.io/?url=${enc}&screenshot=true&embed=screenshot.url`
-           + `&viewport.width=${w}&viewport.height=${h}&viewport.deviceScaleFactor=1&meta=false`;
+           + `&viewport.width=${w}&viewport.height=${h}&viewport.deviceScaleFactor=1`
+           + `&waitUntil=networkidle2&meta=false`;
     case 'thumio':
     default:
-      // honours output size + viewport so the snapshot matches the visitor's screen
-      return `https://image.thum.io/get/width/${w}/crop/${h}/viewportWidth/${w}/noanimate/${full}`;
+      // width + crop/height + viewportWidth → exact device aspect; wait → full asset load
+      return `https://image.thum.io/get/width/${w}/crop/${h}/viewportWidth/${w}/wait/8/noanimate/${full}`;
   }
 }
 
@@ -94,8 +98,9 @@ const FH = 2.4, FW = FH * ASPECT, FRAME_Y = eyeHeight;   // frames float at eye 
 const ROWS  = Math.ceil(CONFIG.projects.length / 2);
 const END_Z = START_Z + (ROWS - 1) * DZ;
 
-const WALL_X  = HALF + 2.0;             // glass side walls sit just outside the frames
-const WALL_H  = 3.6;                    // glass wall height
+const WALL_X  = HALF + 2.0;             // glass side walls
+const FRAME_X = WALL_X - 0.12;          // frames hang pressed flat against the glass walls
+const WALL_H  = 4.8;                    // taller: leaves a title-padding band above each panel
 const PLAT_Z0 = -7, PLAT_Z1 = END_Z + 7;
 const DESK_CZ = (PLAT_Z0 + PLAT_Z1) / 2;
 const DESK_W  = (WALL_X + 1.0) * 2;
@@ -331,10 +336,14 @@ function dontNestReflections(){
   buildWall(-1); buildWall(1);
   dontNestReflections();
 
-  // glass legs dropping the platform down to the grass
+  // glass legs dropping the platform down to the grass.
+  // NOTE: kept OPAQUE on purpose — a transparent leg gets dropped by the glass
+  // floor's transmission pass and flips in/out with the painter's-algorithm sort,
+  // so it vanished from some angles. Opaque (frosted) renders in the solid pass
+  // and stays put while still reading as glassy via clearcoat + env reflections.
   const legMat = new THREE.MeshPhysicalMaterial({
-    color:0xbfe6ff, roughness:0.08, metalness:0, transmission:0.5,
-    thickness:1.0, ior:1.3, clearcoat:1, transparent:true, opacity:0.55,
+    color:0xcdeeff, roughness:0.18, metalness:0,
+    clearcoat:1, clearcoatRoughness:0.12, envMapIntensity:1.3,
   });
   const legH = (-0.7) - GROUND_Y;
   const lx = DESK_W/2 - 1.6, lz = DESK_D/2 - 1.6;
@@ -404,20 +413,30 @@ function placeholderTexture(name){
   const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
 }
 
-function loadScreen(project){
-  const tex = placeholderTexture(project.name);          // show instantly
+// loads the live screenshot into `mesh`, then "contain"-fits the panel to the
+// image's true aspect so the page is never stretched — even if the provider
+// hands back a slightly different ratio than we asked for.
+function loadScreen(project, mesh){
   const img = new Image();
   img.crossOrigin = 'anonymous';
   img.onload = () => {
-    tex.image = img; tex.needsUpdate = true;
-    tex.colorSpace = THREE.SRGBColorSpace;
-    tex.minFilter = THREE.LinearMipmapLinearFilter;
-    tex.generateMipmaps = true;
-    tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+    const t = new THREE.Texture(img);
+    t.colorSpace = THREE.SRGBColorSpace;
+    t.minFilter = THREE.LinearMipmapLinearFilter;
+    t.magFilter = THREE.LinearFilter;
+    t.generateMipmaps = true;
+    t.anisotropy = renderer.capabilities.getMaxAnisotropy();
+    t.needsUpdate = true;
+    mesh.material.map?.dispose?.();           // drop the placeholder
+    mesh.material.map = t; mesh.material.needsUpdate = true;
+
+    const ia = (img.naturalWidth || img.width) / (img.naturalHeight || img.height);
+    let w = FW, h = FW / ia;                   // fit by width…
+    if (h > FH){ h = FH; w = FH * ia; }        // …unless that overflows the panel
+    mesh.scale.set(w / FW, h / FH, 1);
   };
   img.onerror = () => { /* keep the placeholder */ };
   img.src = screenshotURL(project.url, SHOT_W, SHOT_H);
-  return tex;
 }
 
 function labelTexture(text){
@@ -465,19 +484,20 @@ function buildGallery(font){
     const group = new THREE.Group();
     const side = (i % 2 === 0) ? -1 : 1;      // left / right of the corridor
     const row  = Math.floor(i / 2);
-    group.position.set(side * HALF, FRAME_Y, START_Z + row * DZ);
+    group.position.set(side * FRAME_X, FRAME_Y, START_Z + row * DZ);  // pressed to the glass wall
     group.rotation.y = side < 0 ? Math.PI/2 : -Math.PI/2;   // face the walkway
 
-    // glass border (rounded box behind the screen) — floats at eye level, no stand
+    // glass border (rounded box behind the screen) — hung flat on the wall, no stand
     const border = new THREE.Mesh(new RoundedBoxGeometry(FW+0.5, FH+0.5, 0.2, 4, 0.12), frameMat);
     border.castShadow = true; group.add(border);
 
     // the live screenshot (unlit so it reads as a glowing screen)
     const screen = new THREE.Mesh(
       new THREE.PlaneGeometry(FW, FH),
-      new THREE.MeshBasicMaterial({ map: loadScreen(project), toneMapped:false })
+      new THREE.MeshBasicMaterial({ map: placeholderTexture(project.name), toneMapped:false })
     );
     screen.position.z = 0.11; group.add(screen);
+    loadScreen(project, screen);              // swap in the live render + contain-fit
 
     // name plaque, mounted flat on the panel above the screen
     const label = labelPanel(project.name);
@@ -850,11 +870,11 @@ function moveAndInteract(dt, t){
   // (so you can't back away and trigger a panel that's now behind you)
   const fwd = new THREE.Vector3(); camera.getWorldDirection(fwd);
   const fl = Math.hypot(fwd.x, fwd.z) || 1, fX = fwd.x/fl, fZ = fwd.z/fl;
-  activeFrame = null; let best = 6.0;
+  activeFrame = null; let best = 7.5;
   for (const f of frames){
     const dx = f.position.x - o.position.x, dz = f.position.z - o.position.z;
     const d  = Math.hypot(dx, dz);
-    if (d > 6.0) continue;
+    if (d > 7.5) continue;
     if ((dx/d)*fX + (dz/d)*fZ < 0.6) continue;     // must be facing it (~within 53°)
     if (d < best){ best = d; activeFrame = f; }
   }
@@ -884,6 +904,9 @@ addEventListener('resize', () => {
 
 $('title').textContent = CONFIG.title;
 $('subtitle').textContent = CONFIG.subtitle;
+// entrance button is stamped with the owner's handle (CONFIG.creator) — the one
+// breadcrumb a new owner edits after cloning (or a future sign-up Worker writes)
+$('enterBtn').textContent = `✦ enter ${CONFIG.creator}'s realm ✦`;
 setInputMode(isTouch ? 'touch' : 'keyboard');
 
 new FontLoader().load(

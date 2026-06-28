@@ -2,13 +2,20 @@
 //  EDIT THIS FILE — drop your domains here and the gallery builds itself.
 // ════════════════════════════════════════════════════════════════════
 export const CONFIG = {
+  // ── OWNER BREADCRUMB ───────────────────────────────────────────────
+  // Your handle / artist name. This is the ONE value a new owner changes
+  // after cloning (a future sign-up Worker can write it too). It stamps the
+  // entrance button: "enter <creator>'s realm".
+  creator: "akilluminati47",
+
   // Big title shown on the entry card and floating in the world.
   title: "DIGITAL REALM",
   subtitle: "choose a world to enter",
 
-  // Your projects. Add as many as you like — frames auto-arrange into a
-  // gallery corridor. `name` is the floating label, `url` is where the
-  // "visit?" swoop takes you (and what gets screenshotted).
+  // Your works. Add or remove as many as you like — frames auto-arrange into
+  // the gallery corridor and the glass floor + walls lengthen to fit.
+  //   name → the plaque mounted on the panel
+  //   url  → where the "visit?" swoop takes you (and what gets screenshotted)
   projects: [
     { name: "guns.lol",      url: "https://guns.lol/akilluminati47" },
     { name: "DemonBot",      url: "https://demonbot.win" },
@@ -33,7 +40,7 @@ export const CONFIG = {
   //   padLook   – gamepad right-stick look speed (radians/sec)
   //   touchLook – touch-drag look sensitivity (radians per screen pixel)
   movement: {
-    accel: 32, friction: 8, maxSpeed: 4.8, mouseSensitivity: 1.0,
+    accel: 43, friction: 8, maxSpeed: 6.4, mouseSensitivity: 1.0,   // walk speed +33%
     padLook: 2.6, touchLook: 0.0045,
   },
 
