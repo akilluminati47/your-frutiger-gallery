@@ -22,7 +22,7 @@ creator: "akilluminati47",
 ```
 
 This single **breadcrumb** is the only thing a new owner changes after cloning. It
-stamps the entrance button: **"✦ enter akilluminati47's realm ✦"**. Change the string,
+becomes the label on the entrance button (e.g. **akilluminati47**). Change the string,
 and the button updates. (A future sign-up Worker can write this one field to mint a
 gallery per user.)
 

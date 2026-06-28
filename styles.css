@@ -34,17 +34,6 @@ body{
   transition:opacity 1.6s cubic-bezier(.6,0,.2,1);
 }
 
-/* ── Beaming Vista sunshine glare over your shoulder ────────── */
-#sunGlare{
-  position:fixed; inset:0; z-index:15; pointer-events:none;
-  mix-blend-mode:screen;
-  background:
-    radial-gradient(58% 48% at 80% 6%, rgba(255,247,216,.6), rgba(255,240,200,.18) 42%, transparent 70%),
-    radial-gradient(38% 28% at 72% -2%, rgba(255,255,255,.55), transparent 64%);
-  animation:sunPulse 7s ease-in-out infinite;
-}
-@keyframes sunPulse{ 0%,100%{ opacity:.5 } 50%{ opacity:.74 } }
-
 /* ── Shared glassy "Frutiger Aero" card ─────────────────────── */
 .glass{
   position:relative;

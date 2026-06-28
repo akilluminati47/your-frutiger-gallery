@@ -129,7 +129,12 @@ let skyMat;
       uniform float uTime;
       uniform vec3 top, mid, bottom, sunCol, sunDir;
 
-      float hash(vec2 p){ p = fract(p*vec2(123.34,345.45)); p += dot(p, p+34.345); return fract(p.x*p.y); }
+      // Dave Hoskins hash — no axis-aligned streaks (the old one drew flat lines)
+      float hash(vec2 p){
+        vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+        p3 += dot(p3, p3.yzx + 33.33);
+        return fract((p3.x + p3.y) * p3.z);
+      }
       float vnoise(vec2 p){
         vec2 i = floor(p), f = fract(p);
         float a = hash(i), b = hash(i+vec2(1.,0.)), c = hash(i+vec2(0.,1.)), d = hash(i+vec2(1.,1.));
@@ -154,16 +159,17 @@ let skyMat;
         float halo = pow(sd, 90.0)*0.55 + pow(sd, 11.0)*0.16;
         sky += sunCol * (disk*1.5 + halo);
 
-        // animated FBM clouds, projected onto a high plane, fading into the horizon
-        float above = smoothstep(0.04, 0.34, dir.y);
-        vec2 uv = dir.xz / max(dir.y, 0.12) * 0.55;
-        uv += vec2(uTime*0.012, uTime*0.004);
-        float n  = fbm(uv);
-        float n2 = fbm(uv*2.3 + 11.0);
-        float cov = smoothstep(0.50, 0.86, n*0.72 + n2*0.28) * above;
-        vec3 cloudCol = mix(vec3(0.74,0.82,0.93), vec3(1.0), n);
-        cloudCol += sunCol * halo * 0.6;
-        sky = mix(sky, cloudCol, cov*0.88);
+        // animated FBM clouds — kept high so the horizon projection never stretches
+        // the noise into streaks; two layers give a soft faux-volumetric puffiness
+        float above = smoothstep(0.12, 0.42, dir.y);
+        vec2 uv = dir.xz / max(dir.y, 0.24) * 0.5;
+        uv += vec2(uTime*0.010, uTime*0.004);
+        float dens = fbm(uv)*0.7 + fbm(uv*2.1 + 7.0)*0.3;
+        float cov  = smoothstep(0.46, 0.82, dens) * above;
+        // shade the base of each puff a touch darker for depth
+        vec3 cloudCol = mix(vec3(0.70,0.79,0.91), vec3(1.0), smoothstep(0.30,0.92,dens));
+        cloudCol += sunCol * halo * 0.5;
+        sky = mix(sky, cloudCol, cov*0.9);
 
         // dither to kill 8-bit banding
         sky += (hash(gl_FragCoord.xy) - 0.5) / 255.0;
@@ -270,7 +276,7 @@ function dontNestReflections(){
 /* ── the floating glass corridor: floor + side walls + legs over grass ── */
 {
   const REFL_FLOOR = lowPerf ? 512 : 1024;
-  const REFL_WALL  = lowPerf ? 256 : 512;
+  const REFL_WALL  = 512;                    // real planar wall reflections on every device
 
   // grassy ground far below, stretching to the hilly horizon
   const grass = new THREE.Mesh(
@@ -305,26 +311,15 @@ function dontNestReflections(){
   // glass side walls — same reflective look as the floor, carried up the sides
   function buildWall(side){
     const x = side * WALL_X;
-    if (!lowPerf){
-      const w = glassReflector(new THREE.PlaneGeometry(DESK_D-0.8, WALL_H),
-        { tex:REFL_WALL, color:0xa9cde6, alpha:0.40 });
-      w.rotation.y = side < 0 ? Math.PI/2 : -Math.PI/2;
-      w.position.set(x, WALL_H/2, DESK_CZ);
-      scene.add(w);
-    } else {
-      // lighter envmap glass on mobile (no extra reflection pass)
-      const w = new THREE.Mesh(
-        new THREE.PlaneGeometry(DESK_D-0.8, WALL_H),
-        new THREE.MeshPhysicalMaterial({
-          color:0xbfe6ff, roughness:0.04, metalness:0, transmission:1.0,
-          thickness:0.6, ior:1.3, clearcoat:1, transparent:true, opacity:0.3,
-          envMapIntensity:1.6, side:THREE.DoubleSide,
-        })
-      );
-      w.rotation.y = side < 0 ? Math.PI/2 : -Math.PI/2;
-      w.position.set(x, WALL_H/2, DESK_CZ);
-      scene.add(w);
-    }
+    // real planar reflection on EVERY device, so the gallery reflects across the
+    // hall on mobile too. (The old mobile path used envmap-only glass, which just
+    // smeared a faint copy of the panel behind it — read as a shadow, not a mirror.)
+    const w = glassReflector(new THREE.PlaneGeometry(DESK_D-0.8, WALL_H),
+      { tex:REFL_WALL, color:0xa9cde6, alpha:0.40 });
+    w.rotation.y = side < 0 ? Math.PI/2 : -Math.PI/2;
+    w.position.set(x, WALL_H/2, DESK_CZ);
+    scene.add(w);
+
     // crisp glossy top rail so the glass wall reads as a solid pane edge
     const rail = new THREE.Mesh(
       new RoundedBoxGeometry(0.12, 0.12, DESK_D-0.6, 3, 0.05),
@@ -413,10 +408,27 @@ function placeholderTexture(name){
   const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
 }
 
-// loads the live screenshot into `mesh`, then "contain"-fits the panel to the
-// image's true aspect so the page is never stretched — even if the provider
-// hands back a slightly different ratio than we asked for.
-function loadScreen(project, mesh){
+// rounded-corner alpha mask at the panel's aspect, so the screenshot rolls right
+// to the curved edges of the panel instead of sitting as a square in a big inset
+const PANEL_MASK = (() => {
+  const W = 512, H = Math.max(2, Math.round(512 / ASPECT));
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const x = c.getContext('2d');
+  const r = Math.min(W, H) * 0.07;
+  x.fillStyle = '#fff'; roundRect(x, 0, 0, W, H, r); x.fill();
+  const t = new THREE.CanvasTexture(c); t.needsUpdate = true; return t;
+})();
+
+// "cover"-fit a texture to the panel aspect via a UV crop: fills the panel
+// edge-to-edge at the image's TRUE aspect — no stretch, no letterbox squares
+function coverFit(tex){
+  const ia = tex.image.naturalWidth / tex.image.naturalHeight, pa = FW / FH;
+  if (ia > pa){ tex.repeat.set(pa/ia, 1); tex.offset.set((1 - pa/ia)/2, 0); }
+  else        { tex.repeat.set(1, ia/pa); tex.offset.set(0, (1 - ia/pa)/2); }
+}
+
+// loads the live screenshot and cover-fits it onto the panel material
+function loadScreen(project, mat){
   const img = new Image();
   img.crossOrigin = 'anonymous';
   img.onload = () => {
@@ -424,16 +436,13 @@ function loadScreen(project, mesh){
     t.colorSpace = THREE.SRGBColorSpace;
     t.minFilter = THREE.LinearMipmapLinearFilter;
     t.magFilter = THREE.LinearFilter;
+    t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
     t.generateMipmaps = true;
     t.anisotropy = renderer.capabilities.getMaxAnisotropy();
+    coverFit(t);
     t.needsUpdate = true;
-    mesh.material.map?.dispose?.();           // drop the placeholder
-    mesh.material.map = t; mesh.material.needsUpdate = true;
-
-    const ia = (img.naturalWidth || img.width) / (img.naturalHeight || img.height);
-    let w = FW, h = FW / ia;                   // fit by width…
-    if (h > FH){ h = FH; w = FH * ia; }        // …unless that overflows the panel
-    mesh.scale.set(w / FW, h / FH, 1);
+    mat.map?.dispose?.();                       // drop the placeholder
+    mat.map = t; mat.needsUpdate = true;
   };
   img.onerror = () => { /* keep the placeholder */ };
   img.src = screenshotURL(project.url, SHOT_W, SHOT_H);
@@ -487,21 +496,24 @@ function buildGallery(font){
     group.position.set(side * FRAME_X, FRAME_Y, START_Z + row * DZ);  // pressed to the glass wall
     group.rotation.y = side < 0 ? Math.PI/2 : -Math.PI/2;   // face the walkway
 
-    // glass border (rounded box behind the screen) — hung flat on the wall, no stand
-    const border = new THREE.Mesh(new RoundedBoxGeometry(FW+0.5, FH+0.5, 0.2, 4, 0.12), frameMat);
-    border.castShadow = true; group.add(border);
+    // glass backing with curved edges: gives depth + shadow, and is the edge the
+    // screenshot rolls over (its rounded front sits right behind the image)
+    const back = new THREE.Mesh(new RoundedBoxGeometry(FW, FH, 0.16, 5, 0.09), frameMat);
+    back.castShadow = true; group.add(back);
 
-    // the live screenshot (unlit so it reads as a glowing screen)
-    const screen = new THREE.Mesh(
-      new THREE.PlaneGeometry(FW, FH),
-      new THREE.MeshBasicMaterial({ map: placeholderTexture(project.name), toneMapped:false })
-    );
-    screen.position.z = 0.11; group.add(screen);
-    loadScreen(project, screen);              // swap in the live render + contain-fit
+    // the live screenshot — fills the panel edge-to-edge at the image's true
+    // aspect (cover-fit) and is rounded by PANEL_MASK so it rolls over the edges
+    const panelMat = new THREE.MeshBasicMaterial({
+      map: placeholderTexture(project.name), alphaMap: PANEL_MASK,
+      transparent: true, toneMapped: false,
+    });
+    const screen = new THREE.Mesh(new THREE.PlaneGeometry(FW, FH), panelMat);
+    screen.position.z = 0.082; group.add(screen);
+    loadScreen(project, panelMat);            // swap in the live render, cover-fit
 
-    // name plaque, mounted flat on the panel above the screen
+    // name plaque — centered in the gap between the panel top and the wall top
     const label = labelPanel(project.name);
-    label.position.set(0, FH/2 + 0.5, 0.06); group.add(label);
+    label.position.set(0, (FH/2 + WALL_H - FRAME_Y) / 2, 0.06); group.add(label);
 
     // 3D "visit?" text — hidden until you approach
     const tg = new TextGeometry('visit?', {
@@ -733,6 +745,20 @@ function resumeGame(){
 }
 function togglePause(){ if (state === 'play') pauseGame(); else if (state === 'paused') resumeGame(); }
 
+// back to the entry card (used when returning via the browser Back button, which
+// would otherwise restore a frozen mid-swoop white screen = a "blank realm")
+function resetToMenu(){
+  launch = null; state = 'menu'; started = false;
+  $('fade').style.opacity = '0';
+  $('enter').classList.remove('hidden');
+  $('hud').classList.add('hidden');
+  $('pause').classList.add('hidden');
+  $('touch')?.classList.add('hidden');
+  $('prompt')?.classList.remove('show');
+  controls.getObject().position.set(0, eyeHeight, -6);
+  camera.lookAt(0, eyeHeight, 10);
+}
+
 controls.addEventListener('lock', () => {
   $('pause').classList.add('hidden');
   if (!started) beginPlay(); else resumeGame();
@@ -902,11 +928,15 @@ addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight);
 });
 
+// returning to the gallery via the browser Back button (bfcache restore) lands
+// on the entry screen again, not a frozen white/blank realm
+addEventListener('pageshow', (e) => { if (e.persisted) resetToMenu(); });
+
 $('title').textContent = CONFIG.title;
 $('subtitle').textContent = CONFIG.subtitle;
-// entrance button is stamped with the owner's handle (CONFIG.creator) — the one
-// breadcrumb a new owner edits after cloning (or a future sign-up Worker writes)
-$('enterBtn').textContent = `✦ enter ${CONFIG.creator}'s realm ✦`;
+// entrance button is just the owner's handle (CONFIG.creator) — the one breadcrumb
+// a new owner edits after cloning (or a future sign-up Worker writes)
+$('enterBtn').textContent = CONFIG.creator;
 setInputMode(isTouch ? 'touch' : 'keyboard');
 
 new FontLoader().load(

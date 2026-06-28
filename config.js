@@ -4,8 +4,8 @@
 export const CONFIG = {
   // ── OWNER BREADCRUMB ───────────────────────────────────────────────
   // Your handle / artist name. This is the ONE value a new owner changes
-  // after cloning (a future sign-up Worker can write it too). It stamps the
-  // entrance button: "enter <creator>'s realm".
+  // after cloning (a future sign-up Worker can write it too). It becomes the
+  // label on the entrance button.
   creator: "akilluminati47",
 
   // Big title shown on the entry card and floating in the world.
