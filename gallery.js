@@ -66,13 +66,16 @@ try {
   renderer = new THREE.WebGLRenderer({ antialias:true, powerPreference:'high-performance' });
 } catch (e){ fatal('Your browser/GPU could not start WebGL.'); throw e; }
 
-renderer.setPixelRatio(Math.min(realDpr, lowPerf ? 1.75 : 2));
+renderer.setPixelRatio(Math.min(realDpr, lowPerf ? 1.5 : 2));   // fewer fragments on retina phones
 renderer.setSize(innerWidth, innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.18;
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+// the casters (panels/walls/legs) and the sun never move, so the shadow map is
+// computed ONCE (see boot) instead of re-rendered every frame
+renderer.shadowMap.autoUpdate = false;
 $('scene').appendChild(renderer.domElement);
 
 scene = new THREE.Scene();
@@ -90,6 +93,9 @@ scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
    3 · world — layout, premium sky, light, hills, glass corridor
    ════════════════════════════════════════════════════════════════ */
 const bubbles = [];
+// decorative objects that are SKIPPED inside the mirror passes (they barely show
+// in a faint reflection but cost a full extra draw in each of the 3 reflectors)
+const noReflect = [];
 
 // gallery + corridor footprint (everything below is derived from this)
 const GROUND_Y = -8;                    // grassy world far beneath the glass
@@ -144,7 +150,7 @@ let skyMat;
       float fbm(vec2 p){
         float v = 0.0, a = 0.5;
         mat2 m = mat2(1.6,1.2,-1.2,1.6);
-        for(int i=0;i<5;i++){ v += a*vnoise(p); p = m*p; a *= 0.5; }
+        for(int i=0;i<${lowPerf ? 3 : 5};i++){ v += a*vnoise(p); p = m*p; a *= 0.5; }
         return v;
       }
       void main(){
@@ -218,26 +224,37 @@ scene.add(sun);
   lf.addElement(new LensflareElement(texGlow, 130, 1.0,  new THREE.Color(0xcfe6ff)));
   lf.position.copy(SUN_DIR.clone().multiplyScalar(460));   // sit on the sky-shader sun
   scene.add(lf);
+  noReflect.push(lf);                                       // never reflect the flare
 }
 
-// rolling green "Bliss" hills — ringed around the perimeter, never on the platform
+// rolling green "Bliss" hills — ringed around the perimeter, never on the platform.
+// One InstancedMesh (a single draw call for all of them) with per-hill colour.
 {
   const greens = [0x6fbf46, 0x7ed05a, 0x63ad3e, 0x86d669];
   const N = 30;
   // keep-out radius: nothing in the landscape may intrude inside this circle
   const KEEPOUT = Math.hypot(DESK_W, DESK_D) / 2 + 10;
+  const hills = new THREE.InstancedMesh(
+    new THREE.SphereGeometry(1, 16, 10),                    // unit sphere; real size folded into per-instance scale
+    new THREE.MeshStandardMaterial({ roughness:1 }), N);
+  const dummy = new THREE.Object3D(), col = new THREE.Color();
   for (let i = 0; i < N; i++){
-    const mat  = new THREE.MeshStandardMaterial({ color:greens[i % greens.length], roughness:1 });
     const r    = 40 + Math.random()*40;
     const sxz  = 1 + Math.random()*0.5;
     const effR = r * sxz;                                   // the hill's true footprint radius
-    const hill = new THREE.Mesh(new THREE.SphereGeometry(r, 24, 16), mat);
     const ang  = (i / N) * Math.PI * 2 + Math.random()*0.18;
     const dist = KEEPOUT + effR + Math.random()*90;         // near edge always clears the platform
-    hill.position.set(Math.cos(ang)*dist, GROUND_Y, DESK_CZ + Math.sin(ang)*dist);
-    hill.scale.set(sxz, 0.24 + Math.random()*0.14, sxz);
-    scene.add(hill);
+    dummy.position.set(Math.cos(ang)*dist, GROUND_Y, DESK_CZ + Math.sin(ang)*dist);
+    dummy.scale.set(r*sxz, r*(0.24 + Math.random()*0.14), r*sxz);
+    dummy.updateMatrix();
+    hills.setMatrixAt(i, dummy.matrix);
+    hills.setColorAt(i, col.setHex(greens[i % greens.length]));
   }
+  hills.instanceMatrix.needsUpdate = true;
+  hills.instanceColor.needsUpdate = true;
+  hills.frustumCulled = false;                             // unit-geo instance bounds would mis-cull the real hills
+  scene.add(hills);
+  noReflect.push(hills);
 }
 
 /* ── semi-transparent mirror: a Reflector you can also see through ──
@@ -259,16 +276,24 @@ function glassReflector(geo, { tex=1024, color=0x9fc0dd, alpha=0.5 } = {}){
   allReflectors.push(r);
   return r;
 }
-// stop multiple Reflectors from recursively rendering each other (cost explosion):
-// while any one reflects, hide all the others.
+// Each Reflector re-renders the whole scene from a mirror camera — the dominant
+// GPU cost. Three things keep that cheap:
+//   1. nesting guard — while one mirror renders, hide the others (no recursion)
+//   2. decorative cull — skip noReflect objects (bubbles/hills/flare) in mirrors
+//   3. throttle — only refresh each mirror every `userData.every` frames; the
+//      scene moves slowly so a 1–2 frame-old, faint reflection is invisible
 function dontNestReflections(){
   for (const r of allReflectors){
     const orig = r.onBeforeRender;
+    r.userData.tick = 0;
+    r.userData.every = r.userData.every || 1;
     r.onBeforeRender = function(...args){
-      const snap = allReflectors.map(o => o.visible);
-      for (const o of allReflectors) if (o !== r) o.visible = false;
+      if ((this.userData.tick++ % this.userData.every) !== 0) return;   // reuse last reflection
+      const hidden = [];
+      for (const o of allReflectors) if (o !== this && o.visible){ o.visible = false; hidden.push(o); }
+      for (const o of noReflect)     if (o.visible){ o.visible = false; hidden.push(o); }
       orig.apply(this, args);
-      allReflectors.forEach((o, i) => { o.visible = snap[i]; });
+      for (const o of hidden) o.visible = true;
     };
   }
 }
@@ -288,24 +313,27 @@ function dontNestReflections(){
   grass.receiveShadow = true;
   scene.add(grass);
 
-  // glass slab body (see-through, so you can spot the grass underfoot)
+  // glass slab body — plain transparent clearcoat instead of `transmission`, which
+  // would force a whole extra refraction render pass for a slab that's mostly hidden
+  // under the reflective floor anyway
   const slab = new THREE.Mesh(
     new RoundedBoxGeometry(DESK_W, 0.7, DESK_D, 5, 0.22),
     new THREE.MeshPhysicalMaterial({
-      color:0xcdeeff, roughness:0.05, metalness:0,
-      transmission:0.82, thickness:1.4, ior:1.32,
-      clearcoat:1, clearcoatRoughness:0.05,
-      transparent:true, opacity:0.34, envMapIntensity:1.5,
+      color:0xbfe6ff, roughness:0.08, metalness:0,
+      clearcoat:1, clearcoatRoughness:0.06,
+      transparent:true, opacity:0.3, envMapIntensity:1.6,
     })
   );
   slab.position.set(0, -0.35, DESK_CZ);
   scene.add(slab);
 
-  // reflective-but-clear glass walking surface
+  // reflective-but-clear glass walking surface (refresh every frame on desktop,
+  // every other frame on mobile — it's underfoot and most scrutinised)
   const floor = glassReflector(new THREE.PlaneGeometry(DESK_W-0.8, DESK_D-0.8),
     { tex:REFL_FLOOR, color:0x9fc0dd, alpha:0.52 });
   floor.rotation.x = -Math.PI/2;
   floor.position.set(0, 0.004, DESK_CZ);
+  floor.userData.every = lowPerf ? 2 : 1;
   scene.add(floor);
 
   // glass side walls — same reflective look as the floor, carried up the sides
@@ -318,6 +346,7 @@ function dontNestReflections(){
       { tex:REFL_WALL, color:0xa9cde6, alpha:0.40 });
     w.rotation.y = side < 0 ? Math.PI/2 : -Math.PI/2;
     w.position.set(x, WALL_H/2, DESK_CZ);
+    w.userData.every = lowPerf ? 3 : 2;        // walls refresh less often than the floor
     scene.add(w);
 
     // crisp glossy top rail so the glass wall reads as a solid pane edge
@@ -378,6 +407,7 @@ function bubbleTexture(){
     s.userData.sway  = Math.random()*Math.PI*2;
     scene.add(s); bubbles.push(s);
   }
+  noReflect.push(...bubbles);      // bubbles drift in the main view only, not the mirrors
 }
 function resetBubble(s, anywhere){
   const sc = 0.1 + Math.random()*0.4;
@@ -943,6 +973,7 @@ new FontLoader().load(
   'https://unpkg.com/three@0.160.0/examples/fonts/helvetiker_bold.typeface.json',
   (font) => {
     buildGallery(font);
+    renderer.shadowMap.needsUpdate = true;   // render the static shadow map once, now that all casters exist
     $('loadnote').textContent = `${CONFIG.projects.length} worlds ready`;
     $('enterBtn').disabled = false;
     animate();
