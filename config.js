@@ -29,8 +29,13 @@ export const CONFIG = {
   screenshotProvider: "thumio",
 
   // Feel of the first-person walk. Higher accel = snappier; higher
-  // friction = stops sooner. Defaults are tuned for a calm glide.
-  movement: { accel: 34, friction: 7.5, maxSpeed: 5.2, mouseSensitivity: 1.0 },
+  // friction = stops sooner. Defaults are tuned for a calm, smooth glide.
+  //   padLook   – gamepad right-stick look speed (radians/sec)
+  //   touchLook – touch-drag look sensitivity (radians per screen pixel)
+  movement: {
+    accel: 32, friction: 8, maxSpeed: 4.8, mouseSensitivity: 1.0,
+    padLook: 2.6, touchLook: 0.0045,
+  },
 
   // Master volume for the synthesised SFX / ambient pad (0–1).
   volume: 0.6,

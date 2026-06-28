@@ -10,7 +10,7 @@
 }
 
 *{ box-sizing:border-box; margin:0; padding:0; }
-html,body{ height:100%; overflow:hidden; }
+html,body{ height:100%; overflow:hidden; touch-action:none; overscroll-behavior:none; }
 body{
   font-family:'Quicksand', 'Segoe UI', system-ui, sans-serif;
   color:var(--ink);
@@ -43,7 +43,7 @@ body{
     radial-gradient(38% 28% at 72% -2%, rgba(255,255,255,.55), transparent 64%);
   animation:sunPulse 7s ease-in-out infinite;
 }
-@keyframes sunPulse{ 0%,100%{ opacity:.72 } 50%{ opacity:.95 } }
+@keyframes sunPulse{ 0%,100%{ opacity:.5 } 50%{ opacity:.74 } }
 
 /* ── Shared glassy "Frutiger Aero" card ─────────────────────── */
 .glass{
@@ -159,3 +159,37 @@ h2{ font-size:26px; letter-spacing:.05em; margin-bottom:6px; color:var(--aqua-d)
   opacity:.8;
 }
 #legend b{ color:#fff; }
+
+/* ── On-screen touch controls ───────────────────────────────── */
+#touch{ position:absolute; inset:0; pointer-events:none; }
+/* floating analog joystick (JS positions it where your thumb lands) */
+#joy{
+  position:fixed; width:112px; height:112px; margin:-56px 0 0 -56px; border-radius:50%;
+  background:radial-gradient(circle at 50% 38%, rgba(255,255,255,.30), rgba(140,200,255,.16) 60%, rgba(120,190,255,.05) 100%);
+  border:1.5px solid rgba(255,255,255,.55);
+  box-shadow:0 6px 20px rgba(10,70,140,.3), inset 0 1px 0 rgba(255,255,255,.7);
+  backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px);
+  opacity:0; transition:opacity .18s ease; pointer-events:none;
+}
+#joy.on{ opacity:1; }
+#joyKnob{
+  position:absolute; left:50%; top:50%; width:52px; height:52px; border-radius:50%;
+  transform:translate(-50%,-50%);
+  background:linear-gradient(180deg, rgba(170,225,255,.96), rgba(40,150,230,.96));
+  border:1.5px solid rgba(255,255,255,.85);
+  box-shadow:0 4px 12px rgba(10,80,180,.5), inset 0 2px 2px rgba(255,255,255,.85);
+}
+.touch-btn{
+  position:fixed; pointer-events:auto; -webkit-tap-highlight-color:transparent;
+  font-family:inherit; font-weight:600; color:#fff; border:none; border-radius:999px;
+  background:linear-gradient(180deg, #7fd0ff 0%, var(--aqua) 50%, var(--aqua-d) 100%);
+  box-shadow:0 8px 20px rgba(10,90,200,.45), inset 0 2px 2px rgba(255,255,255,.85), inset 0 -8px 14px rgba(0,60,140,.4);
+}
+.touch-btn:active{ filter:brightness(1.08); transform:scale(.97); }
+#visitBtn{
+  right:26px; bottom:30px; width:98px; height:98px; font-size:17px; letter-spacing:.04em;
+  opacity:0; transform:scale(.7); pointer-events:none;
+  transition:opacity .25s ease, transform .25s ease;
+}
+#visitBtn.on{ opacity:1; transform:scale(1); pointer-events:auto; }
+#pauseBtn{ left:18px; top:18px; width:48px; height:48px; font-size:14px; opacity:.9; }
