@@ -318,13 +318,34 @@ function glassReflector(geo, { tex=1024, color=0x9fc0dd, alpha=0.5 } = {}){
     clipBias:0.003, textureWidth:tex, textureHeight:tex, color:new THREE.Color(color),
   });
   const m = r.material;
+
+  // ── cheap softening blur (touch only) ──────────────────────────────────
+  // Mobile renders these mirrors at a low 512² so they read pixelated. A tiny
+  // 5-tap cross blur in the reflector's own shader softens that low res for
+  // almost nothing (4 extra texture reads from a small, cache-hot texture).
+  // Skipped on desktop where the mirrors are already high-res and crisp.
+  if (lowPerf){
+    const sampleTarget = 'vec4 base = texture2DProj( tDiffuse, vUv );';
+    if (m.fragmentShader.includes(sampleTarget)){
+      const tx = (1.3 / tex).toFixed(6);          // ~1.3-texel offset in projective space
+      m.fragmentShader = m.fragmentShader.replace(sampleTarget, `
+        vec2 _tx = vec2(${tx});
+        vec4 base = texture2DProj( tDiffuse, vUv ) * 0.4;
+        base += texture2DProj( tDiffuse, vUv + vec4( _tx.x*vUv.w, 0.0, 0.0, 0.0) ) * 0.15;
+        base += texture2DProj( tDiffuse, vUv + vec4(-_tx.x*vUv.w, 0.0, 0.0, 0.0) ) * 0.15;
+        base += texture2DProj( tDiffuse, vUv + vec4(0.0,  _tx.y*vUv.w, 0.0, 0.0) ) * 0.15;
+        base += texture2DProj( tDiffuse, vUv + vec4(0.0, -_tx.y*vUv.w, 0.0, 0.0) ) * 0.15;`);
+    }
+  }
+
   const target = 'blendOverlay( base.rgb, color ), 1.0 )';
   if (m.fragmentShader.includes(target)){
     m.fragmentShader = 'uniform float gAlpha;\n'
       + m.fragmentShader.replace(target, 'blendOverlay( base.rgb, color ), gAlpha )');
     m.uniforms.gAlpha = { value: alpha };
-    m.transparent = true; m.depthWrite = false; m.needsUpdate = true;
+    m.transparent = true; m.depthWrite = false;
   }
+  m.needsUpdate = true;
   allReflectors.push(r);
   return r;
 }
@@ -765,7 +786,19 @@ addEventListener('keydown', e => {
   if (e.code !== 'Escape') setInputMode('keyboard');
 });
 addEventListener('keyup', e => { keys[e.code] = false; });
-addEventListener('mousemove', () => { if (!isTouch) setInputMode('keyboard'); }, { passive:true });
+// mouse move → keyboard input mode + drive the custom crosshair cursor, which
+// only shows on UI screens (never while pointer-locked / walking the gallery)
+const crosshairEl = $('crosshair');
+addEventListener('mousemove', (e) => {
+  if (isTouch) return;
+  setInputMode('keyboard');
+  if (!crosshairEl) return;
+  if (controls.isLocked){ crosshairEl.classList.remove('show'); return; }
+  crosshairEl.style.left = e.clientX + 'px';
+  crosshairEl.style.top  = e.clientY + 'px';
+  crosshairEl.classList.add('show');
+  crosshairEl.classList.toggle('active', !!e.target.closest?.('.aero-btn'));   // grow/glow over buttons
+}, { passive:true });
 
 /* ── gamepad ── */
 let padIndex = null, padVisitPrev = false, padPausePrev = false;
@@ -1024,6 +1057,7 @@ function resetToMenu(){
 
 controls.addEventListener('lock', () => {
   $('pause').classList.add('hidden');
+  crosshairEl?.classList.remove('show');     // clear the menu cursor while in-game
   if (!started) beginPlay(); else resumeGame();
 });
 controls.addEventListener('unlock', () => { if (state === 'launching') return; pauseGame(); });
@@ -1195,9 +1229,8 @@ function moveAndInteract(dt, t){
   if (activeFrame !== lastActive || canVisit !== lastCanVisit){
     const sameFrame = activeFrame === lastActive;
     lastActive = activeFrame; lastCanVisit = canVisit;
-    if (activeFrame) $('crosshair').classList.add('active');
-    else {
-      $('crosshair').classList.remove('active');
+    // no in-game crosshair — the centre of the view stays clear
+    if (!activeFrame){
       $('prompt').classList.remove('show');
       $('visitBtn')?.classList.remove('on');
     }

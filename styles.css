@@ -18,15 +18,10 @@ body{
     radial-gradient(120% 90% at 50% -10%, #eafaff 0%, #bfe9ff 38%, #5fb8f5 72%, #2a7de1 100%);
   -webkit-font-smoothing:antialiased;
   user-select:none;
-  cursor:none;           /* hidden by default — only shown on menu/pause screens */
+  /* the system cursor is hidden everywhere; on menu/pause screens a custom
+     glowing crosshair (#crosshair) follows the mouse instead (see gallery.js) */
+  cursor:none;
 }
-/* Restore cursor on the two screens that have clickable buttons */
-#enter, #enter *,
-#pause, #pause *,
-#oops,  #oops  * { cursor:default; }
-/* ID+class beats ID+* — buttons inside those screens stay pointer */
-#enter .aero-btn,
-#pause .aero-btn  { cursor:pointer; }
 .hidden{ display:none !important; }
 
 #scene{ position:fixed; inset:0; }
@@ -146,22 +141,30 @@ h2{ font-size:26px; letter-spacing:.05em; margin-bottom:6px; color:var(--aqua-d)
   100%{ transform:translateY(-340px) scale(1.1); opacity:0; }
 }
 
+/* ── Custom crosshair cursor (menu/pause screens only) ──────────
+   JS sets left/top to the mouse position and toggles .show / .active.
+   z-index above every overlay so it always rides on top of the UI. */
+#crosshair{
+  position:fixed; left:0; top:0; z-index:90; pointer-events:none;
+  transform:translate(-50%,-50%);
+  opacity:0; transition:opacity .18s ease;
+}
+#crosshair.show{ opacity:1; }
+#crosshair .dot{
+  display:block; width:11px; height:11px; border-radius:50%;
+  background:rgba(255,255,255,.95);
+  box-shadow:0 0 8px rgba(120,210,255,.9), 0 0 2px rgba(0,80,160,.6);
+  transition:transform .2s ease, background .2s ease, box-shadow .2s ease;
+}
+/* grows + glows when hovering a button — the old in-world hover animation */
+#crosshair.active .dot{
+  transform:scale(2.1);
+  background:rgba(180,240,255,.95);
+  box-shadow:0 0 18px rgba(120,210,255,1), 0 0 4px rgba(0,80,160,.7);
+}
+
 /* ── In-world HUD ───────────────────────────────────────────── */
 #hud{ position:fixed; inset:0; z-index:20; pointer-events:none; }
-#crosshair{
-  position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
-}
-#crosshair .dot{
-  display:block; width:9px; height:9px; border-radius:50%;
-  background:rgba(255,255,255,.9);
-  box-shadow:0 0 8px rgba(120,210,255,.9), 0 0 2px rgba(0,80,160,.6);
-  transition:transform .25s ease, background .25s ease;
-}
-#crosshair.active .dot{
-  transform:scale(1.9);
-  background:rgba(180,240,255,.95);
-  box-shadow:0 0 16px rgba(120,210,255,1);
-}
 #prompt{
   position:absolute; left:50%; bottom:14%; transform:translateX(-50%);
   font-size:18px; font-weight:600; letter-spacing:.06em; color:#fff;
