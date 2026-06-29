@@ -147,6 +147,9 @@ renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 // the casters (panels/walls/legs) and the sun never move, so the shadow map is
 // computed ONCE (see boot) instead of re-rendered every frame
 renderer.shadowMap.autoUpdate = false;
+// mobile: clear the canvas to black (no bright-blue sky flash before the world
+// renders / behind the black loading screen); desktop keeps its default clear
+if (isTouch) renderer.setClearColor(0x000000, 1);
 $('scene').appendChild(renderer.domElement);
 
 scene = new THREE.Scene();
@@ -612,22 +615,10 @@ function autoDelayForRow(row, sideIdx){
   return Math.max(0, INTRO_DUR + walkTime - 1.5) + row * 0.12 + sideIdx * 0.45;
 }
 
-// Flat rounded-rectangle screen outline (centred at the origin). Geometry-based
-// rounding → smooth corners with no alpha-mask pixelation AND no boxy side faces
-// to wrap a page's dark edge columns over (those read as a black "shadow" on the
-// narrow mobile panels). curveSegments smooth the four corners.
-function roundedRectShape(w, h, r){
-  const s = new THREE.Shape();
-  const x = -w / 2, y = -h / 2;
-  s.moveTo(x + r, y);
-  s.lineTo(x + w - r, y);          s.quadraticCurveTo(x + w, y,     x + w, y + r);
-  s.lineTo(x + w, y + h - r);      s.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-  s.lineTo(x + r, y + h);          s.quadraticCurveTo(x, y + h,     x, y + h - r);
-  s.lineTo(x, y + r);              s.quadraticCurveTo(x, y,         x + r, y);
-  return s;
-}
-// Planar UVs from each vertex's local x,y so the full screenshot maps 1:1 across
-// the flat face (ShapeGeometry's own UVs are raw coordinates, not normalised).
+// Planar UVs from each vertex's local x,y so the full screenshot maps 1:1 across the
+// front face — and the curved rim's vertices clamp to the nearest edge column, so the
+// page appears to roll over the device's rounded bezel (a hi-tech screen). RoundedBox
+// UVs are raw coordinates, not normalised; this fixes that.
 function planarUV(geo, w, h){
   const pos = geo.attributes.position, uv = geo.attributes.uv;
   for (let i = 0; i < pos.count; i++){
@@ -679,11 +670,13 @@ function labelTexture(text){
   t.needsUpdate = true;
   return t;
 }
-// flat name plaque that sits ON the gallery panel (shares the frame's facing,
-// rather than billboarding to always face the camera)
-function labelPanel(text){
+// name plaque that sits ON the gallery panel (shares the frame's facing, rather than
+// billboarding to always face the camera). A thick rounded-box slab matching the
+// device's depth + edge radius, so the badge reads as a chunky pill rather than a
+// decal — the pill texture skins its front face and wraps the curved rim (planarUV).
+function labelPanel(text, geo){
   return new THREE.Mesh(
-    new THREE.PlaneGeometry(2.6, 0.65),
+    geo,
     new THREE.MeshBasicMaterial({ map:labelTexture(text), transparent:true, depthWrite:false, toneMapped:false, opacity:0 })
   );
 }
@@ -691,17 +684,19 @@ function roundRect(x,a,b,w,h,r){ x.beginPath(); x.moveTo(a+r,b); x.arcTo(a+w,b,a
   x.arcTo(a+w,b+h,a,b+h,r); x.arcTo(a,b+h,a,b,r); x.arcTo(a,b,a+w,b,r); x.closePath(); }
 
 function buildGallery(font){
-  // one shared rounded-slab geometry for every device — its edges are rounded so
-  // the front-projected screenshot wraps over them. All panels share this geometry
-  // at a uniform device aspect; the screenshot is cover-fit onto it (fitPanelToImage).
-  // Flat rounded-rectangle screen (no boxy depth) — the full screenshot maps across
-  // the face with smooth corners and NO side faces to wrap dark page edges over, so
-  // skinny mobile panels never grow a black-shadow rim. Shared geometry, lifted just
-  // off the glass wall.
-  const DEV_RADIUS = 0.1, DEV_Z = 0.07;
-  const deviceGeo = new THREE.ShapeGeometry(roundedRectShape(FW, FH, DEV_RADIUS), 8);
+  // one shared rounded-slab geometry for every device — a chunky rounded box whose
+  // front face + curved edges are skinned by the screenshot (planarUV), so the page
+  // gently wraps the bezel like a hi-tech screen. All panels share this geometry at a
+  // uniform device aspect; the screenshot is cover-fit onto it (fitPanelToImage).
+  const DEV_DEPTH = 0.22, DEV_RADIUS = 0.11, DEV_Z = 0.06;   // DEV_Z lifts the slab off the glass wall
+  const deviceGeo = new RoundedBoxGeometry(FW, FH, DEV_DEPTH, 6, DEV_RADIUS);
   planarUV(deviceGeo, FW, FH);
-  const DEV_FRONT_Z = DEV_Z;                     // world-local z of the flat face
+  const DEV_FRONT_Z = DEV_Z + DEV_DEPTH / 2;     // world-local z of the front face
+
+  // matching slab for the name badges above each device — same depth + edge radius as
+  // the device, so the plaque reads as a thick rounded pill rather than a flat decal
+  const badgeGeo = new RoundedBoxGeometry(2.6, 0.65, DEV_DEPTH, 6, DEV_RADIUS);
+  planarUV(badgeGeo, 2.6, 0.65);
 
   const visitMat = new THREE.MeshPhysicalMaterial({
     color:0xffffff, roughness:0.08, metalness:0, clearcoat:1, clearcoatRoughness:0.05,
@@ -732,7 +727,7 @@ function buildGallery(font){
     // NOTE: no immediate fetch — loading is orchestrated by updateLoadingSystem()
 
     // name plaque — hidden until world loads, then bloops in
-    const label = labelPanel(project.name);
+    const label = labelPanel(project.name, badgeGeo);
     const labelBaseY = (FH/2 + WALL_H - FRAME_Y) / 2;
     label.position.set(0, labelBaseY, DEV_FRONT_Z + 0.02);   // floats just ahead of the curved face
     label.renderOrder = 5;         // always on top of its panel — no sort flicker
