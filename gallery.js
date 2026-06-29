@@ -176,13 +176,12 @@ const FH = 2.4, FW = FH * ASPECT, FRAME_Y = eyeHeight;   // frames float at eye 
 const ROWS  = Math.ceil(CONFIG.projects.length / 2);
 const END_Z = START_Z + (ROWS - 1) * DZ;
 // ── loading orchestration constants ──────────────────────────────────────
+const GAZE_ROWS      = 1;                    // last N rows are gaze-only (not auto)
+const GAZE_ROW_START = ROWS - GAZE_ROWS;    // first gaze row index
 const INTRO_DUR      = 2.6;                 // intro glide duration (seconds)
 const INTRO_START_Y  = 2.7;                 // camera height at the start of the glide-in
-const LOAD_DUR       = 1.8;                 // bar fill time once a panel pings in
-// Panels stay clean white tiles until the visitor walks within LOAD_RANGE, then
-// "ping in" (bar → live screenshot). Distance-based, not timed, so they're white
-// from afar regardless of walk speed — far-off dark sites never read as grey/black.
-const LOAD_RANGE     = 14;
+const LOAD_DUR       = 1.8;                 // bar fill time for auto frames
+const GAZE_LOAD_DUR  = 2.0;                 // bar fill for gaze-triggered frames
 
 const WALL_X  = HALF + 2.0;             // glass side walls
 const FRAME_X = WALL_X - 0.12;          // frames hang pressed flat against the glass walls
@@ -605,12 +604,31 @@ function drawLoadingBar(canvas, progress, animTime){
   }
 }
 
-// Project the screenshot straight onto a panel's FRONT plane, so it also skins the
-// rounded edges: the page's full content gently wraps the curve to the sides
-// instead of a flat plane ending in pixelated corner cuts. UV comes from each
-// vertex's local x,y — the curved rim + sides sample the nearest edge column, so
-// the preview appears to roll over the device's curved bezel (a hi-tech screen).
-function skinFrontUV(geo, w, h){
+// Auto-load delay: bar fires before the player walks up to that row.
+// Sequential ping: left (sideIdx=0) always fires first, then right (sideIdx=1) 0.45 s later,
+// so each row visibly pings left → right before moving to the next pair.
+function autoDelayForRow(row, sideIdx){
+  const walkTime = (START_Z + row * DZ) / CONFIG.movement.maxSpeed;
+  return Math.max(0, INTRO_DUR + walkTime - 1.5) + row * 0.12 + sideIdx * 0.45;
+}
+
+// Flat rounded-rectangle screen outline (centred at the origin). Geometry-based
+// rounding → smooth corners with no alpha-mask pixelation AND no boxy side faces
+// to wrap a page's dark edge columns over (those read as a black "shadow" on the
+// narrow mobile panels). curveSegments smooth the four corners.
+function roundedRectShape(w, h, r){
+  const s = new THREE.Shape();
+  const x = -w / 2, y = -h / 2;
+  s.moveTo(x + r, y);
+  s.lineTo(x + w - r, y);          s.quadraticCurveTo(x + w, y,     x + w, y + r);
+  s.lineTo(x + w, y + h - r);      s.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  s.lineTo(x + r, y + h);          s.quadraticCurveTo(x, y + h,     x, y + h - r);
+  s.lineTo(x, y + r);              s.quadraticCurveTo(x, y,         x + r, y);
+  return s;
+}
+// Planar UVs from each vertex's local x,y so the full screenshot maps 1:1 across
+// the flat face (ShapeGeometry's own UVs are raw coordinates, not normalised).
+function planarUV(geo, w, h){
   const pos = geo.attributes.position, uv = geo.attributes.uv;
   for (let i = 0; i < pos.count; i++){
     uv.setXY(i, clamp(pos.getX(i) / w + 0.5, 0, 1), clamp(pos.getY(i) / h + 0.5, 0, 1));
@@ -618,24 +636,12 @@ function skinFrontUV(geo, w, h){
   uv.needsUpdate = true;
 }
 
-// Cover-fit the live screenshot into the fixed device panel: the page fills the
-// screen edge-to-edge (no letterbox, no provider whitespace bars), centred
-// horizontally and anchored to the TOP so the hero / logo / emoji always shows.
-// Overflow is trimmed with the texture transform; every panel keeps the same device
-// aspect so the corridor rows stay uniform. The capture is already ≈ panel aspect,
-// so the trim is tiny — it mainly absorbs a provider returning a slightly off size.
+// Stretch the WHOLE screenshot to fill the device panel — full page content, no
+// crop, no letterbox. The capture is taken at the visitor's own device aspect
+// (phone/tablet/desktop), so the panel is that same aspect and the full image maps
+// 1:1 across it; any tiny provider size drift just stretches a hair to fill.
 function fitPanelToImage(u, tex){
-  const im = tex.image; if (!im) return;
-  const iw = im.naturalWidth || im.width, ih = im.naturalHeight || im.height;
-  if (!iw || !ih) return;
-  const ia = iw / ih, pa = FW / FH;
-  if (ia >= pa){                       // image wider than the panel → trim the sides, keep centred
-    const r = pa / ia;
-    tex.repeat.set(r, 1); tex.offset.set((1 - r) / 2, 0);
-  } else {                             // image taller than the panel → trim the bottom, keep the top
-    const r = ia / pa;
-    tex.repeat.set(1, r); tex.offset.set(0, 1 - r);
-  }
+  tex.repeat.set(1, 1); tex.offset.set(0, 0);
   tex.needsUpdate = true;
 }
 
@@ -688,14 +694,14 @@ function buildGallery(font){
   // one shared rounded-slab geometry for every device — its edges are rounded so
   // the front-projected screenshot wraps over them. All panels share this geometry
   // at a uniform device aspect; the screenshot is cover-fit onto it (fitPanelToImage).
-  // Sleek thin slab: a shallow depth + small corner radius keeps the screenshot's
-  // wrapped edge to a thin device-rim line. (The old chunky 0.22/0.11 wrapped a wide
-  // band of the page's dark edge columns over the curve, which read as a black
-  // "shadow" on the skinny mobile panels when seen at a grazing angle from afar.)
-  const DEV_DEPTH = 0.07, DEV_RADIUS = 0.035, DEV_Z = 0.05;   // DEV_Z lifts the slab off the glass wall
-  const deviceGeo = new RoundedBoxGeometry(FW, FH, DEV_DEPTH, 6, DEV_RADIUS);
-  skinFrontUV(deviceGeo, FW, FH);
-  const DEV_FRONT_Z = DEV_Z + DEV_DEPTH / 2;    // world-local z of the front face
+  // Flat rounded-rectangle screen (no boxy depth) — the full screenshot maps across
+  // the face with smooth corners and NO side faces to wrap dark page edges over, so
+  // skinny mobile panels never grow a black-shadow rim. Shared geometry, lifted just
+  // off the glass wall.
+  const DEV_RADIUS = 0.1, DEV_Z = 0.07;
+  const deviceGeo = new THREE.ShapeGeometry(roundedRectShape(FW, FH, DEV_RADIUS), 8);
+  planarUV(deviceGeo, FW, FH);
+  const DEV_FRONT_Z = DEV_Z;                     // world-local z of the flat face
 
   const visitMat = new THREE.MeshPhysicalMaterial({
     color:0xffffff, roughness:0.08, metalness:0, clearcoat:1, clearcoatRoughness:0.05,
@@ -706,21 +712,20 @@ function buildGallery(font){
     const group = new THREE.Group();
     const side        = (i % 2 === 0) ? -1 : 1;      // left / right of the corridor
     const row         = Math.floor(i / 2);
+    const isGazeFrame = row >= GAZE_ROW_START;  // last N rows are gaze-only
     group.position.set(side * FRAME_X, FRAME_Y, START_Z + row * DZ);  // pressed to the glass wall
     group.rotation.y = side < 0 ? Math.PI/2 : -Math.PI/2;   // face the walkway
 
-    // the device: a single rounded slab whose front + curved edges are skinned by
-    // the live screenshot. No flat plane, no alpha mask — the page's own pixels
-    // wrap the rounded bezel, so there are no cut/pixelated corners.
-    // Per-frame canvas textures — managed by updateLoadingSystem().
-    // Pending state: clean solid white (no noise). Loading state: Aero bar 0→100 %.
+    // the screen: a flat rounded-rectangle showing the full screenshot stretched to
+    // fill, smooth corners, no dark edge wrap. Per-frame canvas textures — managed
+    // by updateLoadingSystem(). Pending = clean white, loading = Aero bar 0→100 %.
     const wc = makeWhiteCanvas();
     const whiteTex = new THREE.CanvasTexture(wc); whiteTex.colorSpace = THREE.SRGBColorSpace;
     const lc = makeLoadCanvas();
     const loadTex = new THREE.CanvasTexture(lc); loadTex.colorSpace = THREE.SRGBColorSpace;
 
     const panelMat = new THREE.MeshBasicMaterial({ map: whiteTex, toneMapped: false });
-    const panel = new THREE.Mesh(deviceGeo, panelMat);   // shared geometry; screenshot is cover-fit via the texture transform
+    const panel = new THREE.Mesh(deviceGeo, panelMat);   // shared flat geometry; full image via the texture
     panel.position.z = DEV_Z;
     panel.castShadow = true;
     group.add(panel);
@@ -752,7 +757,9 @@ function buildGallery(font){
       project, visit, label, labelBaseY, scale:0, worldPos:new THREE.Vector3(),
       // ── loading state ──
       loadState:    'pending',               // 'pending' | 'loading' | 'done'
-      loadDuration: LOAD_DUR,
+      loadTrigger:  isGazeFrame ? 'gaze' : 'auto',
+      autoDelay:    isGazeFrame ? Infinity : autoDelayForRow(row, i%2),
+      loadDuration: isGazeFrame ? GAZE_LOAD_DUR : LOAD_DUR,
       loadProgress: 0, imageReady: false, liveTexture: null,
       screenMat: panelMat, panel, whiteTex, loadCanvas: lc, loadTex,
       labelBloop: -1,
@@ -814,10 +821,10 @@ addEventListener('keyup', e => { keys[e.code] = false; });
 const crosshairEl = $('crosshair');
 const lastPointer = { x: null, y: null };   // last mouse spot — seeds the pad cursor on a switch
 let uiHoverEl = null;
-// Mirror the mouse :hover lift/glow on whatever the cursor — mouse OR gamepad — is
-// over, so a gamepad-driven cursor enlarges the button exactly like a mouseover.
-// (The mouse also gets the browser's native :hover; this drives the gamepad path
-// and is cleared the instant the mouse moves, so the two never both light a button.)
+// Lift/glow whatever the shared virtual cursor — mouse OR gamepad — is over, so a
+// button enlarges exactly like a real mouseover. This is the ONLY hover path now
+// (CSS :hover is dropped): the virtual cursor can sit off the real OS pointer after
+// an input switch, so native :hover would light the wrong button.
 function setUiHover(el){
   const target = (el && !el.disabled) ? el : null;
   if (uiHoverEl === target) return;
@@ -828,17 +835,42 @@ function setUiHover(el){
 const onUiScreen = () => state === 'menu' || state === 'paused';
 addEventListener('mousemove', (e) => {
   if (isTouch) return;
-  lastPointer.x = e.clientX; lastPointer.y = e.clientY;
-  padCursor.ready = false;            // mouse took over → re-seed the pad cursor from here next time
   setInputMode('keyboard');
-  setUiHover(null);                   // native :hover drives the mouse; drop any gamepad hover
   if (!crosshairEl) return;
   if (controls.isLocked || !onUiScreen()){ crosshairEl.classList.remove('show'); return; }
-  crosshairEl.style.left = e.clientX + 'px';
-  crosshairEl.style.top  = e.clientY + 'px';
+  // One shared virtual cursor for mouse AND gamepad: the mouse nudges it by its
+  // movement delta, resuming from wherever the pad (or the mouse) last left it, so
+  // switching input never teleports the crosshair. The OS cursor is hidden, so this
+  // virtual spot diverging from the real pointer is invisible — hover is driven via
+  // setUiHover (not native :hover) and clicks are routed through it (see below).
+  if (!padCursor.ready){
+    padCursor.x = lastPointer.x ?? e.clientX;
+    padCursor.y = lastPointer.y ?? e.clientY;
+    padCursor.ready = true;
+  }
+  padCursor.x = clamp(padCursor.x + (e.movementX || 0), 0, innerWidth);
+  padCursor.y = clamp(padCursor.y + (e.movementY || 0), 0, innerHeight);
+  lastPointer.x = padCursor.x; lastPointer.y = padCursor.y;   // keep the seed in sync for the pad
+  const over = document.elementFromPoint(padCursor.x, padCursor.y)?.closest?.('.aero-btn');
+  setUiHover(over);
+  crosshairEl.style.left = padCursor.x + 'px';
+  crosshairEl.style.top  = padCursor.y + 'px';
   crosshairEl.classList.add('show');
-  crosshairEl.classList.toggle('active', !!e.target.closest?.('.aero-btn'));   // grow/glow over buttons
+  crosshairEl.classList.toggle('active', !!over);   // grow/glow over a live button
 }, { passive:true });
+// Route a real mouse click through the virtual cursor: after switching from the pad
+// the crosshair can sit off the real OS pointer, so the native click would hit the
+// wrong button (or none). If they differ, swallow it and fire whatever the crosshair
+// is actually over. When they match (the common no-pad case) the native click flows
+// through untouched.
+addEventListener('click', (e) => {
+  if (isTouch || controls.isLocked || !onUiScreen() || !padCursor.ready) return;
+  const virt = document.elementFromPoint(padCursor.x, padCursor.y)?.closest?.('.aero-btn');
+  const real = e.target?.closest?.('.aero-btn') || null;
+  if (virt === real) return;
+  e.preventDefault(); e.stopImmediatePropagation();
+  if (virt && !virt.disabled) virt.click();
+}, true);
 
 /* ── gamepad ──
    One poller, called every frame (see animate). It branches on game state:
@@ -1157,16 +1189,13 @@ function revealWorld(f){
 
 function updateLoadingSystem(dt, t){
   if (!galleryStartTime) return;
-  const p = controls.getObject().position;
+  const elapsed = performance.now() / 1000 - galleryStartTime;
   for (const f of frames){
     const u = f.userData;
     if (u.loadState === 'done') continue;
     if (u.loadState === 'pending'){
-      // Ping in once the visitor walks within range, or the moment they gaze at it.
-      // Until then it stays a clean white tile — so distant worlds read white, never
-      // a grey/black slab of some far-off dark site.
-      const dx = u.worldPos.x - p.x, dz = u.worldPos.z - p.z;
-      if (dx*dx + dz*dz <= LOAD_RANGE * LOAD_RANGE || f === activeFrame){
+      // Auto-fire when enough time has passed OR player gazes at screen (any trigger)
+      if ((u.loadTrigger === 'auto' && elapsed >= u.autoDelay) || f === activeFrame){
         startFrameLoading(f); continue;
       }
       // pending state = solid white, nothing to animate
