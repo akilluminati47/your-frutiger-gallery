@@ -818,11 +818,28 @@ addEventListener('keyup', e => { keys[e.code] = false; });
 // mouse move → keyboard input mode + drive the custom crosshair cursor, which
 // only shows on UI screens (never while pointer-locked / walking the gallery)
 const crosshairEl = $('crosshair');
+const lastPointer = { x: null, y: null };   // last mouse spot — seeds the pad cursor on a switch
+let uiHoverEl = null;
+// Mirror the mouse :hover lift/glow on whatever the cursor — mouse OR gamepad — is
+// over, so a gamepad-driven cursor enlarges the button exactly like a mouseover.
+// (The mouse also gets the browser's native :hover; this drives the gamepad path
+// and is cleared the instant the mouse moves, so the two never both light a button.)
+function setUiHover(el){
+  const target = (el && !el.disabled) ? el : null;
+  if (uiHoverEl === target) return;
+  uiHoverEl?.classList.remove('cursor-over');
+  target?.classList.add('cursor-over');
+  uiHoverEl = target;
+}
+const onUiScreen = () => state === 'menu' || state === 'paused';
 addEventListener('mousemove', (e) => {
   if (isTouch) return;
+  lastPointer.x = e.clientX; lastPointer.y = e.clientY;
+  padCursor.ready = false;            // mouse took over → re-seed the pad cursor from here next time
   setInputMode('keyboard');
+  setUiHover(null);                   // native :hover drives the mouse; drop any gamepad hover
   if (!crosshairEl) return;
-  if (controls.isLocked){ crosshairEl.classList.remove('show'); return; }
+  if (controls.isLocked || !onUiScreen()){ crosshairEl.classList.remove('show'); return; }
   crosshairEl.style.left = e.clientX + 'px';
   crosshairEl.style.top  = e.clientY + 'px';
   crosshairEl.classList.add('show');
@@ -840,7 +857,10 @@ let padIndex = null, padVisitPrev = false, padPausePrev = false, padBackPrev = f
 const padCursor = { x:0, y:0, ready:false };   // virtual mouse for the UI screens
 addEventListener('gamepadconnected',   e => { padIndex = e.gamepad.index; setInputMode('gamepad'); });
 addEventListener('gamepaddisconnected', e => {
-  if (padIndex === e.gamepad.index){ padIndex = null; setInputMode(isTouch ? 'touch' : 'keyboard'); }
+  if (padIndex === e.gamepad.index){
+    padIndex = null; padCursor.ready = false; setUiHover(null);   // drop the pad cursor + any pad hover
+    setInputMode(isTouch ? 'touch' : 'keyboard');
+  }
 });
 function getPad(){ return (padIndex != null && navigator.getGamepads) ? navigator.getGamepads()[padIndex] : null; }
 function pollPad(dt){
@@ -855,25 +875,34 @@ function pollPad(dt){
   // ── UI screens (entry splash + pause menu): left stick = cursor, A = click ──
   if (state === 'menu' || state === 'paused'){
     if (lx || ly || aBtn || bBtn || startBtn) setInputMode('gamepad');
-    if (!padCursor.ready){ padCursor.x = innerWidth/2; padCursor.y = innerHeight/2; padCursor.ready = true; }
-    const sp = 950;                              // cursor speed, px/s at full deflection
-    padCursor.x = clamp(padCursor.x + lx * sp * dt, 0, innerWidth);
-    padCursor.y = clamp(padCursor.y + ly * sp * dt, 0, innerHeight);
-    const over = document.elementFromPoint(padCursor.x, padCursor.y)?.closest?.('.aero-btn');
-    if (crosshairEl){
-      crosshairEl.style.left = padCursor.x + 'px';
-      crosshairEl.style.top  = padCursor.y + 'px';
-      crosshairEl.classList.add('show');
-      crosshairEl.classList.toggle('active', !!over && !over.disabled);   // grow/glow over a live button
+    // only DRIVE the cursor while the gamepad is the active input — otherwise the
+    // mouse owns the crosshair, so switching mouse↔pad never fights frame-to-frame
+    if (inputMode === 'gamepad'){
+      if (!padCursor.ready){                     // seed where the mouse left off (or centre) → no jump on switch
+        padCursor.x = lastPointer.x ?? innerWidth / 2;
+        padCursor.y = lastPointer.y ?? innerHeight / 2;
+        padCursor.ready = true;
+      }
+      const sp = 950;                            // cursor speed, px/s at full deflection
+      padCursor.x = clamp(padCursor.x + lx * sp * dt, 0, innerWidth);
+      padCursor.y = clamp(padCursor.y + ly * sp * dt, 0, innerHeight);
+      const over = document.elementFromPoint(padCursor.x, padCursor.y)?.closest?.('.aero-btn');
+      setUiHover(over);                           // lift/glow the button under the cursor, mouseover-style
+      if (crosshairEl){
+        crosshairEl.style.left = padCursor.x + 'px';
+        crosshairEl.style.top  = padCursor.y + 'px';
+        crosshairEl.classList.add('show');
+        crosshairEl.classList.toggle('active', !!uiHoverEl);   // grow/glow over a live button
+      }
+      if (aBtn && !padVisitPrev){                 // A → activate the button under the cursor
+        if (over === $('resumeBtn')){ audio.init(); resumeGame(); }
+        // gamepad start needs no pointer lock (look is on the right stick), so begin
+        // play directly rather than via controls.lock(), which a pad press can't grant
+        else if (over === $('enterBtn') && !over.disabled){ audio.init(); beginPlay(); }
+        else if (over && !over.disabled) over.click();
+      }
+      if (state === 'paused' && (bBtn || startBtn) && !padBackPrev){ audio.init(); resumeGame(); }   // B / Start → leave
     }
-    if (aBtn && !padVisitPrev){                  // A → activate the button under the cursor
-      if (over === $('resumeBtn')){ audio.init(); resumeGame(); }
-      // gamepad start needs no pointer lock (look is on the right stick), so begin
-      // play directly rather than via controls.lock(), which a pad press can't grant
-      else if (over === $('enterBtn') && !over.disabled){ audio.init(); beginPlay(); }
-      else if (over && !over.disabled) over.click();
-    }
-    if (state === 'paused' && (bBtn || startBtn) && !padBackPrev){ audio.init(); resumeGame(); }   // B / Start → leave
     padVisitPrev = aBtn; padBackPrev = bBtn || startBtn; padPausePrev = startBtn;
     return;
   }
@@ -1050,6 +1079,7 @@ function beginPlay(){
   if (started) return;
   started = true;
   galleryStartTime = performance.now() / 1000;   // seconds from page load
+  setUiHover(null);                              // clear any button hover left by the cursor
   crosshairEl?.classList.remove('show');         // drop the menu cursor (gamepad start has no pointer-lock event)
   $('enter').classList.add('hidden');
   $('hud').classList.remove('hidden');
@@ -1083,6 +1113,7 @@ function pauseGame(){
 function resumeGame(){
   if (!started) return;
   state = pausedFrom;                        // continue the glide, or back to play
+  setUiHover(null);                          // clear any button hover left by the cursor
   crosshairEl?.classList.remove('show');     // drop the menu cursor (gamepad path has no pointer-lock event)
   $('pause').classList.add('hidden');
   $('hud').classList.remove('hidden');
@@ -1192,8 +1223,14 @@ $('resumeBtn').addEventListener('click', () => {
 $('visitBtn')?.addEventListener('click', e => { e.preventDefault(); tryLaunch(); });
 $('pauseBtn')?.addEventListener('click', e => { e.preventDefault(); togglePause(); });
 
-// desktop click inside the world = visit the active frame
-renderer.domElement.addEventListener('click', () => { if (controls.isLocked) tryLaunch(); });
+// desktop click inside the world = visit the active frame. If a gamepad/touch
+// session started us without pointer lock, the first click instead engages
+// mouse-look (a click IS a user gesture, so the lock succeeds) — letting you
+// switch from pad to mouse mid-walk with no hitch.
+renderer.domElement.addEventListener('click', () => {
+  if (controls.isLocked){ tryLaunch(); return; }
+  if (!isTouch && state === 'play') controls.lock();
+});
 
 function tryLaunch(){
   if (state !== 'play' || !activeFrame || launch) return;
