@@ -21,18 +21,26 @@ const $ = id => document.getElementById(id);
 /* ════════════════════════════════════════════════════════════════
    1 · detect the VISITOR'S display → frame aspect + screenshot size
    ════════════════════════════════════════════════════════════════ */
-const realDpr = window.devicePixelRatio || 1;
-const ASPECT  = window.screen.width / window.screen.height || 16 / 9;
-let SHOT_W = Math.round(window.screen.width  * realDpr);
-let SHOT_H = Math.round(window.screen.height * realDpr);
-const CAP = 1920;                              // screenshot services cap width
-if (SHOT_W > CAP) { SHOT_H = Math.round(SHOT_H * CAP / SHOT_W); SHOT_W = CAP; }
-
-// what kind of inputs does this device have?
+// ── detect touch FIRST — all geometry + screenshot sizing flows from this ──
 const isTouch = matchMedia('(pointer: coarse)').matches
              || (navigator.maxTouchPoints || 0) > 0
              || 'ontouchstart' in window;
-const lowPerf = isTouch;                        // mobiles get a lighter reflection budget
+const lowPerf = isTouch;
+
+const realDpr = window.devicePixelRatio || 1;
+const SW = window.screen.width, SH = window.screen.height;
+
+// Mobile → always portrait screenshots so sites render their phone layout correctly.
+// Some Android devices report landscape dimensions even held portrait, so we swap.
+const ASPECT = isTouch
+  ? Math.min(SW, SH) / Math.max(SW, SH)    // < 1 → tall portrait frames on phones
+  : (SW / SH || 16 / 9);
+
+let SHOT_W = isTouch ? Math.min(SW, SH) * realDpr : SW * realDpr;
+let SHOT_H = isTouch ? Math.max(SW, SH) * realDpr : SH * realDpr;
+const CAP  = isTouch ? 760 : 1920;
+if (SHOT_W > CAP) { SHOT_H = Math.round(SHOT_H * CAP / SHOT_W); SHOT_W = CAP; }
+SHOT_W = Math.round(SHOT_W); SHOT_H = Math.round(SHOT_H);
 
 function withProtocol(u){ return /^https?:\/\//i.test(u) ? u : 'https://' + u; }
 
@@ -52,7 +60,9 @@ function screenshotURL(url, w, h){
     case 'thumio':
     default:
       // width + crop/height + viewportWidth → exact device aspect; wait → full asset load
-      return `https://image.thum.io/get/width/${w}/crop/${h}/viewportWidth/${w}/wait/8/noanimate/${full}`;
+      // wait/12: fonts + heavy assets get more render time (was wait/8)
+      // mobile uses a fixed 390px viewport so phone layouts render correctly
+      return `https://image.thum.io/get/width/${w}/crop/${h}/viewportWidth/${isTouch?390:w}/wait/12/noanimate/${full}`;
   }
 }
 
@@ -103,6 +113,12 @@ const HALF = 4.7, DZ = 7.2, START_Z = 9;
 const FH = 2.4, FW = FH * ASPECT, FRAME_Y = eyeHeight;   // frames float at eye level
 const ROWS  = Math.ceil(CONFIG.projects.length / 2);
 const END_Z = START_Z + (ROWS - 1) * DZ;
+// ── loading orchestration constants ──────────────────────────────────────
+const GAZE_ROWS      = 2;                    // last N rows are gaze-only (not auto)
+const GAZE_ROW_START = ROWS - GAZE_ROWS;    // first gaze row index
+const INTRO_DUR      = 2.6;                 // intro swoop duration (seconds)
+const LOAD_DUR       = 2.5;                 // bar fill time for auto frames
+const GAZE_LOAD_DUR  = 2.8;                 // bar fill for gaze-triggered frames
 
 const WALL_X  = HALF + 2.0;             // glass side walls
 const FRAME_X = WALL_X - 0.12;          // frames hang pressed flat against the glass walls
@@ -422,20 +438,96 @@ const frames = [];
 const texLoader = new THREE.TextureLoader();
 texLoader.setCrossOrigin('anonymous');
 
-function placeholderTexture(name){
-  const c = document.createElement('canvas'); c.width = 1024; c.height = Math.round(1024/ASPECT);
-  const x = c.getContext('2d');
-  const g = x.createLinearGradient(0,0,c.width,c.height);
-  g.addColorStop(0,'#eafaff'); g.addColorStop(.5,'#9ddcff'); g.addColorStop(1,'#3aa0ee');
-  x.fillStyle = g; x.fillRect(0,0,c.width,c.height);
-  x.fillStyle = 'rgba(255,255,255,.85)';
-  x.font = `600 ${Math.round(c.height*0.13)}px Quicksand, Segoe UI, sans-serif`;
-  x.textAlign = 'center'; x.textBaseline = 'middle';
-  x.fillText(name, c.width/2, c.height/2 - c.height*0.05);
-  x.font = `500 ${Math.round(c.height*0.06)}px Quicksand, Segoe UI, sans-serif`;
-  x.fillStyle = 'rgba(255,255,255,.7)';
-  x.fillText('loading live preview…', c.width/2, c.height/2 + c.height*0.12);
-  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+/* ── loading-sequence canvas helpers ───────────────────────────────────────
+   Three phases per panel:
+     1. "pending"  → animated white TV noise  (no name, no bar)
+     2. "loading"  → clean-white Aero barber-pole progress bar (green/blue/white)
+     3. "done"     → live screenshot snaps in; name plaque bloops up
+   ─────────────────────────────────────────────────────────────────────────── */
+const TEX_W = 512, TEX_H = Math.max(2, Math.round(512 / ASPECT));
+
+function makeNoiseCanvas(){
+  const c = document.createElement('canvas');
+  c.width = 96; c.height = Math.max(2, Math.round(96 / ASPECT)); return c;
+}
+function redrawNoise(canvas){
+  const c2 = canvas.getContext('2d'), W = canvas.width, H = canvas.height;
+  const id = c2.createImageData(W, H), d = id.data;
+  for (let i = 0; i < d.length; i += 4){
+    const v = (Math.random() * 160 + 60) | 0;
+    d[i] = v; d[i+1] = v; d[i+2] = v; d[i+3] = 255;
+  }
+  for (let y = 0; y < H; y += 3)        // subtle scanlines
+    for (let xi = 0; xi < W; xi++){
+      const i2 = (y*W + xi)*4;
+      d[i2] = Math.max(0, d[i2]-28); d[i2+1] = d[i2]; d[i2+2] = d[i2];
+    }
+  c2.putImageData(id, 0, 0);
+}
+
+function makeLoadCanvas(){
+  const c = document.createElement('canvas'); c.width = TEX_W; c.height = TEX_H; return c;
+}
+
+// Frutiger Aero loading screen: white bg + barber-pole green/blue/white bar
+function drawLoadingBar(canvas, progress, animTime){
+  const c2 = canvas.getContext('2d'), W = canvas.width, H = canvas.height;
+  c2.fillStyle = '#ffffff'; c2.fillRect(0, 0, W, H);
+  // Soft top-light Aero tint
+  const tg = c2.createLinearGradient(0, 0, 0, H * 0.28);
+  tg.addColorStop(0,'rgba(195,238,255,.55)'); tg.addColorStop(1,'rgba(195,238,255,0)');
+  c2.fillStyle = tg; c2.fillRect(0, 0, W, H * 0.28);
+  // Status label
+  c2.fillStyle = 'rgba(50,130,200,.65)';
+  c2.font = `500 ${Math.round(H * .055)}px Quicksand, Segoe UI, sans-serif`;
+  c2.textAlign = 'center'; c2.textBaseline = 'middle';
+  c2.fillText(progress < 0.995 ? 'loading world\u2026' : 'rendering\u2026', W/2, H * .38);
+  // Bar geometry
+  const padX=W*.1, barW=W-padX*2, barH=Math.round(H*.09), barX=padX, barY=H*.5-barH/2, rr=barH/2;
+  // Track (empty pill)
+  c2.fillStyle = 'rgba(150,200,235,.38)'; roundRect(c2,barX,barY,barW,barH,rr); c2.fill();
+  // Filled portion — barber-pole: diagonal green / blue / white twist
+  if (progress > 0){
+    const fillW = Math.max(rr*2, barW*progress);
+    c2.save(); roundRect(c2,barX,barY,fillW,barH,Math.min(rr,fillW/2)); c2.clip();
+    const sw=barH*1.1, rep=sw*3, off=(animTime*42)%rep;
+    const pal=['#33c75a','#1a96ff','#ffffff'];
+    for (let sx=-(rep*2)+off; sx<fillW+barH+rep; sx+=sw)
+      for (let ci=0; ci<3; ci++){
+        c2.fillStyle = pal[ci];
+        const ox=barX+sx+ci*sw;
+        c2.beginPath();
+        c2.moveTo(ox-barH,barY+barH); c2.lineTo(ox,barY);
+        c2.lineTo(ox+sw,barY); c2.lineTo(ox+sw-barH,barY+barH);
+        c2.closePath(); c2.fill();
+      }
+    // Aero gloss overlay (top half)
+    const gl=c2.createLinearGradient(0,barY,0,barY+barH);
+    gl.addColorStop(0,'rgba(255,255,255,.72)'); gl.addColorStop(.44,'rgba(255,255,255,.16)');
+    gl.addColorStop(.45,'rgba(255,255,255,0)'); gl.addColorStop(1,'rgba(255,255,255,0)');
+    c2.fillStyle=gl; c2.fillRect(barX,barY,fillW,barH); c2.restore();
+    c2.strokeStyle='rgba(255,255,255,.82)'; c2.lineWidth=2;
+    roundRect(c2,barX,barY,fillW,barH,Math.min(rr,fillW/2)); c2.stroke();
+  }
+  // Percentage (below bar)
+  c2.fillStyle='rgba(50,130,200,.75)';
+  c2.font=`600 ${Math.round(H*.046)}px Quicksand, Segoe UI, sans-serif`;
+  c2.textBaseline='top';
+  c2.fillText(`${Math.min(100,Math.round(progress*100))}%`, W/2, barY+barH+Math.round(H*.016));
+  // Decorative Aero bubble accents (corners)
+  for (const [bx,by,br] of [[padX*.55,H*.8,H*.038],[W-padX*.6,H*.84,H*.03],[padX*.85,H*.88,H*.022]]){
+    const bg=c2.createRadialGradient(bx,by-br*.3,0,bx,by,br);
+    bg.addColorStop(0,'rgba(255,255,255,.85)'); bg.addColorStop(.45,'rgba(180,228,255,.35)');
+    bg.addColorStop(1,'rgba(180,228,255,0)');
+    c2.fillStyle=bg; c2.beginPath(); c2.arc(bx,by,br,0,Math.PI*2); c2.fill();
+  }
+}
+
+// Auto-load delay: bar fires just before the player walks up to that row.
+// Calculation: intro-swoop(2.6s) + walk-time - 1s advance + tiny per-row stagger
+function autoDelayForRow(row, sideIdx){
+  const walkTime = (START_Z + row * DZ) / CONFIG.movement.maxSpeed;
+  return Math.max(0, INTRO_DUR + walkTime - 1.0) + row * 0.15 + sideIdx * 0.1;
 }
 
 // rounded-corner alpha mask at the panel's aspect, so the screenshot rolls right
@@ -502,7 +594,7 @@ function labelTexture(text){
 function labelPanel(text){
   return new THREE.Mesh(
     new THREE.PlaneGeometry(2.6, 0.65),
-    new THREE.MeshBasicMaterial({ map:labelTexture(text), transparent:true, depthWrite:false, toneMapped:false })
+    new THREE.MeshBasicMaterial({ map:labelTexture(text), transparent:true, depthWrite:false, toneMapped:false, opacity:0 })
   );
 }
 function roundRect(x,a,b,w,h,r){ x.beginPath(); x.moveTo(a+r,b); x.arcTo(a+w,b,a+w,b+h,r);
@@ -521,8 +613,9 @@ function buildGallery(font){
 
   CONFIG.projects.forEach((project, i) => {
     const group = new THREE.Group();
-    const side = (i % 2 === 0) ? -1 : 1;      // left / right of the corridor
-    const row  = Math.floor(i / 2);
+    const side        = (i % 2 === 0) ? -1 : 1;      // left / right of the corridor
+    const row         = Math.floor(i / 2);
+    const isGazeFrame = row >= GAZE_ROW_START;  // last N rows are gaze-only
     group.position.set(side * FRAME_X, FRAME_Y, START_Z + row * DZ);  // pressed to the glass wall
     group.rotation.y = side < 0 ? Math.PI/2 : -Math.PI/2;   // face the walkway
 
@@ -533,17 +626,25 @@ function buildGallery(font){
 
     // the live screenshot — fills the panel edge-to-edge at the image's true
     // aspect (cover-fit) and is rounded by PANEL_MASK so it rolls over the edges
+    // Per-frame canvas textures — managed by updateLoadingSystem()
+    const nc = makeNoiseCanvas(); redrawNoise(nc);
+    const noiseTex = new THREE.CanvasTexture(nc); noiseTex.colorSpace = THREE.SRGBColorSpace;
+    const lc = makeLoadCanvas();
+    const loadTex = new THREE.CanvasTexture(lc); loadTex.colorSpace = THREE.SRGBColorSpace;
+
     const panelMat = new THREE.MeshBasicMaterial({
-      map: placeholderTexture(project.name), alphaMap: PANEL_MASK,
+      map: noiseTex, alphaMap: PANEL_MASK,
       transparent: true, toneMapped: false,
     });
     const screen = new THREE.Mesh(new THREE.PlaneGeometry(FW, FH), panelMat);
     screen.position.z = 0.082; group.add(screen);
-    loadScreen(project, panelMat);            // swap in the live render, cover-fit
+    // NOTE: no immediate fetch — loading is orchestrated by updateLoadingSystem()
 
-    // name plaque — centered in the gap between the panel top and the wall top
+    // name plaque — hidden until world loads, then bloops in
     const label = labelPanel(project.name);
-    label.position.set(0, (FH/2 + WALL_H - FRAME_Y) / 2, 0.06); group.add(label);
+    label.position.set(0, (FH/2 + WALL_H - FRAME_Y) / 2, 0.06);
+    label.scale.setScalar(0.01);   // starts tiny; animates to 1.0 on reveal
+    group.add(label);
 
     // 3D "visit?" text — hidden until you approach
     const tg = new TextGeometry('visit?', {
@@ -559,7 +660,17 @@ function buildGallery(font){
     visit.userData.baseY = -0.15;
     group.add(visit);
 
-    group.userData = { project, visit, label, scale:0, worldPos:new THREE.Vector3() };
+    group.userData = {
+      project, visit, label, scale:0, worldPos:new THREE.Vector3(),
+      // ── loading state ──
+      loadState:    'pending',               // 'pending' | 'loading' | 'done'
+      loadTrigger:  isGazeFrame ? 'gaze' : 'auto',
+      autoDelay:    isGazeFrame ? Infinity : autoDelayForRow(row, i%2),
+      loadDuration: isGazeFrame ? GAZE_LOAD_DUR : LOAD_DUR,
+      loadProgress: 0, imageReady: false, liveTexture: null,
+      screenMat: panelMat, noiseCanvas: nc, noiseTex, loadCanvas: lc, loadTex,
+      labelBloop: -1, lastNoisePhase: -1,
+    };
     group.getWorldPosition(group.userData.worldPos);
     scene.add(group);
     frames.push(group);
@@ -732,7 +843,20 @@ const audio = (() => {
     o.frequency.setValueAtTime(220, t); o.frequency.exponentialRampToValueAtTime(880, t+1.0);
     env(o, t, 0.3, 0.9, 0.18); o.start(t); o.stop(t+1.2);
   }
-  return { init, droplet, pop, whoosh };
+  // Frutiger Aero rising major chime — C5→C6, E5→E6, G5→G6 arpeggio
+  function bloop(){
+    if (!ctx) return; const t = ctx.currentTime;
+    const o1=ctx.createOscillator(); o1.type='sine';
+    o1.frequency.setValueAtTime(523.25,t); o1.frequency.exponentialRampToValueAtTime(1046.5,t+0.18);
+    const o2=ctx.createOscillator(); o2.type='sine';
+    o2.frequency.setValueAtTime(659.25,t+0.06); o2.frequency.exponentialRampToValueAtTime(1318.5,t+0.22);
+    const o3=ctx.createOscillator(); o3.type='triangle';
+    o3.frequency.setValueAtTime(783.99,t+0.1); o3.frequency.exponentialRampToValueAtTime(1567.98,t+0.25);
+    env(o1,t,      0.008,0.55,0.38); o1.start(t);      o1.stop(t+0.7);
+    env(o2,t+0.06, 0.008,0.50,0.28); o2.start(t+0.06); o2.stop(t+0.7);
+    env(o3,t+0.10, 0.008,0.45,0.18); o3.start(t+0.10); o3.stop(t+0.7);
+  }
+  return { init, droplet, pop, whoosh, bloop };
 })();
 
 /* ════════════════════════════════════════════════════════════════
@@ -741,12 +865,14 @@ const audio = (() => {
 let state = 'menu';
 let introT = 0;
 let launch = null;
-let activeFrame = null, lastActive = null;
+let activeFrame = null, lastActive = null, lastCanVisit = false;
+let galleryStartTime = null;
 let started = false;
 
 function beginPlay(){
   if (started) return;
   started = true;
+  galleryStartTime = performance.now() / 1000;   // seconds from page load
   $('enter').classList.add('hidden');
   $('hud').classList.remove('hidden');
   $('fade').style.opacity = '1';
@@ -774,6 +900,76 @@ function resumeGame(){
   $('hud').classList.remove('hidden');
 }
 function togglePause(){ if (state === 'play') pauseGame(); else if (state === 'paused') resumeGame(); }
+
+/* ════════════════════════════════════════════════════════════════
+   8b · loading orchestration
+       noise → Aero bar → live screenshot + name bloop
+   ════════════════════════════════════════════════════════════════ */
+function startFrameLoading(f){
+  const u = f.userData;
+  if (u.loadState !== 'pending') return;
+  u.loadState = 'loading';
+  // Immediately swap panel to loading-bar canvas
+  u.screenMat.map = u.loadTex;
+  u.screenMat.needsUpdate = true;
+  drawLoadingBar(u.loadCanvas, 0, 0); u.loadTex.needsUpdate = true;
+  // Kick off the real HTTP screenshot fetch in parallel
+  const img = new Image(); img.crossOrigin = 'anonymous';
+  img.onload = () => {
+    const tex = new THREE.Texture(img);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.minFilter = THREE.LinearMipmapLinearFilter; tex.magFilter = THREE.LinearFilter;
+    tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+    tex.generateMipmaps = true;
+    tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+    coverFit(tex); tex.needsUpdate = true;
+    u.liveTexture = tex; u.imageReady = true;
+    if (u.loadProgress >= 1) revealWorld(f);
+  };
+  img.onerror = () => { u.imageReady = true; if (u.loadProgress >= 1) revealWorld(f); };
+  img.src = screenshotURL(u.project.url, SHOT_W, SHOT_H);
+}
+
+function revealWorld(f){
+  const u = f.userData;
+  if (u.loadState === 'done') return;
+  u.loadState = 'done';
+  // Swap in the live screenshot (keep bar canvas on error)
+  if (u.liveTexture){ u.screenMat.map?.dispose?.(); u.screenMat.map = u.liveTexture; u.screenMat.needsUpdate = true; }
+  // Free canvas textures — not needed anymore
+  u.loadTex?.dispose?.(); u.loadTex = null;
+  u.noiseTex?.dispose?.(); u.noiseTex = null;
+  // Trigger name-plaque bloop
+  u.labelBloop = 0;
+  audio.bloop();
+}
+
+function updateLoadingSystem(dt, t){
+  if (!galleryStartTime) return;
+  const elapsed = performance.now() / 1000 - galleryStartTime;
+  for (const f of frames){
+    const u = f.userData;
+    if (u.loadState === 'done') continue;
+    if (u.loadState === 'pending'){
+      // Auto-fire when enough time has passed OR player gazes at screen (any trigger)
+      if ((u.loadTrigger === 'auto' && elapsed >= u.autoDelay) || f === activeFrame){
+        startFrameLoading(f); continue;
+      }
+      // Animate TV static at ~10 fps
+      const np = Math.floor(t * 10);
+      if (np !== u.lastNoisePhase && u.noiseTex){
+        u.lastNoisePhase = np; redrawNoise(u.noiseCanvas); u.noiseTex.needsUpdate = true;
+      }
+    }
+    if (u.loadState === 'loading'){
+      // Accelerate bar when the player is actively watching
+      const speed = (f === activeFrame) ? 1.65 : 1.0;
+      u.loadProgress = Math.min(1, u.loadProgress + (dt / u.loadDuration) * speed);
+      drawLoadingBar(u.loadCanvas, u.loadProgress, t); u.loadTex.needsUpdate = true;
+      if (u.loadProgress >= 1 && u.imageReady) revealWorld(f);
+    }
+  }
+}
 
 // back to the entry card (used when returning via the browser Back button, which
 // would otherwise restore a frozen mid-swoop white screen = a "blank realm")
@@ -809,6 +1005,7 @@ renderer.domElement.addEventListener('click', () => { if (controls.isLocked) try
 
 function tryLaunch(){
   if (state !== 'play' || !activeFrame || launch) return;
+  if (activeFrame.userData.loadState !== 'done') return;   // world still loading
   const f = activeFrame;
   state = 'launching';
   audio.whoosh();
@@ -841,6 +1038,18 @@ function animate(){
   const t  = clock.elapsedTime;
 
   if (skyMat) skyMat.uniforms.uTime.value = t;
+  updateLoadingSystem(dt, t);
+
+  // Name-plaque bloop-in: scale 0.01→1.22→1.0 with overshoot, opacity 0→1
+  for (const f of frames){
+    const u = f.userData;
+    if (u.labelBloop < 0 || u.labelBloop >= 1) continue;
+    u.labelBloop = Math.min(1, u.labelBloop + dt * 3.0);
+    const lb = u.labelBloop;
+    const scl = lb < 0.65 ? (lb/0.65)*1.22 : 1.22 - ((lb-0.65)/0.35)*0.22;
+    u.label.scale.setScalar(Math.max(0.01, scl));
+    u.label.material.opacity = Math.min(1, lb * 2.5);
+  }
 
   for (const b of bubbles){
     b.position.y += b.userData.speed * dt;
@@ -874,7 +1083,7 @@ function animate(){
   // animate the "visit?" text on every frame
   for (const f of frames){
     const u = f.userData;
-    const target = (f === activeFrame && state === 'play') ? 1 : 0;
+    const target = (f === activeFrame && state === 'play' && u.loadState === 'done') ? 1 : 0;
     u.scale = lerp(u.scale, target, 1 - Math.pow(0.001, dt));
     const s = u.scale < 0.002 ? 0.001 : u.scale;
     u.visit.scale.setScalar(s);
@@ -934,18 +1143,22 @@ function moveAndInteract(dt, t){
     if ((dx/d)*fX + (dz/d)*fZ < 0.6) continue;     // must be facing it (~within 53°)
     if (d < best){ best = d; activeFrame = f; }
   }
-  if (activeFrame !== lastActive){
-    lastActive = activeFrame;
-    if (activeFrame){
-      audio.droplet();
-      $('prompt').textContent = `visit  ${activeFrame.userData.project.name}`;
-      $('prompt').classList.add('show');
-      $('crosshair').classList.add('active');
-      $('visitBtn')?.classList.add('on');
-    } else {
-      $('prompt').classList.remove('show');
+  const canVisit = !!(activeFrame && activeFrame.userData.loadState === 'done');
+  if (activeFrame !== lastActive || canVisit !== lastCanVisit){
+    const sameFrame = activeFrame === lastActive;
+    lastActive = activeFrame; lastCanVisit = canVisit;
+    if (activeFrame) $('crosshair').classList.add('active');
+    else {
       $('crosshair').classList.remove('active');
+      $('prompt').classList.remove('show');
       $('visitBtn')?.classList.remove('on');
+    }
+    if (canVisit){
+      if (!sameFrame) audio.droplet();   // droplet on approach, not on load-reveal
+      $('prompt').textContent = `visit  ${activeFrame.userData.project.name}`;
+      $('prompt').classList.add('show'); $('visitBtn')?.classList.add('on');
+    } else {
+      $('prompt').classList.remove('show'); $('visitBtn')?.classList.remove('on');
     }
   }
 }

@@ -14,8 +14,11 @@ export const CONFIG = {
 
   // Your works. Add or remove as many as you like — frames auto-arrange into
   // the gallery corridor and the glass floor + walls lengthen to fit.
-  //   name → the plaque mounted on the panel
+  //   name → the plaque mounted on the panel (revealed when the world loads)
   //   url  → where the "visit?" swoop takes you (and what gets screenshotted)
+  //
+  // ── Worlds 1–6 · auto-load as you walk (bar fires just before you arrive) ──
+  // ── Worlds 7–10 · gaze-triggered: walk to the end and look to discover ─────
   projects: [
     { name: "guns.lol",      url: "https://guns.lol/akilluminati47" },
     { name: "DemonBot",      url: "https://demonbot.win" },
@@ -23,24 +26,25 @@ export const CONFIG = {
     { name: "Peanut Run",    url: "https://peanut-run.pages.dev" },
     { name: "Saucer Patrol", url: "https://saucer-patrol.pages.dev" },
     { name: "GOW Casino",    url: "https://gow-casino.pages.dev" },
+    // ── discover by walking to the end ──
+    { name: "MIC FX",        url: "https://mic-fx.pages.dev/" },
+    { name: "DW Gallery",    url: "https://dw-gallery.pages.dev/" },
+    { name: "YouTube",       url: "https://youtube.com/@akilluminati47" },
+    { name: "Twitch",        url: "https://twitch.tv/akilluminati47" },
   ],
 
   // Open the chosen domain in a new tab instead of swooping the same tab.
   openInNewTab: false,
 
-  // Live-screenshot provider used to paint each frame at the VISITOR'S
-  // own display resolution + aspect ratio.
+  // Live-screenshot provider used to paint each frame.
   //   "thumio"    – image.thum.io  (fast, honours width/height, good CORS)
   //   "mshots"    – WordPress mShots (free, can be slow on first hit)
   //   "microlink" – api.microlink.io (clean, rate-limited on free tier)
   screenshotProvider: "thumio",
 
-  // Feel of the first-person walk. Higher accel = snappier; higher
-  // friction = stops sooner. Defaults are tuned for a calm, smooth glide.
-  //   padLook   – gamepad right-stick look speed (radians/sec)
-  //   touchLook – touch-drag look sensitivity (radians per screen pixel)
+  // Feel of the first-person walk.
   movement: {
-    accel: 43, friction: 8, maxSpeed: 6.4, mouseSensitivity: 1.0,   // walk speed +33%
+    accel: 43, friction: 8, maxSpeed: 6.4, mouseSensitivity: 1.0,
     padLook: 2.6, touchLook: 0.0045,
   },
 
