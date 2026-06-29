@@ -147,9 +147,6 @@ renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 // the casters (panels/walls/legs) and the sun never move, so the shadow map is
 // computed ONCE (see boot) instead of re-rendered every frame
 renderer.shadowMap.autoUpdate = false;
-// mobile: clear the canvas to black (no bright-blue sky flash before the world
-// renders / behind the black loading screen); desktop keeps its default clear
-if (isTouch) renderer.setClearColor(0x000000, 1);
 $('scene').appendChild(renderer.domElement);
 
 scene = new THREE.Scene();
@@ -545,7 +542,8 @@ const TEX_W = 512, TEX_H = Math.max(2, Math.round(512 / ASPECT));
 function makeWhiteCanvas(){
   const c = document.createElement('canvas'); c.width = TEX_W; c.height = TEX_H;
   const ctx = c.getContext('2d');
-  ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, TEX_W, TEX_H);
+  // mobile reads each device as a phone: its idle/off screen is black, not white
+  ctx.fillStyle = isTouch ? '#000000' : '#ffffff'; ctx.fillRect(0, 0, TEX_W, TEX_H);
   return c;
 }
 
@@ -553,16 +551,18 @@ function makeLoadCanvas(){
   const c = document.createElement('canvas'); c.width = TEX_W; c.height = TEX_H; return c;
 }
 
-// Frutiger Aero loading screen: white bg + barber-pole green/blue/white bar
+// Frutiger Aero loading screen: barber-pole green/blue/white bar over a bg that's
+// white on desktop and black on mobile (a phone booting up behind its black bezel)
 function drawLoadingBar(canvas, progress, animTime){
   const c2 = canvas.getContext('2d'), W = canvas.width, H = canvas.height;
-  c2.fillStyle = '#ffffff'; c2.fillRect(0, 0, W, H);
-  // Soft top-light Aero tint
+  const dark = isTouch;
+  c2.fillStyle = dark ? '#000000' : '#ffffff'; c2.fillRect(0, 0, W, H);
+  // Soft top-light Aero tint (a faint blue glow on either bg)
   const tg = c2.createLinearGradient(0, 0, 0, H * 0.28);
   tg.addColorStop(0,'rgba(195,238,255,.55)'); tg.addColorStop(1,'rgba(195,238,255,0)');
   c2.fillStyle = tg; c2.fillRect(0, 0, W, H * 0.28);
   // Status label
-  c2.fillStyle = 'rgba(50,130,200,.65)';
+  c2.fillStyle = dark ? 'rgba(170,215,255,.92)' : 'rgba(50,130,200,.65)';
   c2.font = `500 ${Math.round(H * .055)}px Quicksand, Segoe UI, sans-serif`;
   c2.textAlign = 'center'; c2.textBaseline = 'middle';
   c2.fillText(progress < 0.995 ? 'loading world\u2026' : 'rendering\u2026', W/2, H * .38);
@@ -594,7 +594,7 @@ function drawLoadingBar(canvas, progress, animTime){
     roundRect(c2,barX,barY,fillW,barH,Math.min(rr,fillW/2)); c2.stroke();
   }
   // Percentage (below bar)
-  c2.fillStyle='rgba(50,130,200,.75)';
+  c2.fillStyle = dark ? 'rgba(180,220,255,.95)' : 'rgba(50,130,200,.75)';
   c2.font=`600 ${Math.round(H*.046)}px Quicksand, Segoe UI, sans-serif`;
   c2.textBaseline='top';
   c2.fillText(`${Math.min(100,Math.round(progress*100))}%`, W/2, barY+barH+Math.round(H*.016));
@@ -670,13 +670,13 @@ function labelTexture(text){
   t.needsUpdate = true;
   return t;
 }
-// name plaque that sits ON the gallery panel (shares the frame's facing, rather than
-// billboarding to always face the camera). A thick rounded-box slab matching the
-// device's depth + edge radius, so the badge reads as a chunky pill rather than a
-// decal — the pill texture skins its front face and wraps the curved rim (planarUV).
-function labelPanel(text, geo){
+// flat 2D name plaque that floats off the wall in front of its device (shares the
+// frame's facing rather than billboarding). The pill texture has transparent margins
+// that read cleanly on a flat plane — wrapped over a 3D slab's rounded rim they looked
+// muddy, so this stays a simple PlaneGeometry.
+function labelPanel(text){
   return new THREE.Mesh(
-    geo,
+    new THREE.PlaneGeometry(2.6, 0.65),
     new THREE.MeshBasicMaterial({ map:labelTexture(text), transparent:true, depthWrite:false, toneMapped:false, opacity:0 })
   );
 }
@@ -693,10 +693,12 @@ function buildGallery(font){
   planarUV(deviceGeo, FW, FH);
   const DEV_FRONT_Z = DEV_Z + DEV_DEPTH / 2;     // world-local z of the front face
 
-  // matching slab for the name badges above each device — same depth + edge radius as
-  // the device, so the plaque reads as a thick rounded pill rather than a flat decal
-  const badgeGeo = new RoundedBoxGeometry(2.6, 0.65, DEV_DEPTH, 6, DEV_RADIUS);
-  planarUV(badgeGeo, 2.6, 0.65);
+  // mobile only: read each device as a real phone — a solid black rounded BODY with
+  // the preview on an inset flat SCREEN, so a white webpage's edge columns no longer
+  // wrap the slab's rim (which looked like a white-bezel tile, not a phone).
+  const SCREEN_BEZEL = 0.12;
+  const screenGeo = isTouch ? new THREE.PlaneGeometry(FW - SCREEN_BEZEL*2, FH - SCREEN_BEZEL*2) : null;
+  const bodyMat   = isTouch ? new THREE.MeshBasicMaterial({ color:0x000000, toneMapped:false }) : null;
 
   const visitMat = new THREE.MeshPhysicalMaterial({
     color:0xffffff, roughness:0.08, metalness:0, clearcoat:1, clearcoatRoughness:0.05,
@@ -719,17 +721,29 @@ function buildGallery(font){
     const lc = makeLoadCanvas();
     const loadTex = new THREE.CanvasTexture(lc); loadTex.colorSpace = THREE.SRGBColorSpace;
 
-    const panelMat = new THREE.MeshBasicMaterial({ map: whiteTex, toneMapped: false });
-    const panel = new THREE.Mesh(deviceGeo, panelMat);   // shared flat geometry; full image via the texture
-    panel.position.z = DEV_Z;
-    panel.castShadow = true;
-    group.add(panel);
+    // the screen material carries the preview (idle tile → loading bar → screenshot).
+    // Desktop: it skins the whole rounded slab. Mobile: it lives on an inset flat
+    // screen and the slab behind is a solid black phone body (the black bezel wrap).
+    const screenMat = new THREE.MeshBasicMaterial({ map: whiteTex, toneMapped: false });
+    let panel;
+    if (isTouch){
+      panel = new THREE.Mesh(deviceGeo, bodyMat);            // black phone body
+      panel.position.z = DEV_Z; panel.castShadow = true; group.add(panel);
+      const screenMesh = new THREE.Mesh(screenGeo, screenMat);
+      screenMesh.position.z = DEV_FRONT_Z + 0.006;          // sits just proud of the body's face
+      group.add(screenMesh);
+    } else {
+      panel = new THREE.Mesh(deviceGeo, screenMat);          // screenshot skins the whole slab
+      panel.position.z = DEV_Z; panel.castShadow = true; group.add(panel);
+    }
     // NOTE: no immediate fetch — loading is orchestrated by updateLoadingSystem()
 
     // name plaque — hidden until world loads, then bloops in
-    const label = labelPanel(project.name, badgeGeo);
+    const label = labelPanel(project.name);
     const labelBaseY = (FH/2 + WALL_H - FRAME_Y) / 2;
-    label.position.set(0, labelBaseY, DEV_FRONT_Z + 0.02);   // floats just ahead of the curved face
+    // float the flat badge well OFF the wall — out in front of its device by half the
+    // canvas height — so it hovers over the walkway rather than sitting on the glass
+    label.position.set(0, labelBaseY, DEV_FRONT_Z + FH / 2);
     label.renderOrder = 5;         // always on top of its panel — no sort flicker
     label.scale.setScalar(0.01);   // starts tiny; animates to 1.0 on reveal
     group.add(label);
@@ -756,7 +770,7 @@ function buildGallery(font){
       autoDelay:    isGazeFrame ? Infinity : autoDelayForRow(row, i%2),
       loadDuration: isGazeFrame ? GAZE_LOAD_DUR : LOAD_DUR,
       loadProgress: 0, imageReady: false, liveTexture: null,
-      screenMat: panelMat, panel, whiteTex, loadCanvas: lc, loadTex,
+      screenMat, panel, whiteTex, loadCanvas: lc, loadTex,
       labelBloop: -1,
     };
     group.getWorldPosition(group.userData.worldPos);

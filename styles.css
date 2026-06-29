@@ -74,14 +74,6 @@ body{
 }
 @keyframes fadeIn{ from{opacity:0} to{opacity:1} }
 
-/* Mobile: a clean black canvas + black loading screen instead of the bright-blue
-   sky gradient flashing while the world builds. The glass entry card floats on
-   black; the in-world sky is untouched (only the load/idle backdrop is black). */
-@media (pointer: coarse){
-  body{ background:#000; }
-  #enter{ background:#000; }
-}
-
 h1{
   font-size:clamp(42px,7.5vw,78px); font-weight:700; letter-spacing:.14em;
   line-height:1.04;
