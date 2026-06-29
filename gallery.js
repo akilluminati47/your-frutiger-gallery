@@ -485,9 +485,13 @@ function dontNestReflections(){
 /* ════════════════════════════════════════════════════════════════
    4 · drifting bubbles (cheap camera-facing sprites)
    ════════════════════════════════════════════════════════════════ */
-function bubbleTexture(){
-  const c = document.createElement('canvas'); c.width = c.height = 128;
-  const x = c.getContext('2d');
+// ONE shared bubble texture, repaintable: the membrane + rim stay put while the
+// specular hot-spot (hx,hy) is moved each frame to the side facing the sun, so every
+// bubble's shine tracks the glare as the camera turns (see updateBubbleShine).
+const bubbleCanvas = document.createElement('canvas'); bubbleCanvas.width = bubbleCanvas.height = 128;
+const bubbleCtx = bubbleCanvas.getContext('2d');
+function drawBubble(hx, hy){
+  const x = bubbleCtx; x.clearRect(0,0,128,128);
   const g = x.createRadialGradient(64, 64, 6, 64, 64, 62);
   g.addColorStop(0,   'rgba(255,255,255,0)');
   g.addColorStop(0.7, 'rgba(180,230,255,0.05)');
@@ -496,23 +500,39 @@ function bubbleTexture(){
   x.fillStyle = g; x.beginPath(); x.arc(64,64,62,0,7); x.fill();
   x.strokeStyle = 'rgba(255,255,255,.85)'; x.lineWidth = 2;
   x.beginPath(); x.arc(64,64,58,0,7); x.stroke();
-  const h = x.createRadialGradient(46,42,0,46,42,16);
+  const h = x.createRadialGradient(hx,hy,0,hx,hy,16);
   h.addColorStop(0,'rgba(255,255,255,.95)'); h.addColorStop(1,'rgba(255,255,255,0)');
-  x.fillStyle = h; x.beginPath(); x.arc(46,42,16,0,7); x.fill();
-  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+  x.fillStyle = h; x.beginPath(); x.arc(hx,hy,16,0,7); x.fill();
 }
+const bubbleTex = (() => { drawBubble(46,42); const t = new THREE.CanvasTexture(bubbleCanvas); t.colorSpace = THREE.SRGBColorSpace; return t; })();
 {
-  const bt = bubbleTexture();
   const COUNT = lowPerf ? 28 : 44;
   for (let i = 0; i < COUNT; i++){
-    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map:bt, transparent:true, depthWrite:false }));
+    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map:bubbleTex, transparent:true, depthWrite:false }));
     resetBubble(s, true);
     s.userData.speed = 0.3 + Math.random()*0.7;
     s.userData.sway  = Math.random()*Math.PI*2;
+    s.userData.popT  = 0;            // >0 while a cursor-pop splash is playing
     scene.add(s); bubbles.push(s);
   }
   noReflect.push(...bubbles);      // bubbles drift in the main view only, not the mirrors
 }
+// Repaint the shared bubble's hot-spot toward the sun's screen-direction. The sun is
+// directional + far, so its view-space x,y give the same shine offset for every
+// bubble — one cheap canvas repaint covers all of them.
+const _shine = { x:46, y:42 };
+const _sunView = new THREE.Vector3(), _invQ = new THREE.Quaternion();
+function updateBubbleShine(){
+  _sunView.copy(SUN_DIR).applyQuaternion(_invQ.copy(camera.quaternion).invert());   // sun → view space
+  const off = 26;
+  const hx = clamp(64 + _sunView.x*off, 16, 112);
+  const hy = clamp(64 - _sunView.y*off, 16, 112);   // canvas y is down → flip
+  if (Math.abs(hx-_shine.x) < 0.8 && Math.abs(hy-_shine.y) < 0.8) return;            // no visible move → skip
+  _shine.x = hx; _shine.y = hy;
+  drawBubble(hx, hy); bubbleTex.needsUpdate = true;
+}
+// scratch vectors for the cursor-pop screen-space test (see animate)
+const _camRight = new THREE.Vector3(), _bv = new THREE.Vector3(), _bv2 = new THREE.Vector3();
 function resetBubble(s, anywhere){
   const sc = 0.1 + Math.random()*0.4;
   s.scale.set(sc, sc, 1);
@@ -681,17 +701,15 @@ function buildGallery(font){
   // front face + curved edges are skinned by the screenshot (planarUV), so the page
   // gently wraps the bezel like a hi-tech screen. All panels share this geometry at a
   // uniform device aspect; the screenshot is cover-fit onto it (fitPanelToImage).
-  const DEV_DEPTH = 0.22, DEV_RADIUS = 0.11, DEV_Z = 0.06;   // DEV_Z lifts the slab off the glass wall
+  // Phones are slimmer than desktop monitors: a thinner slab + tighter rim radius so
+  // mobile reads as a modern phone, while the screenshot still skins the front AND
+  // wraps the curved edge (planarUV) exactly like desktop — no separate bezel.
+  const DEV_DEPTH  = isTouch ? 0.08  : 0.22;
+  const DEV_RADIUS = isTouch ? 0.035 : 0.11;
+  const DEV_Z = 0.06;                              // lifts the slab off the glass wall
   const deviceGeo = new RoundedBoxGeometry(FW, FH, DEV_DEPTH, 6, DEV_RADIUS);
   planarUV(deviceGeo, FW, FH);
-  const DEV_FRONT_Z = DEV_Z + DEV_DEPTH / 2;     // world-local z of the front face
-
-  // mobile only: read each device as a real phone — a solid black rounded BODY with
-  // the preview on an inset flat SCREEN, so a white webpage's edge columns no longer
-  // wrap the slab's rim (which looked like a white-bezel tile, not a phone).
-  const SCREEN_BEZEL = 0.12;
-  const screenGeo = isTouch ? new THREE.PlaneGeometry(FW - SCREEN_BEZEL*2, FH - SCREEN_BEZEL*2) : null;
-  const bodyMat   = isTouch ? new THREE.MeshBasicMaterial({ color:0x000000, toneMapped:false }) : null;
+  const DEV_FRONT_Z = DEV_Z + DEV_DEPTH / 2;       // world-local z of the front face
 
   const visitMat = new THREE.MeshPhysicalMaterial({
     color:0xffffff, roughness:0.08, metalness:0, clearcoat:1, clearcoatRoughness:0.05,
@@ -714,29 +732,20 @@ function buildGallery(font){
     const lc = makeLoadCanvas();
     const loadTex = new THREE.CanvasTexture(lc); loadTex.colorSpace = THREE.SRGBColorSpace;
 
-    // the screen material carries the preview (idle tile → loading bar → screenshot).
-    // Desktop: it skins the whole rounded slab. Mobile: it lives on an inset flat
-    // screen and the slab behind is a solid black phone body (the black bezel wrap).
+    // the screen material carries the preview (idle tile → loading bar → screenshot);
+    // it skins the whole rounded slab, the image wrapping the curved rim (planarUV)
     const screenMat = new THREE.MeshBasicMaterial({ map: whiteTex, toneMapped: false });
-    let panel;
-    if (isTouch){
-      panel = new THREE.Mesh(deviceGeo, bodyMat);            // black phone body
-      panel.position.z = DEV_Z; panel.castShadow = true; group.add(panel);
-      const screenMesh = new THREE.Mesh(screenGeo, screenMat);
-      screenMesh.position.z = DEV_FRONT_Z + 0.006;          // sits just proud of the body's face
-      group.add(screenMesh);
-    } else {
-      panel = new THREE.Mesh(deviceGeo, screenMat);          // screenshot skins the whole slab
-      panel.position.z = DEV_Z; panel.castShadow = true; group.add(panel);
-    }
+    const panel = new THREE.Mesh(deviceGeo, screenMat);
+    panel.position.z = DEV_Z;
+    panel.castShadow = true;
+    group.add(panel);
     // NOTE: no immediate fetch — loading is orchestrated by updateLoadingSystem()
 
     // name plaque — hidden until world loads, then bloops in
     const label = labelPanel(project.name);
     const labelBaseY = (FH/2 + WALL_H - FRAME_Y) / 2;
-    // float the flat badge well OFF the wall — out in front of its device by half the
-    // canvas height — so it hovers over the walkway rather than sitting on the glass
-    label.position.set(0, labelBaseY, DEV_FRONT_Z + FH / 2);
+    // flush against the glass wall, in the title band above the device (not floating)
+    label.position.set(0, labelBaseY, 0.02);
     label.renderOrder = 5;         // always on top of its panel — no sort flicker
     label.scale.setScalar(0.01);   // starts tiny; animates to 1.0 on reveal
     group.add(label);
@@ -1093,6 +1102,9 @@ const audio = (() => {
   }
   return { init, droplet, pop, whoosh, bloop };
 })();
+// unlock the AudioContext on the first user gesture so menu bubble-pops have sound
+// before the visitor ever clicks Enter (browsers gate audio behind a real gesture)
+addEventListener('pointerdown', () => audio.init(), { once:true });
 
 /* ════════════════════════════════════════════════════════════════
    8 · state machine: enter → intro swoop → play → launch swoop
@@ -1320,9 +1332,37 @@ function animate(){
     u.label.material.opacity = Math.min(1, lb * 2.5);
   }
 
+  updateBubbleShine();   // bubble hot-spots follow the sun glare as the camera turns
+
+  // On the menu/pause screens the custom cursor pops any bubble it touches: a quick
+  // splash (expand + fade) and a placed "pop" blip, then the bubble respawns.
+  const popping = onUiScreen() && crosshairEl?.classList.contains('show');
+  if (popping) _camRight.setFromMatrixColumn(camera.matrixWorld, 0);   // world right axis
   for (const b of bubbles){
-    b.position.y += b.userData.speed * dt;
-    b.position.x += Math.sin(t*0.6 + b.userData.sway) * 0.12 * dt;
+    const u = b.userData;
+    if (u.popT > 0){                                  // splash in progress
+      u.popT += dt;
+      const p = u.popT / 0.24;
+      if (p >= 1){ resetBubble(b, false); u.popT = 0; b.material.opacity = 1; }
+      else { const s = u.baseScale * (1 + p*1.2); b.scale.set(s, s, 1); b.material.opacity = 1 - p; }
+      continue;
+    }
+    if (popping){                                     // screen-space cursor-contact test
+      _bv.copy(b.position).project(camera);
+      if (_bv.z <= 1){
+        const sx = (_bv.x*0.5+0.5)*innerWidth, sy = (-_bv.y*0.5+0.5)*innerHeight;
+        _bv2.copy(b.position).addScaledVector(_camRight, b.scale.x*0.5).project(camera);
+        const r = Math.abs((_bv2.x*0.5+0.5)*innerWidth - sx) + 5;   // projected bubble radius (+fudge)
+        const dx = padCursor.x - sx, dy = padCursor.y - sy;
+        if (dx*dx + dy*dy <= r*r){
+          u.baseScale = b.scale.x; u.popT = 0.0001;   // arm the splash
+          audio.pop(b.position);
+          continue;
+        }
+      }
+    }
+    b.position.y += u.speed * dt;
+    b.position.x += Math.sin(t*0.6 + u.sway) * 0.12 * dt;
     if (b.position.y > 16) resetBubble(b, false);
   }
 
@@ -1371,10 +1411,11 @@ function animate(){
     // while the visit? prompt is showing — the same reaction as the Enter button
     // on mouseover (u.scale is the 0→1 active amount driving the visit text).
     if (u.labelBloop >= 1){
-      const hov = u.scale;
-      u.label.scale.setScalar(1 + 0.05 * hov);                 // ≈ scale(1.05)
-      u.label.position.y = u.labelBaseY + 0.035 * hov;         // lifts up like translateY(-2px)
-      const b = 1 + 0.14 * hov;                                // ≈ brightness(1.14)
+      const hov = u.scale;                                     // 0→1 "you're at this world" amount
+      const pulse = 0.5 + 0.5*Math.sin(t*3.4);                 // gentle breathing while it's active
+      u.label.scale.setScalar(1 + (0.12 + 0.04*pulse) * hov);  // bigger pop + a soft pulse
+      u.label.position.y = u.labelBaseY + (0.07 + 0.015*pulse) * hov;   // lifts + bobs a touch
+      const b = 1 + 0.24 * hov;                                // brighter glow
       u.label.material.color.setRGB(b, b, b);
     }
   }
