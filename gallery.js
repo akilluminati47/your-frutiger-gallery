@@ -595,24 +595,39 @@ function loadScreen(project, mat){
   img.src = screenshotURL(project.url, SHOT_W, SHOT_H);
 }
 
+// name plaque texture — painted to MATCH the .aero-btn enter pill (deep aqua
+// gradient + baked top gloss + white inner ring). 2× resolution + mipmaps +
+// anisotropy keep it crisp when viewed far down the corridor / at a grazing angle.
 function labelTexture(text){
-  const c = document.createElement('canvas'); c.width = 512; c.height = 128;
+  const c = document.createElement('canvas'); c.width = 1024; c.height = 256;
   const x = c.getContext('2d');
-  const r = 56, w = c.width, h = c.height, pad = 12;
-  const g = x.createLinearGradient(0,0,0,h);
-  g.addColorStop(0,'rgba(150,215,255,.95)'); g.addColorStop(1,'rgba(20,120,210,.95)');
-  x.fillStyle = g;
-  roundRect(x, pad, pad, w-2*pad, h-2*pad, r); x.fill();
-  x.strokeStyle = 'rgba(255,255,255,.85)'; x.lineWidth = 4;
-  roundRect(x, pad, pad, w-2*pad, h-2*pad, r); x.stroke();
-  const gl = x.createLinearGradient(0,pad,0,h/2);
-  gl.addColorStop(0,'rgba(255,255,255,.6)'); gl.addColorStop(1,'rgba(255,255,255,0)');
-  x.fillStyle = gl; roundRect(x, pad+6, pad+4, w-2*pad-12, h/2-pad, r*0.7); x.fill();
+  const w = c.width, h = c.height, pad = 18;
+  const bx = pad, by = pad, bw = w - 2*pad, bh = h - 2*pad, r = bh/2;   // full pill
+  // deep aqua gradient (same stops as the Enter button)
+  const g = x.createLinearGradient(0, by, 0, by+bh);
+  g.addColorStop(0,'#9fdcff'); g.addColorStop(.42,'#4fb6ff');
+  g.addColorStop(.66,'#2aa9ff'); g.addColorStop(1,'#0a64c8');
+  x.fillStyle = g; roundRect(x, bx, by, bw, bh, r); x.fill();
+  // baked top gloss (clipped to the pill, kept in the fill so the label stays crisp)
+  x.save(); roundRect(x, bx, by, bw, bh, r); x.clip();
+  const gl = x.createLinearGradient(0, by, 0, by + bh*0.54);
+  gl.addColorStop(0,'rgba(255,255,255,.72)'); gl.addColorStop(.7,'rgba(255,255,255,.14)'); gl.addColorStop(1,'rgba(255,255,255,0)');
+  x.fillStyle = gl; x.fillRect(bx, by, bw, bh*0.54); x.restore();
+  // white inner ring
+  x.strokeStyle = 'rgba(255,255,255,.55)'; x.lineWidth = 3;
+  roundRect(x, bx+1.5, by+1.5, bw-3, bh-3, r-1.5); x.stroke();
+  // label
   x.fillStyle = '#fff';
-  x.font = '600 52px Quicksand, Segoe UI, sans-serif';
+  x.font = '600 104px Quicksand, Segoe UI, sans-serif';
   x.textAlign = 'center'; x.textBaseline = 'middle';
-  x.fillText(text, w/2, h/2+2);
-  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+  x.shadowColor = 'rgba(4,46,104,.5)'; x.shadowBlur = 5; x.shadowOffsetY = 3;
+  x.fillText(text, w/2, h/2 + 4);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+  t.generateMipmaps = true;
+  t.minFilter = THREE.LinearMipmapLinearFilter; t.magFilter = THREE.LinearFilter;
+  t.anisotropy = renderer.capabilities.getMaxAnisotropy();   // stays sharp at distance/angle
+  t.needsUpdate = true;
+  return t;
 }
 // flat name plaque that sits ON the gallery panel (shares the frame's facing,
 // rather than billboarding to always face the camera)
@@ -668,7 +683,8 @@ function buildGallery(font){
 
     // name plaque — hidden until world loads, then bloops in
     const label = labelPanel(project.name);
-    label.position.set(0, (FH/2 + WALL_H - FRAME_Y) / 2, 0.06);
+    const labelBaseY = (FH/2 + WALL_H - FRAME_Y) / 2;
+    label.position.set(0, labelBaseY, 0.06);
     label.scale.setScalar(0.01);   // starts tiny; animates to 1.0 on reveal
     group.add(label);
 
@@ -687,7 +703,7 @@ function buildGallery(font){
     group.add(visit);
 
     group.userData = {
-      project, visit, label, scale:0, worldPos:new THREE.Vector3(),
+      project, visit, label, labelBaseY, scale:0, worldPos:new THREE.Vector3(),
       // ── loading state ──
       loadState:    'pending',               // 'pending' | 'loading' | 'done'
       loadTrigger:  isGazeFrame ? 'gaze' : 'auto',
@@ -1113,6 +1129,17 @@ function animate(){
     const fw = new THREE.Vector3(); f.getWorldPosition(fw);
     const yaw = Math.atan2(cw.x - fw.x, cw.z - fw.z) - f.rotation.y;
     u.visit.rotation.y = yaw;
+
+    // name plaque "hover": once it has bloomed in, lift + scale + brighten it
+    // while the visit? prompt is showing — the same reaction as the Enter button
+    // on mouseover (u.scale is the 0→1 active amount driving the visit text).
+    if (u.labelBloop >= 1){
+      const hov = u.scale;
+      u.label.scale.setScalar(1 + 0.05 * hov);                 // ≈ scale(1.05)
+      u.label.position.y = u.labelBaseY + 0.035 * hov;         // lifts up like translateY(-2px)
+      const b = 1 + 0.14 * hov;                                // ≈ brightness(1.14)
+      u.label.material.color.setRGB(b, b, b);
+    }
   }
 
   renderer.render(scene, camera);
