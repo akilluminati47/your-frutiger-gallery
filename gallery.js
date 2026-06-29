@@ -29,6 +29,7 @@ const lowPerf = isTouch;
 
 const realDpr = window.devicePixelRatio || 1;
 const SW = window.screen.width, SH = window.screen.height;
+const mobileVPW = Math.round(Math.min(SW, SH));   // portrait CSS-pixel width for thumio viewport
 
 // Mobile → always portrait screenshots so sites render their phone layout correctly.
 // Some Android devices report landscape dimensions even held portrait, so we swap.
@@ -62,9 +63,44 @@ function screenshotURL(url, w, h){
       // width + crop/height + viewportWidth → exact device aspect; wait → full asset load
       // wait/12: fonts + heavy assets get more render time (was wait/8)
       // mobile uses a fixed 390px viewport so phone layouts render correctly
-      return `https://image.thum.io/get/width/${w}/crop/${h}/viewportWidth/${isTouch?390:w}/wait/12/noanimate/${full}`;
+      return `https://image.thum.io/get/width/${w}/crop/${h}/viewportWidth/${isTouch?mobileVPW:w}/wait/10/noanimate/${full}`;
   }
 }
+
+/* ════════════════════════════════════════════════════════════════
+   1b · pre-fetch all screenshots immediately
+        We know device/aspect/SHOT_W×SHOT_H right now — fire every
+        request before the user even clicks Enter. The bar sequence
+        is pure reveal choreography; images queue in the background.
+   ════════════════════════════════════════════════════════════════ */
+// 'pending' | THREE.Texture | null (null = load failed, still reveal)
+const prefetchMap = new Map();
+
+function preFetchScreenshots(){
+  for (const project of CONFIG.projects){
+    const url = project.url;
+    prefetchMap.set(url, 'pending');
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      const tex = new THREE.Texture(img);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.minFilter = THREE.LinearMipmapLinearFilter;
+      tex.magFilter = THREE.LinearFilter;
+      tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+      tex.generateMipmaps = true;
+      tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+      coverFit(tex);
+      tex.needsUpdate = true;
+      prefetchMap.set(url, tex);
+    };
+    img.onerror = () => { prefetchMap.set(url, null); };
+    img.src = screenshotURL(url, SHOT_W, SHOT_H);
+  }
+}
+// Fire immediately — renderer/coverFit/FW are set up synchronously below,
+// all onload callbacks are async so they see the fully-initialised module.
+preFetchScreenshots();
 
 /* ════════════════════════════════════════════════════════════════
    2 · renderer / scene / camera
@@ -114,11 +150,19 @@ const FH = 2.4, FW = FH * ASPECT, FRAME_Y = eyeHeight;   // frames float at eye 
 const ROWS  = Math.ceil(CONFIG.projects.length / 2);
 const END_Z = START_Z + (ROWS - 1) * DZ;
 // ── loading orchestration constants ──────────────────────────────────────
+<<<<<<< HEAD
 const GAZE_ROWS      = 2;                    // last N rows are gaze-only (not auto)
 const GAZE_ROW_START = ROWS - GAZE_ROWS;    // first gaze row index
 const INTRO_DUR      = 2.6;                 // intro swoop duration (seconds)
 const LOAD_DUR       = 2.5;                 // bar fill time for auto frames
 const GAZE_LOAD_DUR  = 2.8;                 // bar fill for gaze-triggered frames
+=======
+const GAZE_ROWS      = 1;                    // last N rows are gaze-only (not auto)
+const GAZE_ROW_START = ROWS - GAZE_ROWS;    // first gaze row index
+const INTRO_DUR      = 2.6;                 // intro swoop duration (seconds)
+const LOAD_DUR       = 1.8;                 // bar fill time for auto frames
+const GAZE_LOAD_DUR  = 2.0;                 // bar fill for gaze-triggered frames
+>>>>>>> ef99a59 (Prefetch all screenshots at page load, sequential left-right ping, clean loading)
 
 const WALL_X  = HALF + 2.0;             // glass side walls
 const FRAME_X = WALL_X - 0.12;          // frames hang pressed flat against the glass walls
@@ -439,13 +483,20 @@ const texLoader = new THREE.TextureLoader();
 texLoader.setCrossOrigin('anonymous');
 
 /* ── loading-sequence canvas helpers ───────────────────────────────────────
+<<<<<<< HEAD
    Three phases per panel:
      1. "pending"  → animated white TV noise  (no name, no bar)
      2. "loading"  → clean-white Aero barber-pole progress bar (green/blue/white)
+=======
+   Two phases per panel:
+     1. "pending"  → solid white (no noise, no bar — clean Aero blank)
+     2. "loading"  → Aero barber-pole progress bar 0 → 100 %
+>>>>>>> ef99a59 (Prefetch all screenshots at page load, sequential left-right ping, clean loading)
      3. "done"     → live screenshot snaps in; name plaque bloops up
    ─────────────────────────────────────────────────────────────────────────── */
 const TEX_W = 512, TEX_H = Math.max(2, Math.round(512 / ASPECT));
 
+<<<<<<< HEAD
 function makeNoiseCanvas(){
   const c = document.createElement('canvas');
   c.width = 96; c.height = Math.max(2, Math.round(96 / ASPECT)); return c;
@@ -463,6 +514,13 @@ function redrawNoise(canvas){
       d[i2] = Math.max(0, d[i2]-28); d[i2+1] = d[i2]; d[i2+2] = d[i2];
     }
   c2.putImageData(id, 0, 0);
+=======
+function makeWhiteCanvas(){
+  const c = document.createElement('canvas'); c.width = TEX_W; c.height = TEX_H;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, TEX_W, TEX_H);
+  return c;
+>>>>>>> ef99a59 (Prefetch all screenshots at page load, sequential left-right ping, clean loading)
 }
 
 function makeLoadCanvas(){
@@ -523,11 +581,20 @@ function drawLoadingBar(canvas, progress, animTime){
   }
 }
 
+<<<<<<< HEAD
 // Auto-load delay: bar fires just before the player walks up to that row.
 // Calculation: intro-swoop(2.6s) + walk-time - 1s advance + tiny per-row stagger
 function autoDelayForRow(row, sideIdx){
   const walkTime = (START_Z + row * DZ) / CONFIG.movement.maxSpeed;
   return Math.max(0, INTRO_DUR + walkTime - 1.0) + row * 0.15 + sideIdx * 0.1;
+=======
+// Auto-load delay: bar fires before the player walks up to that row.
+// Sequential ping: left (sideIdx=0) always fires first, then right (sideIdx=1) 0.45 s later,
+// so each row visibly pings left → right before moving to the next pair.
+function autoDelayForRow(row, sideIdx){
+  const walkTime = (START_Z + row * DZ) / CONFIG.movement.maxSpeed;
+  return Math.max(0, INTRO_DUR + walkTime - 1.5) + row * 0.12 + sideIdx * 0.45;
+>>>>>>> ef99a59 (Prefetch all screenshots at page load, sequential left-right ping, clean loading)
 }
 
 // rounded-corner alpha mask at the panel's aspect, so the screenshot rolls right
@@ -627,13 +694,23 @@ function buildGallery(font){
     // the live screenshot — fills the panel edge-to-edge at the image's true
     // aspect (cover-fit) and is rounded by PANEL_MASK so it rolls over the edges
     // Per-frame canvas textures — managed by updateLoadingSystem()
+<<<<<<< HEAD
     const nc = makeNoiseCanvas(); redrawNoise(nc);
     const noiseTex = new THREE.CanvasTexture(nc); noiseTex.colorSpace = THREE.SRGBColorSpace;
+=======
+    // Pending state: clean solid white (no noise). Loading state: Aero bar 0→100 %.
+    const wc = makeWhiteCanvas();
+    const whiteTex = new THREE.CanvasTexture(wc); whiteTex.colorSpace = THREE.SRGBColorSpace;
+>>>>>>> ef99a59 (Prefetch all screenshots at page load, sequential left-right ping, clean loading)
     const lc = makeLoadCanvas();
     const loadTex = new THREE.CanvasTexture(lc); loadTex.colorSpace = THREE.SRGBColorSpace;
 
     const panelMat = new THREE.MeshBasicMaterial({
+<<<<<<< HEAD
       map: noiseTex, alphaMap: PANEL_MASK,
+=======
+      map: whiteTex, alphaMap: PANEL_MASK,
+>>>>>>> ef99a59 (Prefetch all screenshots at page load, sequential left-right ping, clean loading)
       transparent: true, toneMapped: false,
     });
     const screen = new THREE.Mesh(new THREE.PlaneGeometry(FW, FH), panelMat);
@@ -668,8 +745,13 @@ function buildGallery(font){
       autoDelay:    isGazeFrame ? Infinity : autoDelayForRow(row, i%2),
       loadDuration: isGazeFrame ? GAZE_LOAD_DUR : LOAD_DUR,
       loadProgress: 0, imageReady: false, liveTexture: null,
+<<<<<<< HEAD
       screenMat: panelMat, noiseCanvas: nc, noiseTex, loadCanvas: lc, loadTex,
       labelBloop: -1, lastNoisePhase: -1,
+=======
+      screenMat: panelMat, whiteTex, loadCanvas: lc, loadTex,
+      labelBloop: -1,
+>>>>>>> ef99a59 (Prefetch all screenshots at page load, sequential left-right ping, clean loading)
     };
     group.getWorldPosition(group.userData.worldPos);
     scene.add(group);
@@ -909,6 +991,7 @@ function startFrameLoading(f){
   const u = f.userData;
   if (u.loadState !== 'pending') return;
   u.loadState = 'loading';
+<<<<<<< HEAD
   // Immediately swap panel to loading-bar canvas
   u.screenMat.map = u.loadTex;
   u.screenMat.needsUpdate = true;
@@ -928,6 +1011,18 @@ function startFrameLoading(f){
   };
   img.onerror = () => { u.imageReady = true; if (u.loadProgress >= 1) revealWorld(f); };
   img.src = screenshotURL(u.project.url, SHOT_W, SHOT_H);
+=======
+  u.screenMat.map = u.loadTex;
+  u.screenMat.needsUpdate = true;
+  drawLoadingBar(u.loadCanvas, 0, 0); u.loadTex.needsUpdate = true;
+  // Check pre-fetch cache — image may already be ready before we even entered
+  const cached = prefetchMap.get(u.project.url);
+  if (cached !== 'pending'){
+    u.liveTexture = (cached instanceof THREE.Texture) ? cached : null;
+    u.imageReady = true;
+  }
+  // else still fetching — updateLoadingSystem polls every frame
+>>>>>>> ef99a59 (Prefetch all screenshots at page load, sequential left-right ping, clean loading)
 }
 
 function revealWorld(f){
@@ -937,8 +1032,13 @@ function revealWorld(f){
   // Swap in the live screenshot (keep bar canvas on error)
   if (u.liveTexture){ u.screenMat.map?.dispose?.(); u.screenMat.map = u.liveTexture; u.screenMat.needsUpdate = true; }
   // Free canvas textures — not needed anymore
+<<<<<<< HEAD
   u.loadTex?.dispose?.(); u.loadTex = null;
   u.noiseTex?.dispose?.(); u.noiseTex = null;
+=======
+  u.loadTex?.dispose?.();  u.loadTex  = null;
+  u.whiteTex?.dispose?.(); u.whiteTex = null;
+>>>>>>> ef99a59 (Prefetch all screenshots at page load, sequential left-right ping, clean loading)
   // Trigger name-plaque bloop
   u.labelBloop = 0;
   audio.bloop();
@@ -955,6 +1055,7 @@ function updateLoadingSystem(dt, t){
       if ((u.loadTrigger === 'auto' && elapsed >= u.autoDelay) || f === activeFrame){
         startFrameLoading(f); continue;
       }
+<<<<<<< HEAD
       // Animate TV static at ~10 fps
       const np = Math.floor(t * 10);
       if (np !== u.lastNoisePhase && u.noiseTex){
@@ -962,6 +1063,19 @@ function updateLoadingSystem(dt, t){
       }
     }
     if (u.loadState === 'loading'){
+=======
+      // pending state = solid white, nothing to animate
+    }
+    if (u.loadState === 'loading'){
+      // Poll pre-fetch cache each frame in case image arrived since bar started
+      if (!u.imageReady){
+        const cached = prefetchMap.get(u.project.url);
+        if (cached !== 'pending'){
+          u.liveTexture = (cached instanceof THREE.Texture) ? cached : null;
+          u.imageReady = true;
+        }
+      }
+>>>>>>> ef99a59 (Prefetch all screenshots at page load, sequential left-right ping, clean loading)
       // Accelerate bar when the player is actively watching
       const speed = (f === activeFrame) ? 1.65 : 1.0;
       u.loadProgress = Math.min(1, u.loadProgress + (dt / u.loadDuration) * speed);
