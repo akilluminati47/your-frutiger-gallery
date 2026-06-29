@@ -53,15 +53,22 @@ function screenshotURL(provider, url, w, h){
   // time so the capture is fully painted (fonts + lazy images), not half-loaded.
   switch (provider){
     case 'mshots':
+      // mShots renders fresh server-side; vsize hints the full page height so
+      // lazy/below-the-fold assets paint before the crop is taken.
       return `https://s.wordpress.com/mshots/v1/${enc}?w=${w}&h=${h}&vpw=${vpw}&vph=${h}`;
     case 'microlink':
+      // networkidle0 + a settle delay → wait until the page is truly quiet (web
+      // fonts swapped in, images decoded) instead of grabbing a half-painted frame.
       return `https://api.microlink.io/?url=${enc}&screenshot=true&embed=screenshot.url`
            + `&viewport.width=${vpw}&viewport.height=${h}&viewport.deviceScaleFactor=1`
-           + `&waitUntil=networkidle2&meta=false`;
+           + `&waitUntil=networkidle0&waitForTimeout=2500&meta=false`;
     case 'thumio':
     default:
-      // width + crop/height → device aspect; wait/14 → fonts + heavy assets finish
-      return `https://image.thum.io/get/width/${w}/crop/${h}/viewportWidth/${vpw}/wait/14/noanimate/${full}`;
+      // width + crop/height → device aspect. wait/18 gives slow sites time to pull
+      // webfonts + heavy/lazy assets; png keeps text crisp (no JPEG fringing on
+      // small fonts); maxAge serves a day-old cache so repeat visits stay fast.
+      return `https://image.thum.io/get/width/${w}/crop/${h}/viewportWidth/${vpw}`
+           + `/wait/18/maxAge/86400/png/noanimate/${full}`;
   }
 }
 
@@ -600,19 +607,21 @@ function autoDelayForRow(row, sideIdx){
   return Math.max(0, INTRO_DUR + walkTime - 1.5) + row * 0.12 + sideIdx * 0.45;
 }
 
-// rounded-corner alpha mask at the panel's aspect, so the screenshot rolls right
-// to the curved edges of the panel instead of sitting as a square in a big inset
-const PANEL_MASK = (() => {
-  const W = 512, H = Math.max(2, Math.round(512 / ASPECT));
-  const c = document.createElement('canvas'); c.width = W; c.height = H;
-  const x = c.getContext('2d');
-  const r = Math.min(W, H) * 0.07;
-  x.fillStyle = '#fff'; roundRect(x, 0, 0, W, H, r); x.fill();
-  const t = new THREE.CanvasTexture(c); t.needsUpdate = true; return t;
-})();
+// Project the screenshot straight onto a panel's FRONT plane, so it also skins the
+// rounded edges: the page's full content gently wraps the curve to the sides
+// instead of a flat plane ending in pixelated corner cuts. UV comes from each
+// vertex's local x,y — the curved rim + sides sample the nearest edge column, so
+// the preview appears to roll over the device's curved bezel (a hi-tech screen).
+function skinFrontUV(geo, w, h){
+  const pos = geo.attributes.position, uv = geo.attributes.uv;
+  for (let i = 0; i < pos.count; i++){
+    uv.setXY(i, clamp(pos.getX(i) / w + 0.5, 0, 1), clamp(pos.getY(i) / h + 0.5, 0, 1));
+  }
+  uv.needsUpdate = true;
+}
 
 // Snap a panel to its screenshot's TRUE aspect: the whole page shows, filling the
-// panel with no crop and no letterbox bars. Width follows the image (height stays
+// device with no crop and no letterbox bars. Width follows the image (height stays
 // FH so the row stays level); the live texture maps 1:1 (full UVs).
 function fitPanelToImage(u, tex){
   const im = tex.image; if (!im) return;
@@ -620,9 +629,7 @@ function fitPanelToImage(u, tex){
   if (!iw || !ih) return;
   const ia = iw / ih;
   const targetW = clamp(FH * ia, FH * 0.42, FH * 2.2);   // bound extreme aspects so panels never overlap
-  const sx = targetW / FW;
-  u.screenMesh.scale.x = sx;
-  u.backMesh.scale.x   = sx;
+  u.panel.scale.x = targetW / FW;
   tex.repeat.set(1, 1); tex.offset.set(0, 0); tex.needsUpdate = true;   // full image, no crop
 }
 
@@ -672,11 +679,14 @@ function roundRect(x,a,b,w,h,r){ x.beginPath(); x.moveTo(a+r,b); x.arcTo(a+w,b,a
   x.arcTo(a+w,b+h,a,b+h,r); x.arcTo(a,b+h,a,b,r); x.arcTo(a,b,a+w,b,r); x.closePath(); }
 
 function buildGallery(font){
-  // glossy white glass frame material
-  const frameMat = new THREE.MeshPhysicalMaterial({
-    color:0xffffff, roughness:0.12, metalness:0.0,
-    clearcoat:1, clearcoatRoughness:0.05, envMapIntensity:1.4,
-  });
+  // one shared rounded-slab geometry for every device — its edges are rounded so
+  // the front-projected screenshot wraps over them. Geometry is shared; each panel
+  // mesh is width-scaled (mesh transform, not geometry) to its own screenshot aspect.
+  const DEV_DEPTH = 0.22, DEV_RADIUS = 0.11, DEV_Z = 0.06;   // DEV_Z lifts the slab off the glass wall
+  const deviceGeo = new RoundedBoxGeometry(FW, FH, DEV_DEPTH, 6, DEV_RADIUS);
+  skinFrontUV(deviceGeo, FW, FH);
+  const DEV_FRONT_Z = DEV_Z + DEV_DEPTH / 2;    // world-local z of the front face
+
   const visitMat = new THREE.MeshPhysicalMaterial({
     color:0xffffff, roughness:0.08, metalness:0, clearcoat:1, clearcoatRoughness:0.05,
     emissive:0x2aa9ff, emissiveIntensity:0.22, envMapIntensity:1.4,
@@ -690,35 +700,27 @@ function buildGallery(font){
     group.position.set(side * FRAME_X, FRAME_Y, START_Z + row * DZ);  // pressed to the glass wall
     group.rotation.y = side < 0 ? Math.PI/2 : -Math.PI/2;   // face the walkway
 
-    // glass backing with curved edges: gives depth + shadow, and is the edge the
-    // screenshot rolls over (its rounded front sits right behind the image)
-    const back = new THREE.Mesh(new RoundedBoxGeometry(FW, FH, 0.16, 5, 0.09), frameMat);
-    back.castShadow = true; back.renderOrder = 3; group.add(back);
-
-    // the live screenshot — fills the panel edge-to-edge at the image's true
-    // aspect (cover-fit) and is rounded by PANEL_MASK so it rolls over the edges
-    // Per-frame canvas textures — managed by updateLoadingSystem()
+    // the device: a single rounded slab whose front + curved edges are skinned by
+    // the live screenshot. No flat plane, no alpha mask — the page's own pixels
+    // wrap the rounded bezel, so there are no cut/pixelated corners.
+    // Per-frame canvas textures — managed by updateLoadingSystem().
     // Pending state: clean solid white (no noise). Loading state: Aero bar 0→100 %.
     const wc = makeWhiteCanvas();
     const whiteTex = new THREE.CanvasTexture(wc); whiteTex.colorSpace = THREE.SRGBColorSpace;
     const lc = makeLoadCanvas();
     const loadTex = new THREE.CanvasTexture(lc); loadTex.colorSpace = THREE.SRGBColorSpace;
 
-    const panelMat = new THREE.MeshBasicMaterial({
-      map: whiteTex, alphaMap: PANEL_MASK,
-      transparent: true, toneMapped: false,
-    });
-    const screen = new THREE.Mesh(new THREE.PlaneGeometry(FW, FH), panelMat);
-    // explicit renderOrder so these transparent panels ALWAYS draw after the
-    // reflectors (floor=1, walls=2) — distance-sorting flipped at some angles and
-    // made the panel/label blend over a brighter background, the "glare" jump.
-    screen.position.z = 0.082; screen.renderOrder = 4; group.add(screen);
+    const panelMat = new THREE.MeshBasicMaterial({ map: whiteTex, toneMapped: false });
+    const panel = new THREE.Mesh(deviceGeo, panelMat);   // shares one geometry; scaled per-image in fitPanelToImage
+    panel.position.z = DEV_Z;
+    panel.castShadow = true;
+    group.add(panel);
     // NOTE: no immediate fetch — loading is orchestrated by updateLoadingSystem()
 
     // name plaque — hidden until world loads, then bloops in
     const label = labelPanel(project.name);
     const labelBaseY = (FH/2 + WALL_H - FRAME_Y) / 2;
-    label.position.set(0, labelBaseY, 0.06);
+    label.position.set(0, labelBaseY, DEV_FRONT_Z + 0.02);   // floats just ahead of the curved face
     label.renderOrder = 5;         // always on top of its panel — no sort flicker
     label.scale.setScalar(0.01);   // starts tiny; animates to 1.0 on reveal
     group.add(label);
@@ -745,7 +747,7 @@ function buildGallery(font){
       autoDelay:    isGazeFrame ? Infinity : autoDelayForRow(row, i%2),
       loadDuration: isGazeFrame ? GAZE_LOAD_DUR : LOAD_DUR,
       loadProgress: 0, imageReady: false, liveTexture: null,
-      screenMat: panelMat, screenMesh: screen, backMesh: back, whiteTex, loadCanvas: lc, loadTex,
+      screenMat: panelMat, panel, whiteTex, loadCanvas: lc, loadTex,
       labelBloop: -1,
     };
     group.getWorldPosition(group.userData.worldPos);
@@ -814,8 +816,15 @@ addEventListener('mousemove', (e) => {
   crosshairEl.classList.toggle('active', !!e.target.closest?.('.aero-btn'));   // grow/glow over buttons
 }, { passive:true });
 
-/* ── gamepad ── */
-let padIndex = null, padVisitPrev = false, padPausePrev = false;
+/* ── gamepad ──
+   One poller, called every frame (see animate). It branches on game state:
+   in‑world it drives movement/look/visit/pause; on any UI screen (the entry
+   splash AND the pause menu) the left stick becomes a mouse — A clicks the button
+   under the cursor, B / Start leaves the pause menu. Button edge flags are shared
+   across branches so a button still held while the state flips (e.g. the Start
+   that opened the menu, or the A that started the realm) doesn't instantly re‑fire. */
+let padIndex = null, padVisitPrev = false, padPausePrev = false, padBackPrev = false;
+const padCursor = { x:0, y:0, ready:false };   // virtual mouse for the UI screens
 addEventListener('gamepadconnected',   e => { padIndex = e.gamepad.index; setInputMode('gamepad'); });
 addEventListener('gamepaddisconnected', e => {
   if (padIndex === e.gamepad.index){ padIndex = null; setInputMode(isTouch ? 'touch' : 'keyboard'); }
@@ -826,11 +835,46 @@ function pollPad(dt){
   const gp = getPad(); if (!gp) return;
   const lx = dead(gp.axes[0]||0), ly = dead(gp.axes[1]||0);
   const rx = dead(gp.axes[2]||0), ry = dead(gp.axes[3]||0);
-  if (lx || ly || rx || ry) setInputMode('gamepad');
-  padMove.x = lx; padMove.y = -ly;
-  if (rx || ry) applyLook(rx * (M.padLook ?? 2.6) * dt, ry * (M.padLook ?? 2.6) * dt);
-  const visit = !!gp.buttons[0]?.pressed; if (visit && !padVisitPrev) tryLaunch(); padVisitPrev = visit;
-  const pause = !!gp.buttons[9]?.pressed; if (pause && !padPausePrev) togglePause();  padPausePrev = pause;
+  const aBtn = !!gp.buttons[0]?.pressed;        // A / cross
+  const bBtn = !!gp.buttons[1]?.pressed;        // B / circle
+  const startBtn = !!gp.buttons[9]?.pressed;    // Start / options
+
+  // ── UI screens (entry splash + pause menu): left stick = cursor, A = click ──
+  if (state === 'menu' || state === 'paused'){
+    if (lx || ly || aBtn || bBtn || startBtn) setInputMode('gamepad');
+    if (!padCursor.ready){ padCursor.x = innerWidth/2; padCursor.y = innerHeight/2; padCursor.ready = true; }
+    const sp = 950;                              // cursor speed, px/s at full deflection
+    padCursor.x = clamp(padCursor.x + lx * sp * dt, 0, innerWidth);
+    padCursor.y = clamp(padCursor.y + ly * sp * dt, 0, innerHeight);
+    const over = document.elementFromPoint(padCursor.x, padCursor.y)?.closest?.('.aero-btn');
+    if (crosshairEl){
+      crosshairEl.style.left = padCursor.x + 'px';
+      crosshairEl.style.top  = padCursor.y + 'px';
+      crosshairEl.classList.add('show');
+      crosshairEl.classList.toggle('active', !!over && !over.disabled);   // grow/glow over a live button
+    }
+    if (aBtn && !padVisitPrev){                  // A → activate the button under the cursor
+      if (over === $('resumeBtn')){ audio.init(); resumeGame(); }
+      // gamepad start needs no pointer lock (look is on the right stick), so begin
+      // play directly rather than via controls.lock(), which a pad press can't grant
+      else if (over === $('enterBtn') && !over.disabled){ audio.init(); beginPlay(); }
+      else if (over && !over.disabled) over.click();
+    }
+    if (state === 'paused' && (bBtn || startBtn) && !padBackPrev){ audio.init(); resumeGame(); }   // B / Start → leave
+    padVisitPrev = aBtn; padBackPrev = bBtn || startBtn; padPausePrev = startBtn;
+    return;
+  }
+
+  // ── in‑world (intro / play): movement, look, visit, pause ──
+  if (state === 'intro' || state === 'play'){
+    if (lx || ly || rx || ry) setInputMode('gamepad');
+    padMove.x = lx; padMove.y = -ly;
+    if (rx || ry) applyLook(rx * (M.padLook ?? 2.6) * dt, ry * (M.padLook ?? 2.6) * dt);
+    if (aBtn && !padVisitPrev) tryLaunch();
+    if (startBtn && !padPausePrev) togglePause();
+  }
+  // edge bookkeeping every frame so transitions between states stay clean
+  padVisitPrev = aBtn; padPausePrev = startBtn; padBackPrev = bBtn || startBtn;
 }
 
 /* ── touch: floating joystick (move) + drag (look) + tap/button (visit) ── */
@@ -900,24 +944,56 @@ const audio = (() => {
     master = ctx.createGain(); master.gain.value = CONFIG.volume ?? 0.6;
     master.connect(ctx.destination);
   }
-  function env(node, t0, a, d, peak){
-    const g = ctx.createGain(); node.connect(g); g.connect(master);
+
+  // ── 3D placement: turn a world position into a {pan, gain} for that source ──
+  // Far sources are quieter (distance attenuation) and sources off to one side
+  // play louder in that ear (stereo pan). Panels are mounted on the left/right
+  // glass walls, so this makes a left-wall ding ring from the left speaker and a
+  // distant panel down the hall fade into the background — cheap faux-3D sound.
+  const _ear = new THREE.Vector3(), _fwd = new THREE.Vector3(),
+        _right = new THREE.Vector3(), _to = new THREE.Vector3();
+  function place(pos){
+    if (!pos || !camera) return { pan: 0, gain: 1 };
+    camera.getWorldPosition(_ear);
+    _to.copy(pos).sub(_ear);
+    const dist = _to.length();
+    // full volume within ~3 m, fading to a faint 0.16 by ~30 m down the corridor
+    const gain = clamp(1 - (dist - 3) / 30, 0.16, 1);
+    camera.getWorldDirection(_fwd);
+    _right.crossVectors(_fwd, camera.up).normalize();      // camera's right axis
+    const pan = clamp((dist > 0.0001 ? _to.divideScalar(dist).dot(_right) : 0), -1, 1) * 0.9;
+    return { pan, gain };
+  }
+
+  // env(): build an attack/decay gain. Pass a {pan, gain} (from place()) to drop
+  // the source into the stereo field and attenuate it by distance.
+  function env(node, t0, a, d, peak, sp){
+    const g = ctx.createGain(); node.connect(g);
+    let tail = g;
+    if (sp){
+      peak *= sp.gain;
+      if (ctx.createStereoPanner){
+        const p = ctx.createStereoPanner(); p.pan.value = sp.pan;
+        g.connect(p); tail = p;
+      }
+    }
+    tail.connect(master);
     g.gain.setValueAtTime(0, t0);
     g.gain.linearRampToValueAtTime(peak, t0 + a);
     g.gain.exponentialRampToValueAtTime(0.0001, t0 + a + d);
     return g;
   }
-  function droplet(){
-    if (!ctx) return; const t = ctx.currentTime;
+  function droplet(pos){
+    if (!ctx) return; const t = ctx.currentTime, sp = place(pos);
     const o = ctx.createOscillator(); o.type = 'sine';
     o.frequency.setValueAtTime(900, t); o.frequency.exponentialRampToValueAtTime(420, t+0.12);
-    env(o, t, 0.005, 0.22, 0.5); o.start(t); o.stop(t+0.3);
+    env(o, t, 0.005, 0.22, 0.5, sp); o.start(t); o.stop(t+0.3);
   }
-  function pop(){
-    if (!ctx) return; const t = ctx.currentTime;
+  function pop(pos){
+    if (!ctx) return; const t = ctx.currentTime, sp = place(pos);
     const o = ctx.createOscillator(); o.type = 'triangle';
     o.frequency.setValueAtTime(520, t); o.frequency.exponentialRampToValueAtTime(1100, t+0.06);
-    env(o, t, 0.004, 0.1, 0.4); o.start(t); o.stop(t+0.16);
+    env(o, t, 0.004, 0.1, 0.4, sp); o.start(t); o.stop(t+0.16);
   }
   function whoosh(){
     if (!ctx) return; const t = ctx.currentTime;
@@ -933,17 +1009,17 @@ const audio = (() => {
     env(o, t, 0.3, 0.9, 0.18); o.start(t); o.stop(t+1.2);
   }
   // Frutiger Aero rising major chime — C5→C6, E5→E6, G5→G6 arpeggio
-  function bloop(){
-    if (!ctx) return; const t = ctx.currentTime;
+  function bloop(pos){
+    if (!ctx) return; const t = ctx.currentTime, sp = place(pos);   // one placement for the whole chime
     const o1=ctx.createOscillator(); o1.type='sine';
     o1.frequency.setValueAtTime(523.25,t); o1.frequency.exponentialRampToValueAtTime(1046.5,t+0.18);
     const o2=ctx.createOscillator(); o2.type='sine';
     o2.frequency.setValueAtTime(659.25,t+0.06); o2.frequency.exponentialRampToValueAtTime(1318.5,t+0.22);
     const o3=ctx.createOscillator(); o3.type='triangle';
     o3.frequency.setValueAtTime(783.99,t+0.1); o3.frequency.exponentialRampToValueAtTime(1567.98,t+0.25);
-    env(o1,t,      0.008,0.55,0.38); o1.start(t);      o1.stop(t+0.7);
-    env(o2,t+0.06, 0.008,0.50,0.28); o2.start(t+0.06); o2.stop(t+0.7);
-    env(o3,t+0.10, 0.008,0.45,0.18); o3.start(t+0.10); o3.stop(t+0.7);
+    env(o1,t,      0.008,0.55,0.38,sp); o1.start(t);      o1.stop(t+0.7);
+    env(o2,t+0.06, 0.008,0.50,0.28,sp); o2.start(t+0.06); o2.stop(t+0.7);
+    env(o3,t+0.10, 0.008,0.45,0.18,sp); o3.start(t+0.10); o3.stop(t+0.7);
   }
   return { init, droplet, pop, whoosh, bloop };
 })();
@@ -961,6 +1037,7 @@ function beginPlay(){
   if (started) return;
   started = true;
   galleryStartTime = performance.now() / 1000;   // seconds from page load
+  crosshairEl?.classList.remove('show');         // drop the menu cursor (gamepad start has no pointer-lock event)
   $('enter').classList.add('hidden');
   $('hud').classList.remove('hidden');
   $('fade').style.opacity = '1';
@@ -985,6 +1062,7 @@ function pauseGame(){
   if (state !== 'play' && state !== 'intro') return;
   pausedFrom = state;
   state = 'paused';                         // freezes movement (loop skips intro/play)
+  padCursor.ready = false;                  // gamepad cursor re-centres each time the menu opens
   $('pause').classList.remove('hidden');
   $('hud').classList.add('hidden');         // remove hint / on-screen controls
   $('prompt').classList.remove('show');
@@ -992,6 +1070,7 @@ function pauseGame(){
 function resumeGame(){
   if (!started) return;
   state = pausedFrom;                        // continue the glide, or back to play
+  crosshairEl?.classList.remove('show');     // drop the menu cursor (gamepad path has no pointer-lock event)
   $('pause').classList.add('hidden');
   $('hud').classList.remove('hidden');
 }
@@ -1033,9 +1112,9 @@ function revealWorld(f){
   // Free canvas textures — not needed anymore
   u.loadTex?.dispose?.();  u.loadTex  = null;
   u.whiteTex?.dispose?.(); u.whiteTex = null;
-  // Trigger name-plaque bloop
+  // Trigger name-plaque bloop — chimes from the panel's spot on its wall
   u.labelBloop = 0;
-  audio.bloop();
+  audio.bloop(u.worldPos);
 }
 
 function updateLoadingSystem(dt, t){
@@ -1073,6 +1152,7 @@ function updateLoadingSystem(dt, t){
 // would otherwise restore a frozen mid-swoop white screen = a "blank realm")
 function resetToMenu(){
   launch = null; state = 'menu'; started = false;
+  padCursor.ready = false;                    // gamepad cursor re-centres on the splash
   $('fade').style.opacity = '0';
   $('enter').classList.remove('hidden');
   $('hud').classList.add('hidden');
@@ -1149,6 +1229,7 @@ function animate(){
   const t  = clock.elapsedTime;
 
   if (skyMat) skyMat.uniforms.uTime.value = t;
+  pollPad(dt);                 // every frame — also drives the pause‑menu cursor
   updateLoadingSystem(dt, t);
   updateSunGaze(dt);
 
@@ -1226,7 +1307,7 @@ function animate(){
 }
 
 function moveAndInteract(dt, t, autoFwd = 0){
-  pollPad(dt);
+  // (gamepad is polled once per frame at the top of animate, before this runs)
 
   // unified analog move vector: keyboard + joystick + gamepad (+ intro auto-glide)
   moveInput.x = (keys.KeyD||keys.ArrowRight?1:0) - (keys.KeyA||keys.ArrowLeft?1:0);
@@ -1283,7 +1364,7 @@ function moveAndInteract(dt, t, autoFwd = 0){
       $('visitBtn')?.classList.remove('on');
     }
     if (canVisit){
-      if (!sameFrame) audio.droplet();   // droplet on approach, not on load-reveal
+      if (!sameFrame) audio.droplet(activeFrame.userData.worldPos);   // droplet from the panel you faced
       $('prompt').textContent = `visit  ${activeFrame.userData.project.name}`;
       $('prompt').classList.add('show'); $('visitBtn')?.classList.add('on');
     } else {
