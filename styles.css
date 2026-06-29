@@ -18,8 +18,15 @@ body{
     radial-gradient(120% 90% at 50% -10%, #eafaff 0%, #bfe9ff 38%, #5fb8f5 72%, #2a7de1 100%);
   -webkit-font-smoothing:antialiased;
   user-select:none;
-  cursor:default;
+  cursor:none;           /* hidden by default — only shown on menu/pause screens */
 }
+/* Restore cursor on the two screens that have clickable buttons */
+#enter, #enter *,
+#pause, #pause *,
+#oops,  #oops  * { cursor:default; }
+/* ID+class beats ID+* — buttons inside those screens stay pointer */
+#enter .aero-btn,
+#pause .aero-btn  { cursor:pointer; }
 .hidden{ display:none !important; }
 
 #scene{ position:fixed; inset:0; }
