@@ -29,7 +29,6 @@ const lowPerf = isTouch;
 
 const realDpr = window.devicePixelRatio || 1;
 const SW = window.screen.width, SH = window.screen.height;
-const mobileVPW = Math.round(Math.min(SW, SH));   // portrait CSS-pixel width for thumio viewport
 
 // Mobile → always portrait screenshots so sites render their phone layout correctly.
 // Some Android devices report landscape dimensions even held portrait, so we swap.
@@ -37,37 +36,43 @@ const ASPECT = isTouch
   ? Math.min(SW, SH) / Math.max(SW, SH)    // < 1 → tall portrait frames on phones
   : (SW / SH || 16 / 9);
 
-let SHOT_W = isTouch ? Math.min(SW, SH) * realDpr : SW * realDpr;
-let SHOT_H = isTouch ? Math.max(SW, SH) * realDpr : SH * realDpr;
-const CAP  = isTouch ? 760 : 1920;
-if (SHOT_W > CAP) { SHOT_H = Math.round(SHOT_H * CAP / SHOT_W); SHOT_W = CAP; }
-SHOT_W = Math.round(SHOT_W); SHOT_H = Math.round(SHOT_H);
+// Capture ONE screenful of the visitor's own device, sized to the panel aspect:
+//   • SHOT_W is the render viewport's CSS width, so each site lays out for THIS
+//     screen — phones get the mobile layout (big hero/emoji), desktops the desktop
+//     layout. Desktop width is clamped so ultra-wide monitors don't trigger a
+//     stretched layout.
+//   • SHOT_H is derived from ASPECT, so the capture already matches the device
+//     panel. We then cover-fit it (see fitPanelToImage) edge-to-edge, centred +
+//     top-anchored — no empty bars, no off-centre crop, full content in view.
+const SHOT_W = isTouch ? Math.round(Math.min(SW, SH))
+                       : clamp(Math.round(SW), 1024, 1600);
+const SHOT_H = Math.round(SHOT_W / ASPECT);
 
 function withProtocol(u){ return /^https?:\/\//i.test(u) ? u : 'https://' + u; }
 
 function screenshotURL(provider, url, w, h){
   const full = withProtocol(url);
   const enc  = encodeURIComponent(full);
-  const vpw  = isTouch ? mobileVPW : w;     // phones render their portrait layout
-  // every provider is asked for the VISITOR's viewport and given generous render
-  // time so the capture is fully painted (fonts + lazy images), not half-loaded.
+  // w is both the render viewport width AND the output width, h the matching crop,
+  // so the capture lands at the device/panel aspect (one screenful). Every provider
+  // gets generous render time so the capture is fully painted (fonts + lazy images).
   switch (provider){
     case 'mshots':
-      // mShots renders fresh server-side; vsize hints the full page height so
-      // lazy/below-the-fold assets paint before the crop is taken.
-      return `https://s.wordpress.com/mshots/v1/${enc}?w=${w}&h=${h}&vpw=${vpw}&vph=${h}`;
+      // mShots renders fresh server-side; vpw/vph pin the viewport so the crop is a
+      // single device screen, not a tall slice with empty page below.
+      return `https://s.wordpress.com/mshots/v1/${enc}?w=${w}&h=${h}&vpw=${w}&vph=${h}`;
     case 'microlink':
       // networkidle0 + a settle delay → wait until the page is truly quiet (web
       // fonts swapped in, images decoded) instead of grabbing a half-painted frame.
       return `https://api.microlink.io/?url=${enc}&screenshot=true&embed=screenshot.url`
-           + `&viewport.width=${vpw}&viewport.height=${h}&viewport.deviceScaleFactor=1`
+           + `&viewport.width=${w}&viewport.height=${h}&viewport.deviceScaleFactor=${isTouch ? 2 : 1}`
            + `&waitUntil=networkidle0&waitForTimeout=2500&meta=false`;
     case 'thumio':
     default:
-      // width + crop/height → device aspect. wait/18 gives slow sites time to pull
-      // webfonts + heavy/lazy assets; png keeps text crisp (no JPEG fringing on
-      // small fonts); maxAge serves a day-old cache so repeat visits stay fast.
-      return `https://image.thum.io/get/width/${w}/crop/${h}/viewportWidth/${vpw}`
+      // width == viewportWidth + crop/height → exactly the visitor's screen at the
+      // panel aspect. wait/18 lets slow sites pull webfonts + heavy/lazy assets; png
+      // keeps text crisp; maxAge serves a day-old cache so repeat visits stay fast.
+      return `https://image.thum.io/get/width/${w}/crop/${h}/viewportWidth/${w}`
            + `/wait/18/maxAge/86400/png/noanimate/${full}`;
   }
 }
@@ -620,17 +625,25 @@ function skinFrontUV(geo, w, h){
   uv.needsUpdate = true;
 }
 
-// Snap a panel to its screenshot's TRUE aspect: the whole page shows, filling the
-// device with no crop and no letterbox bars. Width follows the image (height stays
-// FH so the row stays level); the live texture maps 1:1 (full UVs).
+// Cover-fit the live screenshot into the fixed device panel: the page fills the
+// screen edge-to-edge (no letterbox, no provider whitespace bars), centred
+// horizontally and anchored to the TOP so the hero / logo / emoji always shows.
+// Overflow is trimmed with the texture transform; every panel keeps the same device
+// aspect so the corridor rows stay uniform. The capture is already ≈ panel aspect,
+// so the trim is tiny — it mainly absorbs a provider returning a slightly off size.
 function fitPanelToImage(u, tex){
   const im = tex.image; if (!im) return;
   const iw = im.naturalWidth || im.width, ih = im.naturalHeight || im.height;
   if (!iw || !ih) return;
-  const ia = iw / ih;
-  const targetW = clamp(FH * ia, FH * 0.42, FH * 2.2);   // bound extreme aspects so panels never overlap
-  u.panel.scale.x = targetW / FW;
-  tex.repeat.set(1, 1); tex.offset.set(0, 0); tex.needsUpdate = true;   // full image, no crop
+  const ia = iw / ih, pa = FW / FH;
+  if (ia >= pa){                       // image wider than the panel → trim the sides, keep centred
+    const r = pa / ia;
+    tex.repeat.set(r, 1); tex.offset.set((1 - r) / 2, 0);
+  } else {                             // image taller than the panel → trim the bottom, keep the top
+    const r = ia / pa;
+    tex.repeat.set(1, r); tex.offset.set(0, 1 - r);
+  }
+  tex.needsUpdate = true;
 }
 
 // name plaque texture — painted to MATCH the .aero-btn enter pill (deep aqua
@@ -680,8 +693,8 @@ function roundRect(x,a,b,w,h,r){ x.beginPath(); x.moveTo(a+r,b); x.arcTo(a+w,b,a
 
 function buildGallery(font){
   // one shared rounded-slab geometry for every device — its edges are rounded so
-  // the front-projected screenshot wraps over them. Geometry is shared; each panel
-  // mesh is width-scaled (mesh transform, not geometry) to its own screenshot aspect.
+  // the front-projected screenshot wraps over them. All panels share this geometry
+  // at a uniform device aspect; the screenshot is cover-fit onto it (fitPanelToImage).
   const DEV_DEPTH = 0.22, DEV_RADIUS = 0.11, DEV_Z = 0.06;   // DEV_Z lifts the slab off the glass wall
   const deviceGeo = new RoundedBoxGeometry(FW, FH, DEV_DEPTH, 6, DEV_RADIUS);
   skinFrontUV(deviceGeo, FW, FH);
@@ -711,7 +724,7 @@ function buildGallery(font){
     const loadTex = new THREE.CanvasTexture(lc); loadTex.colorSpace = THREE.SRGBColorSpace;
 
     const panelMat = new THREE.MeshBasicMaterial({ map: whiteTex, toneMapped: false });
-    const panel = new THREE.Mesh(deviceGeo, panelMat);   // shares one geometry; scaled per-image in fitPanelToImage
+    const panel = new THREE.Mesh(deviceGeo, panelMat);   // shared geometry; screenshot is cover-fit via the texture transform
     panel.position.z = DEV_Z;
     panel.castShadow = true;
     group.add(panel);
