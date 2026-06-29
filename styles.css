@@ -150,9 +150,11 @@ h2{ font-size:26px; letter-spacing:.05em; margin-bottom:6px; color:var(--aqua-d)
 #prompt.show{ opacity:1; transform:translateX(-50%) translateY(-4px); }
 #legend{
   position:absolute; bottom:22px; left:50%; transform:translateX(-50%);
-  font-size:13px; letter-spacing:.03em; color:#eaf7ff;
+  font-size:clamp(9.5px, 2.6vw, 13px);  /* shrinks on narrow portrait screens */
+  letter-spacing:.03em; color:#eaf7ff;
   text-shadow:0 1px 6px rgba(0,50,120,.7);
   opacity:.8;
+  white-space:nowrap;   /* never wraps — font shrinks to fit instead */
 }
 #legend b{ color:#fff; }
 
