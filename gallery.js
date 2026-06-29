@@ -598,13 +598,6 @@ function drawLoadingBar(canvas, progress, animTime){
   c2.font=`600 ${Math.round(H*.046)}px Quicksand, Segoe UI, sans-serif`;
   c2.textBaseline='top';
   c2.fillText(`${Math.min(100,Math.round(progress*100))}%`, W/2, barY+barH+Math.round(H*.016));
-  // Decorative Aero bubble accents (corners)
-  for (const [bx,by,br] of [[padX*.55,H*.8,H*.038],[W-padX*.6,H*.84,H*.03],[padX*.85,H*.88,H*.022]]){
-    const bg=c2.createRadialGradient(bx,by-br*.3,0,bx,by,br);
-    bg.addColorStop(0,'rgba(255,255,255,.85)'); bg.addColorStop(.45,'rgba(180,228,255,.35)');
-    bg.addColorStop(1,'rgba(180,228,255,0)');
-    c2.fillStyle=bg; c2.beginPath(); c2.arc(bx,by,br,0,Math.PI*2); c2.fill();
-  }
 }
 
 // Auto-load delay: bar fires before the player walks up to that row.
