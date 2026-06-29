@@ -1201,6 +1201,22 @@ $('subtitle').textContent = CONFIG.subtitle;
 // entrance button is just the owner's handle (CONFIG.creator) — the one breadcrumb
 // a new owner edits after cloning (or a future sign-up Worker writes)
 $('enterBtn').textContent = CONFIG.creator;
+
+// Keep the handle on ONE centered line: shrink the font until the label fits
+// the pill's width (a long name on a narrow portrait phone would otherwise wrap).
+function fitEnterBtn(){
+  const b = $('enterBtn'); if (!b) return;
+  let size = 20;                                   // CSS base size
+  b.style.fontSize = size + 'px';
+  let guard = 0;
+  while (b.scrollWidth > b.clientWidth + 0.5 && size > 10 && guard++ < 80){
+    size -= 0.5; b.style.fontSize = size + 'px';
+  }
+}
+fitEnterBtn();
+document.fonts?.ready?.then(fitEnterBtn);          // re-fit once Quicksand loads
+addEventListener('resize', fitEnterBtn);
+
 setInputMode(isTouch ? 'touch' : 'keyboard');
 
 new FontLoader().load(

@@ -62,8 +62,10 @@ body{
   pointer-events:none;
 }
 
-.card{ padding:58px 64px; text-align:center; max-width:600px; }
-.card.small{ padding:34px 40px; }
+/* roomier interior on narrow portrait phones so the title/subtitle/handle
+   button get more width before the font has to shrink */
+.card{ padding:clamp(38px,8vw,58px) clamp(26px,8vw,64px); text-align:center; max-width:600px; }
+.card.small{ padding:34px clamp(28px,8vw,40px); }
 
 #enter,#pause,#oops{
   position:fixed; inset:0; z-index:50;
@@ -89,18 +91,37 @@ h2{ font-size:26px; letter-spacing:.05em; margin-bottom:6px; color:var(--aqua-d)
 
 /* ── Glossy aqua button ─────────────────────────────────────── */
 .aero-btn{
+  /* centered, never-wrapping pill — JS (fitEnterBtn) shrinks the handle
+     font so a long name stays on ONE centered line on portrait phones */
+  display:inline-flex; align-items:center; justify-content:center;
+  max-width:100%; white-space:nowrap;
   font-family:inherit; font-weight:600; font-size:20px; letter-spacing:.04em;
-  color:#fff; cursor:pointer;
-  padding:18px 40px; border:none; border-radius:999px;
-  background:linear-gradient(180deg, #7fd0ff 0%, var(--aqua) 48%, var(--aqua-d) 100%);
+  color:#fff; cursor:pointer; text-shadow:0 1px 2px rgba(4,46,104,.5);
+  padding:18px clamp(30px,7vw,44px); border:none; border-radius:999px;
+  /* layered fill: a baked top-gloss over a deep aqua gradient — keeps the
+     label crisp (gloss is in the background, not an overlay on the text) */
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.72) 0%, rgba(255,255,255,.14) 38%, rgba(255,255,255,0) 54%),
+    linear-gradient(180deg, #9fdcff 0%, #4fb6ff 42%, var(--aqua) 66%, var(--aqua-d) 100%);
   box-shadow:
-    0 10px 24px rgba(10,90,200,.45),
-    inset 0 2px 2px rgba(255,255,255,.9),
-    inset 0 -10px 18px rgba(0,60,140,.45);
-  transition:transform .15s ease, filter .2s ease;
+    0 14px 32px rgba(10,90,200,.5),
+    0 3px 8px rgba(10,70,160,.4),
+    inset 0 2px 3px rgba(255,255,255,.95),
+    inset 0 -12px 22px rgba(0,60,140,.5),
+    inset 0 0 0 1px rgba(255,255,255,.4);
+  transition:transform .15s ease, filter .2s ease, box-shadow .2s ease;
 }
-.aero-btn:hover{ transform:translateY(-2px) scale(1.03); filter:brightness(1.08); }
+.aero-btn:hover{
+  transform:translateY(-2px) scale(1.03); filter:brightness(1.08);
+  box-shadow:
+    0 18px 40px rgba(10,90,200,.58),
+    0 3px 8px rgba(10,70,160,.4),
+    inset 0 2px 3px rgba(255,255,255,.95),
+    inset 0 -12px 22px rgba(0,60,140,.5),
+    inset 0 0 0 1px rgba(255,255,255,.5);
+}
 .aero-btn:active{ transform:translateY(0) scale(.99); }
+.aero-btn:disabled{ opacity:.6; cursor:default; filter:saturate(.7); }
 
 /* decorative bubbles drifting inside the entry card */
 .bubbles{ position:absolute; inset:0; pointer-events:none; }
