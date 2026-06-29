@@ -319,12 +319,14 @@ function glassReflector(geo, { tex=1024, color=0x9fc0dd, alpha=0.5 } = {}){
   });
   const m = r.material;
 
-  // ── cheap softening blur (touch only) ──────────────────────────────────
-  // Mobile renders these mirrors at a low 512² so they read pixelated. A tiny
-  // 5-tap cross blur in the reflector's own shader softens that low res for
-  // almost nothing (4 extra texture reads from a small, cache-hot texture).
-  // Skipped on desktop where the mirrors are already high-res and crisp.
-  if (lowPerf){
+  // ── cheap softening blur (all devices) ─────────────────────────────────
+  // A tiny 5-tap cross blur in the reflector's own shader. On mobile it hides
+  // the pixelated low-res 512² mirror; everywhere it adds realism — real
+  // surfaces never give a perfect razor-sharp mirror, so the slight diffusion
+  // reads as polished glass rather than a flat copy. Costs ~4 extra reads from
+  // a small, cache-hot texture. The offset is in texels so the softening looks
+  // the same whether the mirror is 512 (mobile) or 1024 (desktop).
+  {
     const sampleTarget = 'vec4 base = texture2DProj( tDiffuse, vUv );';
     if (m.fragmentShader.includes(sampleTarget)){
       const tx = (1.3 / tex).toFixed(6);          // ~1.3-texel offset in projective space
