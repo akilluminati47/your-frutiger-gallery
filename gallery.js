@@ -45,26 +45,41 @@ SHOT_W = Math.round(SHOT_W); SHOT_H = Math.round(SHOT_H);
 
 function withProtocol(u){ return /^https?:\/\//i.test(u) ? u : 'https://' + u; }
 
-function screenshotURL(url, w, h){
+function screenshotURL(provider, url, w, h){
   const full = withProtocol(url);
   const enc  = encodeURIComponent(full);
-  // every provider is asked for the VISITOR's exact viewport (w×h) and given a
-  // few seconds to finish loading, so the capture is the visitor's aspect ratio
-  // and fully painted rather than a half-loaded frame.
-  switch (CONFIG.screenshotProvider){
+  const vpw  = isTouch ? mobileVPW : w;     // phones render their portrait layout
+  // every provider is asked for the VISITOR's viewport and given generous render
+  // time so the capture is fully painted (fonts + lazy images), not half-loaded.
+  switch (provider){
     case 'mshots':
-      return `https://s.wordpress.com/mshots/v1/${enc}?w=${w}&h=${h}&vpw=${w}&vph=${h}`;
+      return `https://s.wordpress.com/mshots/v1/${enc}?w=${w}&h=${h}&vpw=${vpw}&vph=${h}`;
     case 'microlink':
       return `https://api.microlink.io/?url=${enc}&screenshot=true&embed=screenshot.url`
-           + `&viewport.width=${w}&viewport.height=${h}&viewport.deviceScaleFactor=1`
+           + `&viewport.width=${vpw}&viewport.height=${h}&viewport.deviceScaleFactor=1`
            + `&waitUntil=networkidle2&meta=false`;
     case 'thumio':
     default:
-      // width + crop/height + viewportWidth → exact device aspect; wait → full asset load
-      // wait/12: fonts + heavy assets get more render time (was wait/8)
-      // mobile uses a fixed 390px viewport so phone layouts render correctly
-      return `https://image.thum.io/get/width/${w}/crop/${h}/viewportWidth/${isTouch?mobileVPW:w}/wait/10/noanimate/${full}`;
+      // width + crop/height → device aspect; wait/14 → fonts + heavy assets finish
+      return `https://image.thum.io/get/width/${w}/crop/${h}/viewportWidth/${vpw}/wait/14/noanimate/${full}`;
   }
+}
+
+// Robust capture: try providers in order, first one that actually decodes wins.
+// Guards against a single provider rate-limiting, blocking a domain, or returning
+// a broken/empty image — the live fetch falls back instead of leaving a blank.
+const PROVIDERS = [...new Set([CONFIG.screenshotProvider, 'thumio', 'mshots', 'microlink'])];
+function fetchScreenshot(url, onImg, onFail){
+  let i = 0;
+  const tryNext = () => {
+    if (i >= PROVIDERS.length){ onFail?.(); return; }
+    const prov = PROVIDERS[i++];
+    const img = new Image(); img.crossOrigin = 'anonymous';
+    img.onload  = () => (img.naturalWidth > 1 ? onImg(img) : tryNext());
+    img.onerror = tryNext;
+    img.src = screenshotURL(prov, url, SHOT_W, SHOT_H);
+  };
+  tryNext();
 }
 
 /* ════════════════════════════════════════════════════════════════
@@ -80,26 +95,24 @@ function preFetchScreenshots(){
   for (const project of CONFIG.projects){
     const url = project.url;
     prefetchMap.set(url, 'pending');
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => {
-      const tex = new THREE.Texture(img);
-      tex.colorSpace = THREE.SRGBColorSpace;
-      tex.minFilter = THREE.LinearMipmapLinearFilter;
-      tex.magFilter = THREE.LinearFilter;
-      tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
-      tex.generateMipmaps = true;
-      tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
-      coverFit(tex);
-      tex.needsUpdate = true;
-      prefetchMap.set(url, tex);
-    };
-    img.onerror = () => { prefetchMap.set(url, null); };
-    img.src = screenshotURL(url, SHOT_W, SHOT_H);
+    fetchScreenshot(url,
+      (img) => {
+        const tex = new THREE.Texture(img);
+        tex.colorSpace = THREE.SRGBColorSpace;
+        tex.minFilter = THREE.LinearMipmapLinearFilter;
+        tex.magFilter = THREE.LinearFilter;
+        tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+        tex.generateMipmaps = true;
+        tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+        tex.needsUpdate = true;           // no crop — the panel snaps to this image's aspect on reveal
+        prefetchMap.set(url, tex);
+      },
+      () => prefetchMap.set(url, null)
+    );
   }
 }
-// Fire immediately — renderer/coverFit/FW are set up synchronously below,
-// all onload callbacks are async so they see the fully-initialised module.
+// Fire immediately — renderer + FW are set up synchronously below, and every
+// onload callback is async so it sees the fully-initialised module.
 preFetchScreenshots();
 
 /* ════════════════════════════════════════════════════════════════
@@ -142,6 +155,7 @@ const bubbles = [];
 // decorative objects that are SKIPPED inside the mirror passes (they barely show
 // in a faint reflection but cost a full extra draw in each of the 3 reflectors)
 const noReflect = [];
+let galleryStartTime = null;   // seconds-from-load when the visitor entered (set in beginPlay)
 
 // gallery + corridor footprint (everything below is derived from this)
 const GROUND_Y = -8;                    // grassy world far beneath the glass
@@ -152,7 +166,8 @@ const END_Z = START_Z + (ROWS - 1) * DZ;
 // ── loading orchestration constants ──────────────────────────────────────
 const GAZE_ROWS      = 1;                    // last N rows are gaze-only (not auto)
 const GAZE_ROW_START = ROWS - GAZE_ROWS;    // first gaze row index
-const INTRO_DUR      = 2.6;                 // intro swoop duration (seconds)
+const INTRO_DUR      = 2.6;                 // intro glide duration (seconds)
+const INTRO_START_Y  = 2.7;                 // camera height at the start of the glide-in
 const LOAD_DUR       = 1.8;                 // bar fill time for auto frames
 const GAZE_LOAD_DUR  = 2.0;                 // bar fill for gaze-triggered frames
 
@@ -409,6 +424,7 @@ function dontNestReflections(){
   floor.rotation.x = -Math.PI/2;
   floor.position.set(0, 0.004, DESK_CZ);
   floor.userData.every = lowPerf ? 2 : 1;
+  floor.renderOrder = 1;        // stable transparent order: floor < walls < panels < labels
   scene.add(floor);
 
   // glass side walls — same reflective look as the floor, carried up the sides
@@ -422,6 +438,7 @@ function dontNestReflections(){
     w.rotation.y = side < 0 ? Math.PI/2 : -Math.PI/2;
     w.position.set(x, WALL_H/2, DESK_CZ);
     w.userData.every = lowPerf ? 3 : 2;        // walls refresh less often than the floor
+    w.renderOrder = 2;                          // drawn after the floor reflection (no flip-flicker)
     scene.add(w);
 
     // crisp glossy top rail so the glass wall reads as a solid pane edge
@@ -487,7 +504,12 @@ function bubbleTexture(){
 function resetBubble(s, anywhere){
   const sc = 0.1 + Math.random()*0.4;
   s.scale.set(sc, sc, 1);
-  s.position.set((Math.random()-0.5)*30, anywhere ? Math.random()*14 : -0.5, DESK_CZ + (Math.random()-0.5)*40);
+  // the spawn field expands the longer the visitor lingers (full size after 3 min),
+  // so bubbles gradually bloom outward across the landscape for people who stay
+  const age = galleryStartTime ? clamp((performance.now()/1000 - galleryStartTime)/180, 0, 1) : 0;
+  const spreadX = lerp(30, 130, age);
+  const spreadZ = lerp(40, 170, age);
+  s.position.set((Math.random()-0.5)*spreadX, anywhere ? Math.random()*14 : -0.5, DESK_CZ + (Math.random()-0.5)*spreadZ);
 }
 
 /* ════════════════════════════════════════════════════════════════
@@ -589,33 +611,19 @@ const PANEL_MASK = (() => {
   const t = new THREE.CanvasTexture(c); t.needsUpdate = true; return t;
 })();
 
-// "cover"-fit a texture to the panel aspect via a UV crop: fills the panel
-// edge-to-edge at the image's TRUE aspect — no stretch, no letterbox squares
-function coverFit(tex){
-  const ia = tex.image.naturalWidth / tex.image.naturalHeight, pa = FW / FH;
-  if (ia > pa){ tex.repeat.set(pa/ia, 1); tex.offset.set((1 - pa/ia)/2, 0); }
-  else        { tex.repeat.set(1, ia/pa); tex.offset.set(0, (1 - ia/pa)/2); }
-}
-
-// loads the live screenshot and cover-fits it onto the panel material
-function loadScreen(project, mat){
-  const img = new Image();
-  img.crossOrigin = 'anonymous';
-  img.onload = () => {
-    const t = new THREE.Texture(img);
-    t.colorSpace = THREE.SRGBColorSpace;
-    t.minFilter = THREE.LinearMipmapLinearFilter;
-    t.magFilter = THREE.LinearFilter;
-    t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
-    t.generateMipmaps = true;
-    t.anisotropy = renderer.capabilities.getMaxAnisotropy();
-    coverFit(t);
-    t.needsUpdate = true;
-    mat.map?.dispose?.();                       // drop the placeholder
-    mat.map = t; mat.needsUpdate = true;
-  };
-  img.onerror = () => { /* keep the placeholder */ };
-  img.src = screenshotURL(project.url, SHOT_W, SHOT_H);
+// Snap a panel to its screenshot's TRUE aspect: the whole page shows, filling the
+// panel with no crop and no letterbox bars. Width follows the image (height stays
+// FH so the row stays level); the live texture maps 1:1 (full UVs).
+function fitPanelToImage(u, tex){
+  const im = tex.image; if (!im) return;
+  const iw = im.naturalWidth || im.width, ih = im.naturalHeight || im.height;
+  if (!iw || !ih) return;
+  const ia = iw / ih;
+  const targetW = clamp(FH * ia, FH * 0.42, FH * 2.2);   // bound extreme aspects so panels never overlap
+  const sx = targetW / FW;
+  u.screenMesh.scale.x = sx;
+  u.backMesh.scale.x   = sx;
+  tex.repeat.set(1, 1); tex.offset.set(0, 0); tex.needsUpdate = true;   // full image, no crop
 }
 
 // name plaque texture — painted to MATCH the .aero-btn enter pill (deep aqua
@@ -685,7 +693,7 @@ function buildGallery(font){
     // glass backing with curved edges: gives depth + shadow, and is the edge the
     // screenshot rolls over (its rounded front sits right behind the image)
     const back = new THREE.Mesh(new RoundedBoxGeometry(FW, FH, 0.16, 5, 0.09), frameMat);
-    back.castShadow = true; group.add(back);
+    back.castShadow = true; back.renderOrder = 3; group.add(back);
 
     // the live screenshot — fills the panel edge-to-edge at the image's true
     // aspect (cover-fit) and is rounded by PANEL_MASK so it rolls over the edges
@@ -701,13 +709,17 @@ function buildGallery(font){
       transparent: true, toneMapped: false,
     });
     const screen = new THREE.Mesh(new THREE.PlaneGeometry(FW, FH), panelMat);
-    screen.position.z = 0.082; group.add(screen);
+    // explicit renderOrder so these transparent panels ALWAYS draw after the
+    // reflectors (floor=1, walls=2) — distance-sorting flipped at some angles and
+    // made the panel/label blend over a brighter background, the "glare" jump.
+    screen.position.z = 0.082; screen.renderOrder = 4; group.add(screen);
     // NOTE: no immediate fetch — loading is orchestrated by updateLoadingSystem()
 
     // name plaque — hidden until world loads, then bloops in
     const label = labelPanel(project.name);
     const labelBaseY = (FH/2 + WALL_H - FRAME_Y) / 2;
     label.position.set(0, labelBaseY, 0.06);
+    label.renderOrder = 5;         // always on top of its panel — no sort flicker
     label.scale.setScalar(0.01);   // starts tiny; animates to 1.0 on reveal
     group.add(label);
 
@@ -733,7 +745,7 @@ function buildGallery(font){
       autoDelay:    isGazeFrame ? Infinity : autoDelayForRow(row, i%2),
       loadDuration: isGazeFrame ? GAZE_LOAD_DUR : LOAD_DUR,
       loadProgress: 0, imageReady: false, liveTexture: null,
-      screenMat: panelMat, whiteTex, loadCanvas: lc, loadTex,
+      screenMat: panelMat, screenMesh: screen, backMesh: back, whiteTex, loadCanvas: lc, loadTex,
       labelBloop: -1,
     };
     group.getWorldPosition(group.userData.worldPos);
@@ -943,7 +955,6 @@ let state = 'menu';
 let introT = 0;
 let launch = null;
 let activeFrame = null, lastActive = null, lastCanVisit = false;
-let galleryStartTime = null;
 let started = false;
 
 function beginPlay(){
@@ -955,6 +966,10 @@ function beginPlay(){
   $('fade').style.opacity = '1';
   requestAnimationFrame(() => { $('fade').style.opacity = '0'; });
   audio.whoosh();
+  // start elevated + at the entrance; the intro glides forward + descends while
+  // letting you look and steer freely (no hard-scripted hold)
+  controls.getObject().position.set(0, INTRO_START_Y, -6);
+  velocity.set(0, 0, 0);
   state = 'intro'; introT = 0;
   if (inputMode === 'touch') $('touch')?.classList.remove('hidden');
 }
@@ -963,20 +978,27 @@ function startExperience(){
   if (isTouch) beginPlay();          // touch: no pointer lock
   else controls.lock();              // desktop / gamepad: pointer lock → 'lock' begins play
 }
+let pausedFrom = 'play';
 function pauseGame(){
-  if (state !== 'play') return;
-  state = 'paused';                         // freezes all movement (loop skips moveAndInteract)
+  // pausable during the entry glide too (Esc during the whoosh used to no-op and
+  // leave you stranded with the cursor showing and no menu)
+  if (state !== 'play' && state !== 'intro') return;
+  pausedFrom = state;
+  state = 'paused';                         // freezes movement (loop skips intro/play)
   $('pause').classList.remove('hidden');
-  $('hud').classList.add('hidden');         // remove crosshair / hint / on-screen controls
+  $('hud').classList.add('hidden');         // remove hint / on-screen controls
   $('prompt').classList.remove('show');
 }
 function resumeGame(){
   if (!started) return;
-  state = 'play';
+  state = pausedFrom;                        // continue the glide, or back to play
   $('pause').classList.add('hidden');
   $('hud').classList.remove('hidden');
 }
-function togglePause(){ if (state === 'play') pauseGame(); else if (state === 'paused') resumeGame(); }
+function togglePause(){
+  if (state === 'play' || state === 'intro') pauseGame();
+  else if (state === 'paused') resumeGame();
+}
 
 /* ════════════════════════════════════════════════════════════════
    8b · loading orchestration
@@ -1002,8 +1024,12 @@ function revealWorld(f){
   const u = f.userData;
   if (u.loadState === 'done') return;
   u.loadState = 'done';
-  // Swap in the live screenshot (keep bar canvas on error)
-  if (u.liveTexture){ u.screenMat.map?.dispose?.(); u.screenMat.map = u.liveTexture; u.screenMat.needsUpdate = true; }
+  // Swap in the live screenshot (keep bar canvas on error) and SNAP the panel to
+  // the screenshot's true aspect so the whole page shows, filling it without a crop
+  if (u.liveTexture){
+    u.screenMat.map?.dispose?.(); u.screenMat.map = u.liveTexture; u.screenMat.needsUpdate = true;
+    fitPanelToImage(u, u.liveTexture);
+  }
   // Free canvas textures — not needed anymore
   u.loadTex?.dispose?.();  u.loadTex  = null;
   u.whiteTex?.dispose?.(); u.whiteTex = null;
@@ -1105,6 +1131,18 @@ function tryLaunch(){
    ════════════════════════════════════════════════════════════════ */
 const clock = new THREE.Clock();
 let bobPhase = 0, smoothSpeed = 0;
+let sunGazeT = 0, tipsFaded = false;     // gaze at the sun for 2s → control tips fade away
+const _gazeDir = new THREE.Vector3();
+function updateSunGaze(dt){
+  if (tipsFaded || !started || state === 'menu') return;
+  camera.getWorldDirection(_gazeDir);
+  sunGazeT = (_gazeDir.dot(SUN_DIR) > 0.986) ? sunGazeT + dt : 0;   // looking near the sun disk
+  if (sunGazeT >= 2){
+    tipsFaded = true;
+    const lg = $('legend');
+    if (lg){ lg.style.transition = 'opacity 1.4s ease'; lg.style.opacity = '0'; }
+  }
+}
 function animate(){
   requestAnimationFrame(animate);
   const dt = Math.min(clock.getDelta(), 0.05);
@@ -1112,6 +1150,7 @@ function animate(){
 
   if (skyMat) skyMat.uniforms.uTime.value = t;
   updateLoadingSystem(dt, t);
+  updateSunGaze(dt);
 
   // Name-plaque bloop-in: scale 0.01→1.22→1.0 with overshoot, opacity 0→1
   for (const f of frames){
@@ -1131,9 +1170,14 @@ function animate(){
   }
 
   if (state === 'intro'){
-    introT = Math.min(1, introT + dt/2.6);
+    introT = Math.min(1, introT + dt/INTRO_DUR);
     const e = easeOut(introT);
-    controls.getObject().position.set(0, lerp(2.6, eyeHeight, e), lerp(-6, 0, e));
+    // glide forward (auto-walk that fades out) while you look + steer freely…
+    const autoFwd = (1 - e) * 0.9;
+    moveAndInteract(dt, t, autoFwd);
+    // …and descend onto the floor as a height-only blend (doesn't fight your input)
+    const o = controls.getObject();
+    o.position.y = lerp(INTRO_START_Y, o.position.y, e);
     if (introT >= 1) state = 'play';
   }
   else if (state === 'play'){
@@ -1181,16 +1225,16 @@ function animate(){
   renderer.render(scene, camera);
 }
 
-function moveAndInteract(dt, t){
+function moveAndInteract(dt, t, autoFwd = 0){
   pollPad(dt);
 
-  // unified analog move vector: keyboard + joystick + gamepad
+  // unified analog move vector: keyboard + joystick + gamepad (+ intro auto-glide)
   moveInput.x = (keys.KeyD||keys.ArrowRight?1:0) - (keys.KeyA||keys.ArrowLeft?1:0);
   moveInput.y = (keys.KeyW||keys.ArrowUp?1:0)    - (keys.KeyS||keys.ArrowDown?1:0);
   const dir = new THREE.Vector3(
     moveInput.x + touchMove.x + padMove.x,
     0,
-    moveInput.y + touchMove.y + padMove.y
+    moveInput.y + touchMove.y + padMove.y + autoFwd
   );
   if (dir.lengthSq() > 1) dir.normalize();      // keep analog magnitudes < 1, cap diagonals
 
@@ -1220,7 +1264,9 @@ function moveAndInteract(dt, t){
   const fwd = new THREE.Vector3(); camera.getWorldDirection(fwd);
   const fl = Math.hypot(fwd.x, fwd.z) || 1, fX = fwd.x/fl, fZ = fwd.z/fl;
   activeFrame = null; let best = 7.5;
-  for (const f of frames){
+  // looking up over the glass walls (at sky/landscape) never targets a panel
+  const overTheGlass = fwd.y > 0.55;
+  if (!overTheGlass) for (const f of frames){
     const dx = f.position.x - o.position.x, dz = f.position.z - o.position.z;
     const d  = Math.hypot(dx, dz);
     if (d > 7.5) continue;
