@@ -640,12 +640,27 @@ function planarUV(geo, w, h){
   uv.needsUpdate = true;
 }
 
-// Stretch the WHOLE screenshot to fill the device panel — full page content, no
-// crop, no letterbox. The capture is taken at the visitor's own device aspect
-// (phone/tablet/desktop), so the panel is that same aspect and the full image maps
-// 1:1 across it; any tiny provider size drift just stretches a hair to fill.
+// Fit the capture onto the device panel.
+//  • Desktop: stretch the WHOLE page across the slab (full content, no crop).
+//  • Mobile: COVER-fit one phone screenful as if you were on the site — fill the
+//    portrait slab at the capture's true proportions, anchored to the TOP and centred
+//    horizontally, cropping the overflow. This is robust to a provider returning a
+//    full-page (very tall) or off-aspect image: instead of squishing the whole page
+//    into the slab (which reads as a cut-off corner), it shows the top screenful at
+//    the right aspect. Needs the texture's real pixel size, so it reads tex.image.
 function fitPanelToImage(u, tex){
-  tex.repeat.set(1, 1); tex.offset.set(0, 0);
+  if (!isTouch){ tex.repeat.set(1, 1); tex.offset.set(0, 0); tex.needsUpdate = true; return; }
+  const im = tex.image;
+  const iw = im?.naturalWidth || im?.width, ih = im?.naturalHeight || im?.height;
+  if (!iw || !ih){ tex.repeat.set(1, 1); tex.offset.set(0, 0); tex.needsUpdate = true; return; }
+  const ia = iw / ih, pa = FW / FH;
+  if (ia >= pa){                       // capture wider than the slab → crop sides, keep centred
+    const r = pa / ia;
+    tex.repeat.set(r, 1); tex.offset.set((1 - r) / 2, 0);
+  } else {                             // capture taller than the slab → crop the bottom, keep the TOP
+    const r = ia / pa;                 // (flipY: the page's top sits at v=1, so offset up to it)
+    tex.repeat.set(1, r); tex.offset.set(0, 1 - r);
+  }
   tex.needsUpdate = true;
 }
 
@@ -961,13 +976,32 @@ function pollPad(dt){
   const JOY_R = 52;
   let joyId = null, joyCX = 0, joyCY = 0;
   let lookId = null, lookLX = 0, lookLY = 0, lookStart = 0, lookMoved = 0;
+  let uiTouchId = null;                       // a finger acting as the menu cursor
   const joyEl = $('joy'), knobEl = $('joyKnob');
   const inJoyZone = (x, y) => x < innerWidth * 0.5 && y > innerHeight * 0.45;
+
+  // On the menu/pause screens a finger drives the custom crosshair cursor (so it can
+  // pop bubbles + light/tap the aero buttons) exactly like the mouse/gamepad cursor —
+  // the camera is NOT steered there. (In-world, drag still looks around, see below.)
+  function driveTouchCursor(x, y){
+    padCursor.x = x; padCursor.y = y; padCursor.ready = true;
+    lastPointer.x = x; lastPointer.y = y;
+    if (!crosshairEl) return;
+    crosshairEl.style.left = x + 'px'; crosshairEl.style.top = y + 'px';
+    crosshairEl.classList.add('show');
+    const over = document.elementFromPoint(x, y)?.closest?.('.aero-btn');
+    setUiHover(over);
+    crosshairEl.classList.toggle('active', !!over);
+  }
 
   addEventListener('touchstart', e => {
     setInputMode('touch');
     for (const t of e.changedTouches){
       if (t.target?.closest?.('.touch-btn')) continue;   // let buttons handle their own taps
+      if (onUiScreen()){                                 // menus: finger = cursor, never the camera
+        if (uiTouchId === null){ uiTouchId = t.identifier; driveTouchCursor(t.clientX, t.clientY); }
+        continue;
+      }
       if (joyId === null && inJoyZone(t.clientX, t.clientY)){
         joyId = t.identifier; joyCX = t.clientX; joyCY = t.clientY;
         if (joyEl){ joyEl.style.left = joyCX+'px'; joyEl.style.top = joyCY+'px'; joyEl.classList.add('on'); }
@@ -981,6 +1015,7 @@ function pollPad(dt){
 
   addEventListener('touchmove', e => {
     for (const t of e.changedTouches){
+      if (t.identifier === uiTouchId){ driveTouchCursor(t.clientX, t.clientY); continue; }
       if (t.identifier === joyId){
         const dx = t.clientX - joyCX, dy = t.clientY - joyCY;
         const d = Math.hypot(dx, dy), m = Math.min(d, JOY_R), a = Math.atan2(dy, dx);
@@ -993,11 +1028,17 @@ function pollPad(dt){
         applyLook(dx * (M.touchLook ?? 0.0045), dy * (M.touchLook ?? 0.0045));
       }
     }
-    if (e.cancelable) e.preventDefault();
+    // in-world: block scroll/zoom. On the menus, let native taps through so the
+    // aero buttons still fire (touch-action:none in CSS already prevents scrolling).
+    if (!onUiScreen() && e.cancelable) e.preventDefault();
   }, { passive:false });
 
   function endTouch(e){
     for (const t of e.changedTouches){
+      if (t.identifier === uiTouchId){            // finger up → drop the menu cursor
+        uiTouchId = null; setUiHover(null); crosshairEl?.classList.remove('show');
+        continue;
+      }
       if (t.identifier === joyId){
         joyId = null; touchMove.x = 0; touchMove.y = 0;
         joyEl?.classList.remove('on');
