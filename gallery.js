@@ -176,12 +176,13 @@ const FH = 2.4, FW = FH * ASPECT, FRAME_Y = eyeHeight;   // frames float at eye 
 const ROWS  = Math.ceil(CONFIG.projects.length / 2);
 const END_Z = START_Z + (ROWS - 1) * DZ;
 // ── loading orchestration constants ──────────────────────────────────────
-const GAZE_ROWS      = 1;                    // last N rows are gaze-only (not auto)
-const GAZE_ROW_START = ROWS - GAZE_ROWS;    // first gaze row index
 const INTRO_DUR      = 2.6;                 // intro glide duration (seconds)
 const INTRO_START_Y  = 2.7;                 // camera height at the start of the glide-in
-const LOAD_DUR       = 1.8;                 // bar fill time for auto frames
-const GAZE_LOAD_DUR  = 2.0;                 // bar fill for gaze-triggered frames
+const LOAD_DUR       = 1.8;                 // bar fill time once a panel pings in
+// Panels stay clean white tiles until the visitor walks within LOAD_RANGE, then
+// "ping in" (bar → live screenshot). Distance-based, not timed, so they're white
+// from afar regardless of walk speed — far-off dark sites never read as grey/black.
+const LOAD_RANGE     = 14;
 
 const WALL_X  = HALF + 2.0;             // glass side walls
 const FRAME_X = WALL_X - 0.12;          // frames hang pressed flat against the glass walls
@@ -604,14 +605,6 @@ function drawLoadingBar(canvas, progress, animTime){
   }
 }
 
-// Auto-load delay: bar fires before the player walks up to that row.
-// Sequential ping: left (sideIdx=0) always fires first, then right (sideIdx=1) 0.45 s later,
-// so each row visibly pings left → right before moving to the next pair.
-function autoDelayForRow(row, sideIdx){
-  const walkTime = (START_Z + row * DZ) / CONFIG.movement.maxSpeed;
-  return Math.max(0, INTRO_DUR + walkTime - 1.5) + row * 0.12 + sideIdx * 0.45;
-}
-
 // Project the screenshot straight onto a panel's FRONT plane, so it also skins the
 // rounded edges: the page's full content gently wraps the curve to the sides
 // instead of a flat plane ending in pixelated corner cuts. UV comes from each
@@ -713,7 +706,6 @@ function buildGallery(font){
     const group = new THREE.Group();
     const side        = (i % 2 === 0) ? -1 : 1;      // left / right of the corridor
     const row         = Math.floor(i / 2);
-    const isGazeFrame = row >= GAZE_ROW_START;  // last N rows are gaze-only
     group.position.set(side * FRAME_X, FRAME_Y, START_Z + row * DZ);  // pressed to the glass wall
     group.rotation.y = side < 0 ? Math.PI/2 : -Math.PI/2;   // face the walkway
 
@@ -760,9 +752,7 @@ function buildGallery(font){
       project, visit, label, labelBaseY, scale:0, worldPos:new THREE.Vector3(),
       // ── loading state ──
       loadState:    'pending',               // 'pending' | 'loading' | 'done'
-      loadTrigger:  isGazeFrame ? 'gaze' : 'auto',
-      autoDelay:    isGazeFrame ? Infinity : autoDelayForRow(row, i%2),
-      loadDuration: isGazeFrame ? GAZE_LOAD_DUR : LOAD_DUR,
+      loadDuration: LOAD_DUR,
       loadProgress: 0, imageReady: false, liveTexture: null,
       screenMat: panelMat, panel, whiteTex, loadCanvas: lc, loadTex,
       labelBloop: -1,
@@ -1167,13 +1157,16 @@ function revealWorld(f){
 
 function updateLoadingSystem(dt, t){
   if (!galleryStartTime) return;
-  const elapsed = performance.now() / 1000 - galleryStartTime;
+  const p = controls.getObject().position;
   for (const f of frames){
     const u = f.userData;
     if (u.loadState === 'done') continue;
     if (u.loadState === 'pending'){
-      // Auto-fire when enough time has passed OR player gazes at screen (any trigger)
-      if ((u.loadTrigger === 'auto' && elapsed >= u.autoDelay) || f === activeFrame){
+      // Ping in once the visitor walks within range, or the moment they gaze at it.
+      // Until then it stays a clean white tile — so distant worlds read white, never
+      // a grey/black slab of some far-off dark site.
+      const dx = u.worldPos.x - p.x, dz = u.worldPos.z - p.z;
+      if (dx*dx + dz*dz <= LOAD_RANGE * LOAD_RANGE || f === activeFrame){
         startFrameLoading(f); continue;
       }
       // pending state = solid white, nothing to animate
@@ -1224,7 +1217,6 @@ $('resumeBtn').addEventListener('click', () => {
   if (isTouch) resumeGame();
   else controls.lock();                     // desktop: re-lock → 'lock' handler resumes
 });
-$('visitBtn')?.addEventListener('click', e => { e.preventDefault(); tryLaunch(); });
 $('pauseBtn')?.addEventListener('click', e => { e.preventDefault(); togglePause(); });
 
 // desktop click inside the world = visit the active frame. If a gamepad/touch
@@ -1243,7 +1235,6 @@ function tryLaunch(){
   state = 'launching';
   audio.whoosh();
   $('prompt').classList.remove('show');
-  $('visitBtn')?.classList.remove('on');
 
   const dir = new THREE.Vector3(Math.sin(f.rotation.y), 0, Math.cos(f.rotation.y));
   const toPos = f.position.clone().add(dir.multiplyScalar(2.3)); toPos.y = eyeHeight;
@@ -1413,16 +1404,17 @@ function moveAndInteract(dt, t, autoFwd = 0){
     const sameFrame = activeFrame === lastActive;
     lastActive = activeFrame; lastCanVisit = canVisit;
     // no in-game crosshair — the centre of the view stays clear
-    if (!activeFrame){
-      $('prompt').classList.remove('show');
-      $('visitBtn')?.classList.remove('on');
-    }
+    if (!activeFrame) $('prompt').classList.remove('show');
     if (canVisit){
       if (!sameFrame) audio.droplet(activeFrame.userData.worldPos);   // droplet from the panel you faced
-      $('prompt').textContent = `visit  ${activeFrame.userData.project.name}`;
-      $('prompt').classList.add('show'); $('visitBtn')?.classList.add('on');
+      // Mobile shows no badge/button — you just tap the floating 3D "visit?" text.
+      // Desktop keeps the "visit <name>" pill as the click/E affordance.
+      if (!isTouch){
+        $('prompt').textContent = `visit  ${activeFrame.userData.project.name}`;
+        $('prompt').classList.add('show');
+      }
     } else {
-      $('prompt').classList.remove('show'); $('visitBtn')?.classList.remove('on');
+      $('prompt').classList.remove('show');
     }
   }
 }

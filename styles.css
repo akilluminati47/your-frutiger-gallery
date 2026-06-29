@@ -217,10 +217,5 @@ h2{ font-size:26px; letter-spacing:.05em; margin-bottom:6px; color:var(--aqua-d)
   box-shadow:0 8px 20px rgba(10,90,200,.45), inset 0 2px 2px rgba(255,255,255,.85), inset 0 -8px 14px rgba(0,60,140,.4);
 }
 .touch-btn:active{ filter:brightness(1.08); transform:scale(.97); }
-#visitBtn{
-  right:26px; bottom:30px; width:98px; height:98px; font-size:17px; letter-spacing:.04em;
-  opacity:0; transform:scale(.7); pointer-events:none;
-  transition:opacity .25s ease, transform .25s ease;
-}
-#visitBtn.on{ opacity:1; transform:scale(1); pointer-events:auto; }
+/* no on-screen "visit" button on mobile — you tap the floating 3D "visit?" text */
 #pauseBtn{ left:18px; top:18px; width:48px; height:48px; font-size:14px; opacity:.9; }
