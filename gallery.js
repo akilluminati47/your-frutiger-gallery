@@ -695,7 +695,11 @@ function buildGallery(font){
   // one shared rounded-slab geometry for every device — its edges are rounded so
   // the front-projected screenshot wraps over them. All panels share this geometry
   // at a uniform device aspect; the screenshot is cover-fit onto it (fitPanelToImage).
-  const DEV_DEPTH = 0.22, DEV_RADIUS = 0.11, DEV_Z = 0.06;   // DEV_Z lifts the slab off the glass wall
+  // Sleek thin slab: a shallow depth + small corner radius keeps the screenshot's
+  // wrapped edge to a thin device-rim line. (The old chunky 0.22/0.11 wrapped a wide
+  // band of the page's dark edge columns over the curve, which read as a black
+  // "shadow" on the skinny mobile panels when seen at a grazing angle from afar.)
+  const DEV_DEPTH = 0.07, DEV_RADIUS = 0.035, DEV_Z = 0.05;   // DEV_Z lifts the slab off the glass wall
   const deviceGeo = new RoundedBoxGeometry(FW, FH, DEV_DEPTH, 6, DEV_RADIUS);
   skinFrontUV(deviceGeo, FW, FH);
   const DEV_FRONT_Z = DEV_Z + DEV_DEPTH / 2;    // world-local z of the front face
