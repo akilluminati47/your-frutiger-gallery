@@ -747,7 +747,12 @@ function buildGallery(font){
 
   CONFIG.projects.forEach((project, i) => {
     const group = new THREE.Group();
-    const side        = (i % 2 === 0) ? -1 : 1;      // left / right of the corridor
+    // Orientation breadcrumb (layout is correct as-is — this only documents it):
+    // even i → side -1 → x = -FRAME_X; odd i → side +1 → x = +FRAME_X. You spawn
+    // facing +z, and for a +z-facing viewer "right" is -x (right = forward × up =
+    // +z × +y = -x). So EVEN indices (0,2,4,…) sit on your RIGHT wall at spawn and
+    // ODD indices on your LEFT. (The plaque side-notes in config.js follow this.)
+    const side        = (i % 2 === 0) ? -1 : 1;      // -1 = player's RIGHT wall, +1 = LEFT
     const row         = Math.floor(i / 2);
     const isGazeFrame = row >= GAZE_ROW_START;  // last N rows are gaze-only
     group.position.set(side * FRAME_X, FRAME_Y, START_Z + row * DZ);  // pressed to the glass wall
