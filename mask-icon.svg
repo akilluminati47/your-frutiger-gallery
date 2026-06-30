@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Safari pinned-tab mask: must be a single solid black silhouette on a
+       transparent background. Safari recolours it with the link's color attr. -->
+  <circle cx="32" cy="32" r="30" fill="#000000"/>
+</svg>
