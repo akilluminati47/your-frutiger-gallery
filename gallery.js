@@ -19,6 +19,20 @@ const dead    = (v, dz=0.14) => Math.abs(v) < dz ? 0 : v;     // analog stick de
 const $ = id => document.getElementById(id);
 
 /* ════════════════════════════════════════════════════════════════
+   0b · randomise gallery order each page load (CONFIG.shuffleOrder)
+        Fisher–Yates, in place, BEFORE anything reads the list (the
+        prefetch loop + the corridor layout). Whichever worlds land in
+        the final row stay gaze-triggered.
+   ════════════════════════════════════════════════════════════════ */
+if (CONFIG.shuffleOrder !== false){
+  const p = CONFIG.projects;
+  for (let i = p.length - 1; i > 0; i--){
+    const j = Math.floor(Math.random() * (i + 1));
+    [p[i], p[j]] = [p[j], p[i]];
+  }
+}
+
+/* ════════════════════════════════════════════════════════════════
    1 · detect the VISITOR'S display → frame aspect + screenshot size
    ════════════════════════════════════════════════════════════════ */
 // ── detect touch FIRST — all geometry + screenshot sizing flows from this ──
@@ -719,7 +733,7 @@ function buildGallery(font){
   // Phones are slimmer than desktop monitors: a thinner slab + tighter rim radius so
   // mobile reads as a modern phone, while the screenshot still skins the front AND
   // wraps the curved edge (planarUV) exactly like desktop — no separate bezel.
-  const DEV_DEPTH  = isTouch ? 0.08  : 0.22;
+  const DEV_DEPTH  = isTouch ? 0.11  : 0.22;
   const DEV_RADIUS = isTouch ? 0.035 : 0.11;
   const DEV_Z = 0.06;                              // lifts the slab off the glass wall
   const deviceGeo = new RoundedBoxGeometry(FW, FH, DEV_DEPTH, 6, DEV_RADIUS);
@@ -805,6 +819,11 @@ scene.add(controls.getObject());
 
 const velocity = new THREE.Vector3();
 const M = CONFIG.movement;
+// scratch vectors reused every frame — keeping these out of the render loop avoids
+// per-frame allocations (the classic source of periodic GC stutter / micro-jitter)
+const _camWorld = new THREE.Vector3();
+const _moveDir  = new THREE.Vector3();
+const _lookFwd  = new THREE.Vector3();
 const moveInput = { x:0, y:0 };       // keyboard
 const padMove   = { x:0, y:0 };       // gamepad left stick
 const touchMove = { x:0, y:0 };       // on-screen joystick
@@ -864,18 +883,16 @@ addEventListener('mousemove', (e) => {
   setInputMode('keyboard');
   if (!crosshairEl) return;
   if (controls.isLocked || !onUiScreen()){ crosshairEl.classList.remove('show'); return; }
-  // One shared virtual cursor for mouse AND gamepad: the mouse nudges it by its
-  // movement delta, resuming from wherever the pad (or the mouse) last left it, so
-  // switching input never teleports the crosshair. The OS cursor is hidden, so this
-  // virtual spot diverging from the real pointer is invisible — hover is driven via
-  // setUiHover (not native :hover) and clicks are routed through it (see below).
-  if (!padCursor.ready){
-    padCursor.x = lastPointer.x ?? e.clientX;
-    padCursor.y = lastPointer.y ?? e.clientY;
-    padCursor.ready = true;
-  }
-  padCursor.x = clamp(padCursor.x + (e.movementX || 0), 0, innerWidth);
-  padCursor.y = clamp(padCursor.y + (e.movementY || 0), 0, innerHeight);
+  // The real OS pointer is authoritative for the mouse: map the virtual cursor
+  // straight onto the native clientX/clientY rather than accumulating movement
+  // deltas. The crosshair therefore SNAPS to wherever the mouse actually is —
+  // including when the pointer leaves and re-enters from a window edge — instead
+  // of drifting off after going out of bounds. (The gamepad still nudges padCursor
+  // by deltas from this last spot, so a mouse→pad switch resumes from the real
+  // pointer without a jump.)
+  padCursor.x = clamp(e.clientX, 0, innerWidth);
+  padCursor.y = clamp(e.clientY, 0, innerHeight);
+  padCursor.ready = true;
   lastPointer.x = padCursor.x; lastPointer.y = padCursor.y;   // keep the seed in sync for the pad
   const over = document.elementFromPoint(padCursor.x, padCursor.y)?.closest?.('.aero-btn');
   setUiHover(over);
@@ -1435,7 +1452,11 @@ function animate(){
     }
   }
 
-  // animate the "visit?" text on every frame
+  // animate the "visit?" text on every frame. Camera world-pos is computed ONCE
+  // here, and each frame's world position is read from the cached u.worldPos (the
+  // groups never move) — so we skip a per-frame matrix decompose and the two
+  // Vector3 allocations per panel that used to churn the GC each frame.
+  camera.getWorldPosition(_camWorld);
   for (const f of frames){
     const u = f.userData;
     const target = (f === activeFrame && state === 'play' && u.loadState === 'done') ? 1 : 0;
@@ -1443,9 +1464,8 @@ function animate(){
     const s = u.scale < 0.002 ? 0.001 : u.scale;
     u.visit.scale.setScalar(s);
     u.visit.position.y = u.visit.userData.baseY + Math.sin(t*1.8)*0.05*u.scale;
-    const cw = new THREE.Vector3(); camera.getWorldPosition(cw);
-    const fw = new THREE.Vector3(); f.getWorldPosition(fw);
-    const yaw = Math.atan2(cw.x - fw.x, cw.z - fw.z) - f.rotation.y;
+    const fw = u.worldPos;
+    const yaw = Math.atan2(_camWorld.x - fw.x, _camWorld.z - fw.z) - f.rotation.y;
     u.visit.rotation.y = yaw;
 
     // name plaque "hover": once it has bloomed in, lift + scale + brighten it
@@ -1470,19 +1490,19 @@ function moveAndInteract(dt, t, autoFwd = 0){
   // unified analog move vector: keyboard + joystick + gamepad (+ intro auto-glide)
   moveInput.x = (keys.KeyD||keys.ArrowRight?1:0) - (keys.KeyA||keys.ArrowLeft?1:0);
   moveInput.y = (keys.KeyW||keys.ArrowUp?1:0)    - (keys.KeyS||keys.ArrowDown?1:0);
-  const dir = new THREE.Vector3(
+  _moveDir.set(
     moveInput.x + touchMove.x + padMove.x,
     0,
     moveInput.y + touchMove.y + padMove.y + autoFwd
   );
-  if (dir.lengthSq() > 1) dir.normalize();      // keep analog magnitudes < 1, cap diagonals
+  if (_moveDir.lengthSq() > 1) _moveDir.normalize();   // keep analog magnitudes < 1, cap diagonals
 
   // damped acceleration → smooth, never jittery
   velocity.x -= velocity.x * M.friction * dt;
   velocity.z -= velocity.z * M.friction * dt;
-  if (dir.lengthSq() > 0){
-    velocity.x += dir.x * M.accel * dt;
-    velocity.z += dir.z * M.accel * dt;
+  if (_moveDir.lengthSq() > 0){
+    velocity.x += _moveDir.x * M.accel * dt;
+    velocity.z += _moveDir.z * M.accel * dt;
   }
   const sp = Math.hypot(velocity.x, velocity.z);
   if (sp > M.maxSpeed){ velocity.x *= M.maxSpeed/sp; velocity.z *= M.maxSpeed/sp; }
@@ -1500,11 +1520,11 @@ function moveAndInteract(dt, t, autoFwd = 0){
 
   // active frame = the nearest one you're actually LOOKING at, within range
   // (so you can't back away and trigger a panel that's now behind you)
-  const fwd = new THREE.Vector3(); camera.getWorldDirection(fwd);
-  const fl = Math.hypot(fwd.x, fwd.z) || 1, fX = fwd.x/fl, fZ = fwd.z/fl;
+  camera.getWorldDirection(_lookFwd);
+  const fl = Math.hypot(_lookFwd.x, _lookFwd.z) || 1, fX = _lookFwd.x/fl, fZ = _lookFwd.z/fl;
   activeFrame = null; let best = 7.5;
   // looking up over the glass walls (at sky/landscape) never targets a panel
-  const overTheGlass = fwd.y > 0.55;
+  const overTheGlass = _lookFwd.y > 0.55;
   if (!overTheGlass) for (const f of frames){
     const dx = f.position.x - o.position.x, dz = f.position.z - o.position.z;
     const d  = Math.hypot(dx, dz);

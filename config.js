@@ -17,21 +17,21 @@ export const CONFIG = {
   //   name → the plaque mounted on the panel (revealed when the world loads)
   //   url  → where the "visit?" swoop takes you (and what gets screenshotted)
   //
-  // ── Worlds 1–6 · auto-load as you walk (bar fires just before you arrive) ──
-  // ── Worlds 7–10 · gaze-triggered: walk to the end and look to discover ─────
+  // Order is randomised on every page load (see shuffleOrder below). Whichever
+  // two worlds land in the FINAL row are gaze-triggered — walk to the end and
+  // look to reveal them; the rest auto-load as you approach.
   projects: [
-    { name: "guns.lol",      url: "https://guns.lol/akilluminati47" },
-    { name: "DemonBot",      url: "https://demonbot.win" },
-    { name: "Dots",          url: "https://playdots.app" },
-    { name: "Peanut Run",    url: "https://peanut-run.pages.dev" },
-    { name: "Saucer Patrol", url: "https://saucer-patrol.pages.dev" },
-    { name: "GOW Casino",    url: "https://gow-casino.pages.dev" },
-    // ── discover by walking to the end ──
     { name: "MIC FX",        url: "https://mic-fx.pages.dev/" },
     { name: "DW Gallery",    url: "https://dw-gallery.pages.dev/" },
-    { name: "YouTube",       url: "https://youtube.com/@akilluminati47" },
-    { name: "Twitch",        url: "https://twitch.tv/akilluminati47" },
+    { name: "Dots",          url: "https://playdots.app/" },
+    { name: "Peanut Run",    url: "https://peanut-run.pages.dev/" },
+    { name: "Saucer Patrol", url: "https://saucer-patrol.pages.dev/" },
+    { name: "DemonBot",      url: "https://demonbot.win/" },
   ],
+
+  // Shuffle the gallery order on every page load. Set false to keep the
+  // fixed order written above.
+  shuffleOrder: false,
 
   // Open the chosen domain in a new tab instead of swooping the same tab.
   openInNewTab: false,
