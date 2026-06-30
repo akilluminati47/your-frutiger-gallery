@@ -30,8 +30,8 @@ gallery per user.)
 
 ```js
 projects: [
-  { name: "guns.lol",   url: "https://guns.lol/akilluminati47" },
-  { name: "DemonBot",   url: "https://demonbot.win" },
+  { name: "YouTube", url: "https://youtube.com/@akilluminati47" },
+  { name: "Twitch",  url: "https://twitch.tv/akilluminati47" },
   // …add as many as you like
 ],
 ```
@@ -96,11 +96,23 @@ into one and click a panel that's now behind you.
 
 ## Run / deploy
 
-* **Local:** serve the folder with any static server, e.g. `python -m http.server 4173`,
-  then open `http://localhost:4173`. (Opening `index.html` directly also works, but a
-  server avoids module/CORS quirks.)
-* **Cloudflare Pages / any static host:** point it at this repo root. There's no build
-  command and no output directory to configure — it's already static.
+This gallery is meant to be **forked and made your own** — not run from this repo as-is,
+and not by pointing people at the unedited original.
+
+1. **Fork** this repository to your own GitHub account.
+2. **Edit [`config.js`](config.js)** in your fork: set `creator` to your handle and
+   replace `projects` with your own works. That's the only file you touch.
+3. **Deploy your fork to Cloudflare Pages** (or any static host): create a Pages
+   project, connect your forked repo, and accept the defaults — **no build command,
+   no output directory**, it's already static. Every push to `main` redeploys.
+
+> Don't ship the unedited gallery — fork it so the worlds, the entrance name, and the
+> link-preview card are all yours.
+
+**Local preview (optional, while editing):** serve the folder with any static server,
+e.g. `python -m http.server 4173`, then open `http://localhost:4173`. A server avoids
+module/CORS quirks you'd hit opening `index.html` straight off disk. This is just for
+checking your edits before you push — the real home is your deployed fork.
 
 ---
 
