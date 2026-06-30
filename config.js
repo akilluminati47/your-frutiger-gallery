@@ -25,12 +25,12 @@ export const CONFIG = {
   // With shuffleOrder off, the LAST row is gaze-triggered (walk to the end and look
   // to reveal it); the rest auto-load as you approach.
   projects: [
-    { name: "DemonBot",      url: "https://demonbot.win/" },               // front · left
+    { name: "Demon Bot",     url: "https://demonbot.win/" },               // front · left
     { name: "guns.lol",      url: "https://guns.lol/akilluminati47" },     // front · right
     { name: "Dots",          url: "https://playdots.app/" },               // row2  · left
     { name: "Peanut Run",    url: "https://peanut-run.pages.dev/" },       // row2  · right
     { name: "Saucer Patrol", url: "https://saucer-patrol.pages.dev/" },    // row3  · left
-    { name: "GOW Casino",    url: "https://gow-casino.pages.dev/" },       // row3  · right
+    { name: "GoW Casino",    url: "https://gow-casino.pages.dev/" },       // row3  · right
     { name: "MIC FX",        url: "https://mic-fx.pages.dev/" },           // row4  · left
     { name: "DW Gallery",    url: "https://dw-gallery.pages.dev/" },       // row4  · right
     { name: "YouTube",       url: "https://youtube.com/@akilluminati47" }, // back  · left  (gaze)
