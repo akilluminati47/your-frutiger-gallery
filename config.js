@@ -17,16 +17,24 @@ export const CONFIG = {
   //   name → the plaque mounted on the panel (revealed when the world loads)
   //   url  → where the "visit?" swoop takes you (and what gets screenshotted)
   //
-  // Order is randomised on every page load (see shuffleOrder below). Whichever
-  // two worlds land in the FINAL row are gaze-triggered — walk to the end and
-  // look to reveal them; the rest auto-load as you approach.
+  // Order reads in PAIRS from the entrance to the back of the hall — each row is
+  // [left wall, right wall], front row first:
+  //   row 0 (front): index 0 = your LEFT,  index 1 = your RIGHT
+  //   row 1        : index 2 = LEFT,        index 3 = RIGHT  … and so on.
+  // The hall, glass floor/walls and surrounding hills all auto-scale to this count.
+  // With shuffleOrder off, the LAST row is gaze-triggered (walk to the end and look
+  // to reveal it); the rest auto-load as you approach.
   projects: [
-    { name: "MIC FX",        url: "https://mic-fx.pages.dev/" },
-    { name: "DW Gallery",    url: "https://dw-gallery.pages.dev/" },
-    { name: "Dots",          url: "https://playdots.app/" },
-    { name: "Peanut Run",    url: "https://peanut-run.pages.dev/" },
-    { name: "Saucer Patrol", url: "https://saucer-patrol.pages.dev/" },
-    { name: "DemonBot",      url: "https://demonbot.win/" },
+    { name: "DemonBot",      url: "https://demonbot.win/" },               // front · left
+    { name: "guns.lol",      url: "https://guns.lol/akilluminati47" },     // front · right
+    { name: "Dots",          url: "https://playdots.app/" },               // row2  · left
+    { name: "Peanut Run",    url: "https://peanut-run.pages.dev/" },       // row2  · right
+    { name: "Saucer Patrol", url: "https://saucer-patrol.pages.dev/" },    // row3  · left
+    { name: "GOW Casino",    url: "https://gow-casino.pages.dev/" },       // row3  · right
+    { name: "MIC FX",        url: "https://mic-fx.pages.dev/" },           // row4  · left
+    { name: "DW Gallery",    url: "https://dw-gallery.pages.dev/" },       // row4  · right
+    { name: "YouTube",       url: "https://youtube.com/@akilluminati47" }, // back  · left  (gaze)
+    { name: "Twitch",        url: "https://twitch.tv/akilluminati47" },    // back  · right (gaze)
   ],
 
   // Shuffle the gallery order on every page load. Set false to keep the
