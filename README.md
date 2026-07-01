@@ -5,6 +5,15 @@ live screenshot of a site, hung on glass walls along a floating glass corridor o
 a grassy "Bliss" landscape, with drifting bubbles, volumetric sky, and a dynamic sun
 lens flare. Keyboard + mouse, gamepad, and touch are all supported and auto-detected.
 
+Rendering runs through a full HDR post pipeline: MSAA into a half-float target,
+Unreal-style bloom, ACES filmic tonemapping, then a film grade (corner chromatic
+aberration, vignette, animated grain). The sky is a domain-warped FBM cloudscape
+with silver linings and a cirrus layer; sun-lit dust motes drift up the corridor;
+panels sit behind iridescent glass covers. A dynamic-resolution governor watches
+the frame time and trades internal resolution for a locked frame rate, so it stays
+smooth from an iGPU laptop to a phone (`postFX: false` in `config.js` is the
+kill-switch back to plain forward rendering).
+
 Built with [three.js](https://threejs.org) (loaded from a CDN). **No build step** —
 it's plain `index.html` + `styles.css` + `gallery.js` + `config.js`. Open the file or
 serve the folder statically.

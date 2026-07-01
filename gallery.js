@@ -6,6 +6,11 @@ import { FontLoader } from 'three/addons/loaders/FontLoader.js';
 import { TextGeometry } from 'three/addons/geometries/TextGeometry.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { Lensflare, LensflareElement } from 'three/addons/objects/Lensflare.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { CONFIG } from './config.js';
 
 /* ════════════════════════════════════════════════════════════════
@@ -147,11 +152,19 @@ preFetchScreenshots();
 let renderer, scene, camera, controls;
 const eyeHeight = 1.66;          // standing eye height of a ~5'10" visitor
 
+// FX = the full HDR post pipeline (bloom + filmic grade). Kill-switch in config
+// for very weak GPUs — when off we fall back to plain forward rendering with
+// canvas MSAA, exactly the pre-remix path.
+const FX = CONFIG.postFX !== false;
+
 try {
-  renderer = new THREE.WebGLRenderer({ antialias:true, powerPreference:'high-performance' });
+  // with the composer the scene renders into a multisampled HDR target, so the
+  // default framebuffer doesn't need its own MSAA — saves a full set of samples
+  renderer = new THREE.WebGLRenderer({ antialias: !FX, powerPreference:'high-performance' });
 } catch (e){ fatal('Your browser/GPU could not start WebGL.'); throw e; }
 
-renderer.setPixelRatio(Math.min(realDpr, lowPerf ? 1.5 : 2));   // fewer fragments on retina phones
+const BASE_PR = Math.min(realDpr, lowPerf ? 1.5 : 2);   // fewer fragments on retina phones
+renderer.setPixelRatio(BASE_PR);
 renderer.setSize(innerWidth, innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -163,6 +176,14 @@ renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.shadowMap.autoUpdate = false;
 $('scene').appendChild(renderer.domElement);
 
+// a lost GPU context (driver reset, OS sleep, mobile tab eviction) leaves a frozen
+// canvas — surface it instead, and reload for a clean state if the GPU comes back
+renderer.domElement.addEventListener('webglcontextlost', e => {
+  e.preventDefault();
+  fatal('The graphics device was reset — reloading…');
+});
+renderer.domElement.addEventListener('webglcontextrestored', () => location.reload());
+
 scene = new THREE.Scene();
 scene.fog = new THREE.FogExp2(0xd7f1ff, 0.0052);   // gentle haze so the green hills still read at the horizon
 
@@ -173,6 +194,105 @@ camera.lookAt(0, eyeHeight, 10);
 // studio reflections for the glossy glass frames / text
 const pmrem = new THREE.PMREMGenerator(renderer);
 scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+
+/* ── HDR post pipeline: scene → UnrealBloom (HDR) → ACES/sRGB → filmic grade ──
+   The scene is rendered into a half-float, multisampled target (real MSAA inside
+   the composer — crisp edges, no FXAA smear). UnrealBloomPass runs on the HDR
+   values so only genuinely bright things glow: the sun disk, the lens flare,
+   white panel screens. OutputPass then applies ACES + the sRGB transform, and a
+   final grade pass adds the subtle film-camera artifacts (corner chromatic
+   aberration, vignette, animated grain, a touch of saturation) that make real-
+   time output read as "engine-rendered" rather than flat rasterisation. */
+let composer = null, gradePass = null, bloomPass = null;
+// overlay scene for the lens flare — rendered directly to the canvas after the
+// composer (see the flare block in section 3 for why it can't live in-scene)
+const flareScene = FX ? new THREE.Scene() : null;
+const GradeShader = {
+  uniforms: {
+    tDiffuse: { value: null },
+    uTime:    { value: 0 },
+    uRes:     { value: new THREE.Vector2(innerWidth * BASE_PR, innerHeight * BASE_PR) },
+  },
+  vertexShader: /* glsl */`
+    varying vec2 vUv;
+    void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: /* glsl */`
+    varying vec2 vUv;
+    uniform sampler2D tDiffuse;
+    uniform float uTime;
+    uniform vec2 uRes;
+    float gnoise(vec2 p){
+      vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+      p3 += dot(p3, p3.yzx + 33.33);
+      return fract((p3.x + p3.y) * p3.z);
+    }
+    void main(){
+      vec2 c = vUv - 0.5;
+      float r2 = dot(c, c);
+      // chromatic aberration — zero at centre, grows quadratically to the corners
+      float ca = r2 * 0.012;
+      vec3 col;
+      col.r = texture2D(tDiffuse, vUv + c * ca).r;
+      col.g = texture2D(tDiffuse, vUv).g;
+      col.b = texture2D(tDiffuse, vUv - c * ca).b;
+      // gentle filmic vignette
+      col *= 1.0 - smoothstep(0.18, 0.85, r2) * 0.30;
+      // slight saturation lift (post-tonemap, so it never clips hues)
+      float luma = dot(col, vec3(0.2126, 0.7152, 0.0722));
+      col = mix(vec3(luma), col, 1.07);
+      // fine animated grain, scaled down in the shadows so blacks stay clean
+      float g = gnoise(vUv * uRes + fract(uTime) * 371.0) - 0.5;
+      col += g * 0.016 * (0.35 + 0.65 * luma);
+      gl_FragColor = vec4(col, 1.0);
+    }`,
+};
+if (FX){
+  const rt = new THREE.WebGLRenderTarget(innerWidth, innerHeight, {
+    type: THREE.HalfFloatType,
+    samples: lowPerf ? 2 : 4,          // MSAA inside the composer
+  });
+  composer = new EffectComposer(renderer, rt);
+  composer.setPixelRatio(BASE_PR);
+  composer.setSize(innerWidth, innerHeight);
+  composer.addPass(new RenderPass(scene, camera));
+  bloomPass = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight),
+    lowPerf ? 0.28 : 0.35,   // strength — a halo, not a smear
+    0.4,                     // radius
+    1.0);                    // threshold ≥ 1: only genuinely HDR pixels bloom (sun,
+                             // silver linings, the lifted screen whites — not the
+                             // whole white corridor, which would veil the frame)
+  composer.addPass(bloomPass);
+  composer.addPass(new OutputPass());          // ACES tonemap + sRGB, exactly once
+  gradePass = new ShaderPass(GradeShader);
+  composer.addPass(gradePass);
+}
+
+/* ── dynamic resolution governor — UE-style stability ─────────────────────────
+   Tracks the average frame time and trades internal resolution for a locked
+   frame rate: sustained > ~21 ms drops the render scale a step (never below
+   0.58), sustained < ~14.5 ms climbs back toward native. The window average
+   (not single frames) means one GC hitch or tab-switch spike never triggers it. */
+let resScale = 1, perfTime = 0, perfFrames = 0;
+function applyResolution(){
+  const pr = BASE_PR * resScale;
+  renderer.setPixelRatio(pr);
+  if (composer) composer.setPixelRatio(pr);
+  gradePass?.uniforms.uRes.value.set(innerWidth * pr, innerHeight * pr);
+  if (moteMat) moteMat.uniforms.uPR.value = pr;
+}
+function perfGovern(dt){
+  perfFrames++; perfTime += dt;
+  if (perfTime < 1.4 || perfFrames < 20) return;
+  const avg = perfTime / perfFrames;
+  perfTime = 0; perfFrames = 0;
+  if (avg > 0.021 && resScale > 0.58){       // struggling → shed pixels
+    resScale = Math.max(0.58, resScale - 0.14);
+    applyResolution();
+  } else if (avg < 0.0145 && resScale < 1){  // headroom → climb back up
+    resScale = Math.min(1, resScale + 0.07);
+    applyResolution();
+  }
+}
 
 /* ════════════════════════════════════════════════════════════════
    3 · world — layout, premium sky, light, hills, glass corridor
@@ -252,23 +372,51 @@ let skyMat;
         vec3 sky = mix(bottom, mid, smoothstep(0.0,0.5,h));
         sky = mix(sky, top, smoothstep(0.45,1.0,h));
 
-        // sun disk + soft halo
         float sd  = max(dot(dir, normalize(sunDir)), 0.0);
+
+        // atmospheric scattering hugging the horizon: a cool whitening all round,
+        // plus a warm tint on the sun's side of the sky
+        float horiz = pow(1.0 - clamp(dir.y, 0.0, 1.0), 6.0);
+        sky = mix(sky, vec3(0.93, 0.97, 1.0), horiz * 0.28);
+        sky += sunCol * horiz * pow(sd, 2.0) * 0.14;
+
         float disk = smoothstep(0.9972, 0.9991, sd);
-        float halo = pow(sd, 90.0)*0.55 + pow(sd, 11.0)*0.16;
-        sky += sunCol * (disk*1.5 + halo);
+        float halo = pow(sd, 90.0)*0.85 + pow(sd, 11.0)*0.18;
 
         // animated FBM clouds — kept high so the horizon projection never stretches
-        // the noise into streaks; two layers give a soft faux-volumetric puffiness
+        // the noise into streaks. Desktop domain-warps the field (fbm fed through
+        // fbm) so puffs billow and curl instead of sliding as a rigid sheet.
         float above = smoothstep(0.12, 0.42, dir.y);
         vec2 uv = dir.xz / max(dir.y, 0.24) * 0.5;
-        uv += vec2(uTime*0.010, uTime*0.004);
-        float dens = fbm(uv)*0.7 + fbm(uv*2.1 + 7.0)*0.3;
-        float cov  = smoothstep(0.46, 0.82, dens) * above;
-        // shade the base of each puff a touch darker for depth
-        vec3 cloudCol = mix(vec3(0.70,0.79,0.91), vec3(1.0), smoothstep(0.30,0.92,dens));
-        cloudCol += sunCol * halo * 0.5;
-        sky = mix(sky, cloudCol, cov*0.9);
+        ${lowPerf ? `
+        vec2 cuv = uv + vec2(uTime*0.010, uTime*0.004);` : `
+        vec2 q = vec2(fbm(uv + uTime*0.006), fbm(uv + vec2(5.2, 1.3) - uTime*0.005));
+        vec2 cuv = uv + q*0.6 + vec2(uTime*0.010, uTime*0.004);`}
+        float dens = fbm(cuv)*0.68 + fbm(cuv*2.3 + 7.0)*0.32;
+        float cov  = smoothstep(0.45, 0.80, dens) * above;
+        // shade the base of each puff darker, and silver-line the ones near the sun
+        vec3 cloudCol = mix(vec3(0.66,0.76,0.90), vec3(1.0), smoothstep(0.28,0.94,dens));
+        cloudCol += sunCol * (halo*0.5 + pow(sd, 3.0)*0.22);
+        sky = mix(sky, cloudCol, cov*0.92);
+        ${lowPerf ? '' : `
+        // thin high cirrus streaks drifting on their own layer (desktop only)
+        float ciBand = smoothstep(0.20, 0.55, dir.y);
+        vec2 cuv2 = dir.xz / max(dir.y, 0.30);
+        float ci = fbm(cuv2 * vec2(0.55, 2.8) + vec2(uTime*0.006, 0.0));
+        ci = smoothstep(0.60, 0.88, ci) * ciBand * 0.30 * (1.0 - cov);
+        sky = mix(sky, vec3(1.0), ci);`}
+
+        ${FX ? `
+        // HDR-pipeline compensation: this shader's palette is authored in display
+        // space, but the composer treats the buffer as LINEAR and applies ACES +
+        // the sRGB transform afterwards — which would double-brighten the whole
+        // dome into a milky haze (and every glass reflection of it). Approximate
+        // the inverse transform here so the authored Aero blues survive grading.
+        sky = pow(max(sky, 0.0), vec3(2.2)) * 1.06;` : ''}
+
+        // sun disk + soft halo — added AFTER compensation so they stay genuinely
+        // HDR for the bloom pass; dimmed where cloud puffs pass over the disk
+        sky += sunCol * (disk*2.4 + halo) * (1.0 - cov*0.85);
 
         // dither to kill 8-bit banding
         sky += (hash(gl_FragCoord.xy) - 0.5) / 255.0;
@@ -284,11 +432,15 @@ scene.add(hemi);
 const sun = new THREE.DirectionalLight(0xffeccb, 2.25);
 sun.position.copy(SUN_DIR.clone().multiplyScalar(95));
 sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048);
+// 4K shadow map on desktop — the map is rendered ONCE (static casters), so the
+// only recurring cost is the sharper lookup; mobile stays at 2K
+const SHADOW_RES = lowPerf ? 2048 : 4096;
+sun.shadow.mapSize.set(SHADOW_RES, SHADOW_RES);
 sun.shadow.camera.near = 1; sun.shadow.camera.far = 260;
 sun.shadow.camera.left = -50; sun.shadow.camera.right = 50;
 sun.shadow.camera.top = 50;   sun.shadow.camera.bottom = -50;
-sun.shadow.bias = -0.0004;
+sun.shadow.bias = -0.0003;
+sun.shadow.normalBias = 0.02;      // kills acne on the curved hill silhouettes
 sun.target.position.set(0, 1, DESK_CZ);
 scene.add(sun.target);
 scene.add(sun);
@@ -306,9 +458,24 @@ scene.add(sun);
   }
   const texGlow  = flareTex([[0,'rgba(255,255,255,1)'],[0.18,'rgba(255,244,214,0.92)'],[0.5,'rgba(255,224,170,0.32)'],[1,'rgba(255,210,150,0)']]);
   const texGhost = flareTex([[0,'rgba(255,255,255,0)'],[0.55,'rgba(200,225,255,0.26)'],[0.82,'rgba(170,210,255,0.12)'],[1,'rgba(170,210,255,0)']]);
+  // anamorphic streak: a radial gradient squashed flat into a thin horizontal
+  // cyan line — the classic cinematic lens artifact laid across the sun
+  const texStreak = (() => {
+    const c = document.createElement('canvas'); c.width = c.height = 256;
+    const x = c.getContext('2d');
+    x.translate(128, 128);
+    x.scale(1, 0.055);
+    const g = x.createRadialGradient(0, 0, 0, 0, 0, 126);
+    g.addColorStop(0,   'rgba(235,250,255,0.85)');
+    g.addColorStop(0.25,'rgba(170,222,255,0.38)');
+    g.addColorStop(1,   'rgba(140,205,255,0)');
+    x.fillStyle = g; x.beginPath(); x.arc(0, 0, 126, 0, 7); x.fill();
+    const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+  })();
 
   const lf = new Lensflare();
   lf.addElement(new LensflareElement(texGlow, 340, 0,    new THREE.Color(0xfff0cf)));
+  lf.addElement(new LensflareElement(texStreak, 620, 0,  new THREE.Color(0xbfe4ff)));
   lf.addElement(new LensflareElement(texGhost, 46, 0.18));
   lf.addElement(new LensflareElement(texGhost, 72, 0.34));
   lf.addElement(new LensflareElement(texGhost, 120, 0.5));
@@ -316,8 +483,13 @@ scene.add(sun);
   lf.addElement(new LensflareElement(texGhost, 94, 0.8));
   lf.addElement(new LensflareElement(texGlow, 130, 1.0,  new THREE.Color(0xcfe6ff)));
   lf.position.copy(SUN_DIR.clone().multiplyScalar(460));   // sit on the sky-shader sun
-  scene.add(lf);
-  noReflect.push(lf);                                       // never reflect the flare
+  // Lensflare tests occlusion by copying a tiny framebuffer patch — that readback
+  // is illegal from the composer's multisampled HDR target (it leaves a dark box
+  // on the sun). So under FX the flare lives in its own overlay scene, rendered
+  // straight to the canvas AFTER the composer — lens artifacts belong on top of
+  // the graded image anyway, exactly where a real camera would add them.
+  if (flareScene){ flareScene.add(lf); }
+  else { scene.add(lf); noReflect.push(lf); }               // FX off: classic in-scene flare
 }
 
 // rolling green "Bliss" hills — ringed around the perimeter, never on the platform.
@@ -419,10 +591,30 @@ function dontNestReflections(){
   const REFL_FLOOR = lowPerf ? 512 : 1024;
   const REFL_WALL  = 512;                    // real planar wall reflections on every device
 
-  // grassy ground far below, stretching to the hilly horizon
+  // grassy ground far below, stretching to the hilly horizon. A single painted
+  // radial gradient (vibrant under the platform → hazier at the rim) plus soft
+  // mottling patches — reads as a lit "Bliss" field instead of one flat green.
+  const grassTex = (() => {
+    const c = document.createElement('canvas'); c.width = c.height = 1024;
+    const x = c.getContext('2d');
+    const g = x.createRadialGradient(512, 512, 40, 512, 512, 730);
+    g.addColorStop(0,   '#7ed155');
+    g.addColorStop(0.5, '#69bf45');
+    g.addColorStop(1,   '#57a83a');
+    x.fillStyle = g; x.fillRect(0, 0, 1024, 1024);
+    for (let i = 0; i < 900; i++){                       // organic light/dark patches
+      const r = 6 + Math.random() * 26;
+      x.fillStyle = Math.random() < 0.5 ? 'rgba(46,110,30,0.05)' : 'rgba(190,240,150,0.05)';
+      x.beginPath(); x.arc(Math.random()*1024, Math.random()*1024, r, 0, 7); x.fill();
+    }
+    const t = new THREE.CanvasTexture(c);
+    t.colorSpace = THREE.SRGBColorSpace;
+    t.anisotropy = renderer.capabilities.getMaxAnisotropy();
+    return t;
+  })();
   const grass = new THREE.Mesh(
     new THREE.PlaneGeometry(1600, 1600),
-    new THREE.MeshStandardMaterial({ color:0x69bf45, roughness:1 })
+    new THREE.MeshStandardMaterial({ map: grassTex, roughness:1 })
   );
   grass.rotation.x = -Math.PI/2;
   grass.position.set(0, GROUND_Y, DESK_CZ);
@@ -438,6 +630,8 @@ function dontNestReflections(){
       color:0xbfe6ff, roughness:0.08, metalness:0,
       clearcoat:1, clearcoatRoughness:0.06,
       transparent:true, opacity:0.3, envMapIntensity:1.6,
+      // soap-film shimmer along the slab edge as you walk past (desktop only)
+      iridescence: lowPerf ? 0 : 0.35, iridescenceIOR: 1.3,
     })
   );
   slab.position.set(0, -0.35, DESK_CZ);
@@ -470,7 +664,10 @@ function dontNestReflections(){
     // crisp glossy top rail so the glass wall reads as a solid pane edge
     const rail = new THREE.Mesh(
       new RoundedBoxGeometry(0.12, 0.12, DESK_D-0.6, 3, 0.05),
-      new THREE.MeshPhysicalMaterial({ color:0xffffff, roughness:0.08, clearcoat:1, envMapIntensity:1.4 })
+      new THREE.MeshPhysicalMaterial({
+        color:0xffffff, roughness:0.08, clearcoat:1, envMapIntensity:1.4,
+        iridescence: lowPerf ? 0 : 0.4, iridescenceIOR: 1.3,
+      })
     );
     rail.position.set(x, WALL_H, DESK_CZ);
     scene.add(rail);
@@ -512,6 +709,16 @@ function drawBubble(hx, hy){
   g.addColorStop(0.92,'rgba(140,210,255,0.5)');
   g.addColorStop(1,   'rgba(120,200,255,0)');
   x.fillStyle = g; x.beginPath(); x.arc(64,64,62,0,7); x.fill();
+  // iridescent film: a faint rainbow ring just inside the rim (real soap bubbles
+  // shimmer through hues at the membrane edge) — conic gradient where supported
+  if (x.createConicGradient){
+    const cg = x.createConicGradient(0.9, 64, 64);
+    const hues = [[0,'rgba(255,120,170,.30)'],[0.2,'rgba(255,220,120,.26)'],[0.4,'rgba(140,255,170,.26)'],
+                  [0.6,'rgba(120,210,255,.30)'],[0.8,'rgba(190,140,255,.26)'],[1,'rgba(255,120,170,.30)']];
+    for (const [o, col] of hues) cg.addColorStop(o, col);
+    x.strokeStyle = cg; x.lineWidth = 5;
+    x.beginPath(); x.arc(64,64,57,0,7); x.stroke();
+  }
   x.strokeStyle = 'rgba(255,255,255,.85)'; x.lineWidth = 2;
   x.beginPath(); x.arc(64,64,58,0,7); x.stroke();
   const h = x.createRadialGradient(hx,hy,0,hx,hy,16);
@@ -556,6 +763,63 @@ function resetBubble(s, anywhere){
   const spreadX = lerp(30, 130, age);
   const spreadZ = lerp(40, 170, age);
   s.position.set((Math.random()-0.5)*spreadX, anywhere ? Math.random()*14 : -0.5, DESK_CZ + (Math.random()-0.5)*spreadZ);
+}
+
+/* ════════════════════════════════════════════════════════════════
+   4b · sun-lit dust motes — tiny bokeh sparkles drifting up the hall
+   ════════════════════════════════════════════════════════════════ */
+// One THREE.Points draw call; all motion (rise, sway, twinkle) lives in the
+// vertex shader so the CPU never touches the buffer again. The soft round
+// falloff + additive blend makes each mote read as an out-of-focus glint —
+// the "atmosphere volume" trick real engines lean on.
+let moteMat = null;
+{
+  const N  = lowPerf ? 90 : 220;
+  const Y0 = 0.15, Y1 = WALL_H + 1.6, YR = Y1 - Y0;
+  const geo  = new THREE.BufferGeometry();
+  const pos  = new Float32Array(N * 3);
+  const seed = new Float32Array(N);
+  for (let i = 0; i < N; i++){
+    pos[i*3]   = (Math.random() * 2 - 1) * (WALL_X - 0.3);
+    pos[i*3+1] = Y0 + Math.random() * YR;
+    pos[i*3+2] = PLAT_Z0 + Math.random() * (PLAT_Z1 - PLAT_Z0);
+    seed[i]    = Math.random();
+  }
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('aSeed',    new THREE.BufferAttribute(seed, 1));
+  moteMat = new THREE.ShaderMaterial({
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    uniforms: { uTime: { value: 0 }, uPR: { value: BASE_PR } },
+    vertexShader: /* glsl */`
+      attribute float aSeed;
+      uniform float uTime, uPR;
+      varying float vA;
+      void main(){
+        vec3 p = position;
+        float s = aSeed;
+        // slow rise that wraps back to the floor, plus a lazy horizontal sway
+        p.y = ${Y0.toFixed(2)} + mod(p.y - ${Y0.toFixed(2)} + uTime * (0.06 + 0.10*s), ${YR.toFixed(2)});
+        p.x += sin(uTime*(0.30 + s) + s*31.0) * 0.35;
+        p.z += cos(uTime*(0.23 + s*0.5) + s*57.0) * 0.35;
+        vec4 mv = modelViewMatrix * vec4(p, 1.0);
+        float tw = 0.5 + 0.5 * sin(uTime*(0.7 + s*1.7) + s*43.0);
+        vA = (0.16 + 0.84*tw*tw) * clamp(1.0 - (-mv.z) / 46.0, 0.0, 1.0);
+        gl_PointSize = min((1.5 + 3.0*s) * uPR * (6.0 / max(1.0, -mv.z)), 18.0 * uPR);
+        gl_Position = projectionMatrix * mv;
+      }`,
+    fragmentShader: /* glsl */`
+      varying float vA;
+      void main(){
+        float d = length(gl_PointCoord - 0.5);
+        float m = smoothstep(0.5, 0.08, d);
+        gl_FragColor = vec4(vec3(0.75, 0.92, 1.0) * m * vA, m * vA);
+      }`,
+  });
+  const motes = new THREE.Points(geo, moteMat);
+  motes.frustumCulled = false;      // vertex-shader drift breaks the static bounds
+  motes.renderOrder = 3;            // after the glass floor/walls, before the labels
+  scene.add(motes);
+  noReflect.push(motes);            // sparkle in the main view only, not the mirrors
 }
 
 /* ════════════════════════════════════════════════════════════════
@@ -716,11 +980,13 @@ function labelTexture(text){
 // frame's facing rather than billboarding). The pill texture has transparent margins
 // that read cleanly on a flat plane — wrapped over a 3D slab's rounded rim they looked
 // muddy, so this stays a simple PlaneGeometry.
+// base colour multiplier for the plaques: under the composer they get ACES like
+// everything else, so lift them the same way as the screens (see buildGallery)
+const LABEL_LIFT = 1.15;
 function labelPanel(text){
-  return new THREE.Mesh(
-    new THREE.PlaneGeometry(2.6, 0.65),
-    new THREE.MeshBasicMaterial({ map:labelTexture(text), transparent:true, depthWrite:false, toneMapped:false, opacity:0 })
-  );
+  const m = new THREE.MeshBasicMaterial({ map:labelTexture(text), transparent:true, depthWrite:false, toneMapped:false, opacity:0 });
+  if (FX) m.color.setScalar(LABEL_LIFT);
+  return new THREE.Mesh(new THREE.PlaneGeometry(2.6, 0.65), m);
 }
 function roundRect(x,a,b,w,h,r){ x.beginPath(); x.moveTo(a+r,b); x.arcTo(a+w,b,a+w,b+h,r);
   x.arcTo(a+w,b+h,a,b+h,r); x.arcTo(a,b+h,a,b,r); x.arcTo(a,b,a+w,b,r); x.closePath(); }
@@ -743,6 +1009,17 @@ function buildGallery(font){
   const visitMat = new THREE.MeshPhysicalMaterial({
     color:0xffffff, roughness:0.08, metalness:0, clearcoat:1, clearcoatRoughness:0.05,
     emissive:0x2aa9ff, emissiveIntensity:0.22, envMapIntensity:1.4,
+  });
+
+  // glossy protective glass sheet floating just off each screen (desktop only):
+  // a near-transparent physical plane whose env reflection sweeps across the
+  // screenshot as you walk past — sells "real device behind museum glass". The
+  // iridescence gives it the faint soap-film hue shift of the Aero aesthetic.
+  const coverGeo = isTouch ? null : new THREE.PlaneGeometry(FW * 0.985, FH * 0.985);
+  const coverMat = isTouch ? null : new THREE.MeshPhysicalMaterial({
+    color:0xffffff, roughness:0.05, metalness:0,
+    transparent:true, opacity:0.10, depthWrite:false,
+    envMapIntensity:2.2, iridescence:0.5, iridescenceIOR:1.3,
   });
 
   CONFIG.projects.forEach((project, i) => {
@@ -769,10 +1046,21 @@ function buildGallery(font){
     // the screen material carries the preview (idle tile → loading bar → screenshot);
     // it skins the whole rounded slab, the image wrapping the curved rim (planarUV)
     const screenMat = new THREE.MeshBasicMaterial({ map: whiteTex, toneMapped: false });
+    // Under the HDR composer the WHOLE frame goes through ACES (toneMapped:false
+    // only skips the direct-to-canvas path), which would grey the screens down.
+    // Lifting to ~1.12 tone-maps back to full brightness — and sits just over the
+    // bloom threshold, so white screens get a whisper of backlight glow.
+    if (FX) screenMat.color.setScalar(1.12);
     const panel = new THREE.Mesh(deviceGeo, screenMat);
     panel.position.z = DEV_Z;
     panel.castShadow = true;
     group.add(panel);
+    if (coverGeo){
+      const cover = new THREE.Mesh(coverGeo, coverMat);
+      cover.position.z = DEV_FRONT_Z + 0.006;
+      cover.renderOrder = 4;         // over its own panel, under the name plaque
+      group.add(cover);
+    }
     // NOTE: no immediate fetch — loading is orchestrated by updateLoadingSystem()
 
     // name plaque — hidden until world loads, then bloops in
@@ -786,7 +1074,7 @@ function buildGallery(font){
 
     // 3D "visit?" text — hidden until you approach
     const tg = new TextGeometry('visit?', {
-      font, size:0.46, depth:0.13, height:0.13, curveSegments:6,
+      font, size:0.46, depth:0.13, curveSegments:6,
       bevelEnabled:true, bevelThickness:0.03, bevelSize:0.022, bevelSegments:3,
     });
     tg.computeBoundingBox();
@@ -820,7 +1108,10 @@ function buildGallery(font){
    ════════════════════════════════════════════════════════════════ */
 controls = new PointerLockControls(camera, renderer.domElement);
 controls.pointerSpeed = CONFIG.movement.mouseSensitivity ?? 1;
-scene.add(controls.getObject());
+// PointerLockControls' controlled object IS the camera (getObject() was just a
+// deprecated alias for it — r180 warns on every call, so we address it directly)
+const player = camera;
+scene.add(player);
 
 const velocity = new THREE.Vector3();
 const M = CONFIG.movement;
@@ -1191,7 +1482,7 @@ function beginPlay(){
   audio.whoosh();
   // start elevated + at the entrance; the intro glides forward + descends while
   // letting you look and steer freely (no hard-scripted hold)
-  controls.getObject().position.set(0, INTRO_START_Y, -6);
+  player.position.set(0, INTRO_START_Y, -6);
   velocity.set(0, 0, 0);
   state = 'intro'; introT = 0;
   if (inputMode === 'touch') $('touch')?.classList.remove('hidden');
@@ -1306,7 +1597,7 @@ function resetToMenu(){
   $('pause').classList.add('hidden');
   $('touch')?.classList.add('hidden');
   $('prompt')?.classList.remove('show');
-  controls.getObject().position.set(0, eyeHeight, -6);
+  player.position.set(0, eyeHeight, -6);
   camera.lookAt(0, eyeHeight, 10);
 }
 
@@ -1349,7 +1640,7 @@ function tryLaunch(){
 
   launch = {
     frame:f, t:0,
-    fromPos: controls.getObject().position.clone(),
+    fromPos: player.position.clone(),
     toPos,
     fromQuat: camera.quaternion.clone(),
     toQuat: tmp.quaternion.clone(),
@@ -1375,11 +1666,13 @@ function updateSunGaze(dt){
   }
 }
 function animate(){
-  requestAnimationFrame(animate);
   const dt = Math.min(clock.getDelta(), 0.05);
   const t  = clock.elapsedTime;
 
   if (skyMat) skyMat.uniforms.uTime.value = t;
+  if (moteMat) moteMat.uniforms.uTime.value = t;
+  if (gradePass) gradePass.uniforms.uTime.value = t;
+  perfGovern(dt);              // dynamic resolution: trade pixels for a locked frame rate
   pollPad(dt);                 // every frame — also drives the pause‑menu cursor
   updateLoadingSystem(dt, t);
   updateSunGaze(dt);
@@ -1436,7 +1729,7 @@ function animate(){
     const autoFwd = (1 - e) * 0.9;
     moveAndInteract(dt, t, autoFwd);
     // …and descend onto the floor as a height-only blend (doesn't fight your input)
-    const o = controls.getObject();
+    const o = player;
     o.position.y = lerp(INTRO_START_Y, o.position.y, e);
     if (introT >= 1) state = 'play';
   }
@@ -1446,7 +1739,7 @@ function animate(){
   else if (state === 'launching' && launch){
     launch.t = Math.min(1, launch.t + dt/1.15);
     const e = easeIO(launch.t);
-    controls.getObject().position.lerpVectors(launch.fromPos, launch.toPos, e);
+    player.position.lerpVectors(launch.fromPos, launch.toPos, e);
     camera.quaternion.slerpQuaternions(launch.fromQuat, launch.toQuat, e);
     camera.position.y = eyeHeight;
     if (launch.t >= 1){
@@ -1481,12 +1774,21 @@ function animate(){
       const pulse = 0.5 + 0.5*Math.sin(t*3.4);                 // gentle breathing while it's active
       u.label.scale.setScalar(1 + (0.12 + 0.04*pulse) * hov);  // bigger pop + a soft pulse
       u.label.position.y = u.labelBaseY + (0.07 + 0.015*pulse) * hov;   // lifts + bobs a touch
-      const b = 1 + 0.24 * hov;                                // brighter glow
+      const b = (FX ? LABEL_LIFT : 1) * (1 + 0.24 * hov);      // brighter glow
       u.label.material.color.setRGB(b, b, b);
     }
   }
 
-  renderer.render(scene, camera);
+  if (composer){
+    composer.render();
+    if (flareScene){                       // flare on top of the graded frame
+      renderer.autoClear = false;
+      renderer.clearDepth();               // grade pass wrote depth; reset so the
+      renderer.render(flareScene, camera); // flare's occlusion quad isn't culled
+      renderer.autoClear = true;
+    }
+  }
+  else renderer.render(scene, camera);
 }
 
 function moveAndInteract(dt, t, autoFwd = 0){
@@ -1515,7 +1817,7 @@ function moveAndInteract(dt, t, autoFwd = 0){
   controls.moveRight(velocity.x * dt);
   controls.moveForward(velocity.z * dt);
 
-  const o = controls.getObject();
+  const o = player;
   o.position.x = clamp(o.position.x, -(WALL_X-0.7), WALL_X-0.7);
   o.position.z = clamp(o.position.z, PLAT_Z0+1, PLAT_Z1-1);
   // gentle, speed-scaled head-bob (smoothed so it never snaps)
@@ -1563,6 +1865,8 @@ function moveAndInteract(dt, t, autoFwd = 0){
 addEventListener('resize', () => {
   camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
+  if (composer) composer.setSize(innerWidth, innerHeight);
+  gradePass?.uniforms.uRes.value.set(innerWidth * BASE_PR * resScale, innerHeight * BASE_PR * resScale);
 });
 
 // returning to the gallery via the browser Back button (bfcache restore) lands
@@ -1593,13 +1897,13 @@ addEventListener('resize', fitEnterBtn);
 setInputMode(isTouch ? 'touch' : 'keyboard');
 
 new FontLoader().load(
-  'https://unpkg.com/three@0.160.0/examples/fonts/helvetiker_bold.typeface.json',
+  'https://unpkg.com/three@0.180.0/examples/fonts/helvetiker_bold.typeface.json',
   (font) => {
     buildGallery(font);
     renderer.shadowMap.needsUpdate = true;   // render the static shadow map once, now that all casters exist
     $('loadnote').textContent = `${CONFIG.projects.length} worlds ready`;
     $('enterBtn').disabled = false;
-    animate();
+    renderer.setAnimationLoop(animate);      // renderer-managed loop (pauses cleanly with the tab)
   },
   undefined,
   () => fatal('Could not load the 3D font (check your internet connection).')
@@ -1611,3 +1915,16 @@ function fatal(msg){
   o.classList.remove('hidden');
   $('enter')?.classList.add('hidden');
 }
+
+// tiny inspection handle for devtools/tooling (everything above is module-scoped)
+window.__realm = {
+  renderer, composer, scene, camera, clock, frames,
+  get resScale(){ return resScale; },
+  renderOnce(){
+    if (skyMat) skyMat.uniforms.uTime.value = clock.elapsedTime;
+    if (composer){
+      composer.render();
+      if (flareScene){ renderer.autoClear = false; renderer.clearDepth(); renderer.render(flareScene, camera); renderer.autoClear = true; }
+    } else renderer.render(scene, camera);
+  },
+};

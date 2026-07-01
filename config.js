@@ -52,6 +52,10 @@ export const CONFIG = {
   //   "microlink" – api.microlink.io (clean, rate-limited on free tier)
   screenshotProvider: "thumio",
 
+  // Next-gen post-processing (HDR bloom, filmic grade, dynamic resolution).
+  // Leave true for the full look; set false only if a very old GPU struggles.
+  postFX: true,
+
   // Feel of the first-person walk.
   movement: {
     accel: 43, friction: 8, maxSpeed: 6.4, mouseSensitivity: 1.0,
