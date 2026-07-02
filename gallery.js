@@ -1838,18 +1838,19 @@ function animate(){
     u.visit.rotation.y = yaw;
 
     // u.scale (the approach 0→1) is the envelope on the shared breath, so the
-    // whole ensemble also fades in on approach / out on leave at the same pace
+    // badge swell + hover fade in on approach / out on leave at the same pace
     const breath = pulse * u.scale;
     u.visit.position.y = u.visit.userData.baseY + 0.05 * breath;
-    // visit? glow: EMISSIVE, not specular — view-independent, so the halo works
-    // from any angle. Peak (2.32) sits over the bloom threshold (1.2) on
-    // purpose; FX-off gets a gentler lift since there is no bloom to feed.
-    // The glow eases on breath^2.2 rather than the raw breath: it dwells near
-    // zero and CREEPS up to a brief full peak instead of pumping linearly
-    // through the bloom threshold (which read as flashing). The easing is
-    // monotone, so its full/zero still land exactly with the badge swell.
+    // visit? glow: held OUT of the idle breath — it answers the CLICK instead.
+    // Choosing a world starts the launch swoop and visit? shrinks away; the
+    // halo tapers on as easeIO of that very shrink, so the flare and the
+    // shrink are locked to one motion — the visitor activates the glow by
+    // choosing. EMISSIVE, so it reads from any angle; the peak (2.32) sits
+    // over the bloom threshold (1.2) on purpose. Walking away (no click)
+    // shrinks the text with the glow held at the 0.22 resting tint.
+    const chosen = launch && launch.frame === f;
     u.visit.material.emissiveIntensity =
-      0.22 + (FX ? 2.1 : 0.65) * Math.pow(breath, 2.2);
+      0.22 + (FX ? 2.1 : 0.65) * (chosen ? easeIO(1 - u.scale) : 0);
 
     // name plaque "hover": swell + lift ride the same breath as the glow.
     // Brightness alone stays steady while active (clamped under bloom, 1.2) —
