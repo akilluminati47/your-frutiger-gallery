@@ -56,14 +56,14 @@ export const CONFIG = {
   // With shuffleOrder off, the LAST row is gaze-triggered (walk to the end and look
   // to reveal it); the rest auto-load as you approach.
   projects: [
-    { name: "This Gallery",  url: "https://akilluminati47.pages.dev/" },                  // front · right (an inception)
-    { name: "GitHub Repo",   url: "https://github.com/akilluminati47/frutiger-gallery" }, // front · left  (fork me)
-    { name: "Wikipedia",     url: "https://www.wikipedia.org/" },  // row2 · right
-    { name: "YouTube",       url: "https://www.youtube.com/" },    // row2 · left
-    { name: "Reddit",        url: "https://www.reddit.com/" },     // row3 · right
-    { name: "Google",        url: "https://www.google.com/" },     // row3 · left
-    { name: "Twitch",        url: "https://www.twitch.tv/" },      // back · right (gaze)
-    { name: "Facebook",      url: "https://www.facebook.com/" },   // back · left  (gaze)
+    { name: "Wikipedia",     url: "https://www.wikipedia.org/" },  // front · right
+    { name: "YouTube",       url: "https://www.youtube.com/" },    // front · left
+    { name: "Reddit",        url: "https://www.reddit.com/" },     // row2 · right
+    { name: "Google",        url: "https://www.google.com/" },     // row2 · left
+    { name: "Twitch",        url: "https://www.twitch.tv/" },      // row3 · right
+    { name: "Facebook",      url: "https://www.facebook.com/" },   // row3 · left
+    { name: "akilluminati47", url: "https://akilluminati47.pages.dev/" },                 // back · right (gaze — an inception)
+    { name: "GitHub Repo",   url: "https://github.com/akilluminati47/frutiger-gallery" }, // back · left  (gaze — fork me)
   ],
 
   // Shuffle the gallery order on every page load. Set false to keep the
