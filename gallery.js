@@ -1821,36 +1821,38 @@ function animate(){
   // groups never move) — so we skip a per-frame matrix decompose and the two
   // Vector3 allocations per panel that used to churn the GC each frame.
   camera.getWorldPosition(_camWorld);
+  // ── the ONE breath every active-frame animation rides ──
+  // A full 0→1→0 swing: at the trough the glow is truly GONE (emissive back at
+  // the 0.22 resting tint, under the bloom threshold — no halo), the badge
+  // swell is fully relaxed and the visit? hover sits back at baseY; at the
+  // peak all of them are at full — always in step, never out of phase.
+  const pulse = 0.5 + 0.5*Math.sin(t*3.4);
   for (const f of frames){
     const u = f.userData;
     const target = (f === activeFrame && state === 'play' && u.loadState === 'done') ? 1 : 0;
     u.scale = lerp(u.scale, target, 1 - Math.pow(0.001, dt));
     const s = u.scale < 0.002 ? 0.001 : u.scale;
     u.visit.scale.setScalar(s);
-    u.visit.position.y = u.visit.userData.baseY + Math.sin(t*1.8)*0.05*u.scale;
     const fw = u.worldPos;
     const yaw = Math.atan2(_camWorld.x - fw.x, _camWorld.z - fw.z) - f.rotation.y;
     u.visit.rotation.y = yaw;
 
-    const pulse = 0.5 + 0.5*Math.sin(t*3.4);   // shared breathing: plaque + glow
-    // visit? glow: EMISSIVE, not specular — the old "glow" was just a sun glint
-    // crossing the bloom threshold, so it only showed from the spawn sightline.
-    // Emissive is view-independent (halo from any angle); it fades in/out with
-    // u.scale as visit? pops, breathing in step with the name badge above it.
-    // At full strength the aqua sits over the bloom threshold (1.2) on purpose.
-    u.visit.material.emissiveIntensity =
-      0.22 + (FX ? 1.5 + 0.6*pulse : 0.45 + 0.2*pulse) * u.scale;
+    // u.scale (the approach 0→1) is the envelope on the shared breath, so the
+    // whole ensemble also fades in on approach / out on leave at the same pace
+    const breath = pulse * u.scale;
+    u.visit.position.y = u.visit.userData.baseY + 0.05 * breath;
+    // visit? glow: EMISSIVE, not specular — view-independent, so the halo works
+    // from any angle. Peak (2.32) sits over the bloom threshold (1.2) on
+    // purpose; FX-off gets a gentler lift since there is no bloom to feed.
+    u.visit.material.emissiveIntensity = 0.22 + (FX ? 2.1 : 0.65) * breath;
 
-    // name plaque "hover": once it has bloomed in, lift + scale + brighten it
-    // while the visit? prompt is showing — the same reaction as the Enter button
-    // on mouseover (u.scale is the 0→1 active amount driving the visit text).
+    // name plaque "hover": swell + lift ride the same breath as the glow.
+    // Brightness alone stays steady while active (clamped under bloom, 1.2) —
+    // the constant "you're at this world" cue between breaths.
     if (u.labelBloop >= 1){
-      const hov = u.scale;                                     // 0→1 "you're at this world" amount
-      u.label.scale.setScalar(1 + (0.12 + 0.04*pulse) * hov);  // bigger pop + a soft pulse
-      u.label.position.y = u.labelBaseY + (0.07 + 0.015*pulse) * hov;   // lifts + bobs a touch
-      // brighter on hover — but clamped under the bloom threshold (1.2) so the
-      // plaque brightens without ever hazing over into a bloom rectangle
-      let b = (FX ? LABEL_LIFT : 1) * (1 + 0.24 * hov);
+      u.label.scale.setScalar(1 + 0.16 * breath);
+      u.label.position.y = u.labelBaseY + 0.085 * breath;
+      let b = (FX ? LABEL_LIFT : 1) * (1 + 0.24 * u.scale);
       if (FX) b = Math.min(b, 1.19);
       u.label.material.color.setRGB(b, b, b);
     }
