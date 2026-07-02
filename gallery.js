@@ -1826,7 +1826,7 @@ function animate(){
   // the 0.22 resting tint, under the bloom threshold — no halo), the badge
   // swell is fully relaxed and the visit? hover sits back at baseY; at the
   // peak all of them are at full — always in step, never out of phase.
-  const pulse = 0.5 + 0.5*Math.sin(t*3.4);
+  const pulse = 0.5 + 0.5*Math.sin(t*2.2);   // calm ~2.9s breath (3.4 blinked)
   for (const f of frames){
     const u = f.userData;
     const target = (f === activeFrame && state === 'play' && u.loadState === 'done') ? 1 : 0;
@@ -1844,7 +1844,12 @@ function animate(){
     // visit? glow: EMISSIVE, not specular — view-independent, so the halo works
     // from any angle. Peak (2.32) sits over the bloom threshold (1.2) on
     // purpose; FX-off gets a gentler lift since there is no bloom to feed.
-    u.visit.material.emissiveIntensity = 0.22 + (FX ? 2.1 : 0.65) * breath;
+    // The glow eases on breath^2.2 rather than the raw breath: it dwells near
+    // zero and CREEPS up to a brief full peak instead of pumping linearly
+    // through the bloom threshold (which read as flashing). The easing is
+    // monotone, so its full/zero still land exactly with the badge swell.
+    u.visit.material.emissiveIntensity =
+      0.22 + (FX ? 2.1 : 0.65) * Math.pow(breath, 2.2);
 
     // name plaque "hover": swell + lift ride the same breath as the glow.
     // Brightness alone stays steady while active (clamped under bloom, 1.2) —
