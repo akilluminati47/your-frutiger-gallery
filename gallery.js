@@ -3,7 +3,7 @@ import { PointerLockControls } from 'three/addons/controls/PointerLockControls.j
 import { Reflector } from 'three/addons/objects/Reflector.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { FontLoader } from 'three/addons/loaders/FontLoader.js';
-import { TextGeometry } from 'three/addons/geometries/TextGeometry.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { Lensflare, LensflareElement } from 'three/addons/objects/Lensflare.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
@@ -1057,6 +1057,44 @@ function buildGallery(font){
     emissive:0x2aa9ff, emissiveIntensity:0.22, envMapIntensity:1.4,
   });
 
+  // "visit?" geometry — built glyph-by-glyph instead of one TextGeometry call.
+  // The bevel fattens every outline by ~0.022 a side, which fused the i and ?
+  // dots onto their glyphs and closed up the gaps between letters. Per-glyph we
+  // can restore a touch of tracking and float the dots clear of their stems.
+  // Built ONCE and shared by every frame's mesh (it was 12 identical builds).
+  const visitGeo = (() => {
+    const SIZE = 0.46, TRACK = 0.055, DOT_GAP = 0.075;
+    const opts = { depth:0.13, curveSegments:6,
+      bevelEnabled:true, bevelThickness:0.03, bevelSize:0.022, bevelSegments:3 };
+    const parts = [];
+    let pen = 0;
+    for (const ch of 'visit?'){
+      const shapes = font.generateShapes(ch, SIZE);
+      // the dot is the only disconnected outline in this string: the TOP shape
+      // of the i, the BOTTOM one of the ? — lift it away so it floats free
+      let dotIdx = -1;
+      if (shapes.length > 1){
+        const mids = shapes.map(sh => {
+          const b = new THREE.Box2().setFromPoints(sh.getPoints(6));
+          return (b.min.y + b.max.y) / 2;
+        });
+        dotIdx = mids.indexOf(ch === 'i' ? Math.max(...mids) : Math.min(...mids));
+      }
+      shapes.forEach((sh, k) => {
+        const g = new THREE.ExtrudeGeometry(sh, opts);
+        g.translate(pen, k === dotIdx ? (ch === 'i' ? DOT_GAP : -DOT_GAP) : 0, 0);
+        parts.push(g);
+      });
+      pen += font.data.glyphs[ch].ha * (SIZE / font.data.resolution) + TRACK;
+    }
+    const g = mergeGeometries(parts);
+    for (const p of parts) p.dispose();
+    g.computeBoundingBox();
+    const bb = g.boundingBox;
+    g.translate(-(bb.min.x + bb.max.x)/2, -(bb.min.y + bb.max.y)/2, 0);
+    return g;
+  })();
+
   // NOTE: no glass cover sheet over the screens — a near-transparent reflective
   // plane floating off each panel read as a milky rectangle washing out the
   // screenshot. The device slab is bare so every screen stays crisp.
@@ -1105,17 +1143,10 @@ function buildGallery(font){
     label.scale.setScalar(0.01);   // starts tiny; animates to 1.0 on reveal
     group.add(label);
 
-    // 3D "visit?" text — hidden until you approach
-    const tg = new TextGeometry('visit?', {
-      font, size:0.46, depth:0.13, curveSegments:6,
-      bevelEnabled:true, bevelThickness:0.03, bevelSize:0.022, bevelSegments:3,
-    });
-    tg.computeBoundingBox();
-    const bb = tg.boundingBox;
-    tg.translate(-(bb.max.x-bb.min.x)/2, -(bb.max.y-bb.min.y)/2, 0);
-    // own material clone per frame (same shader program, no extra compiles) so
-    // each visit?'s glow can fade in/out independently in the animate loop
-    const visit = new THREE.Mesh(tg, visitMat.clone());
+    // 3D "visit?" text — hidden until you approach. Own material clone per
+    // frame (same shader program, no extra compiles) so each visit?'s glow
+    // can fade in/out independently in the animate loop.
+    const visit = new THREE.Mesh(visitGeo, visitMat.clone());
     visit.position.set(0, -0.15, 0.9);
     visit.scale.setScalar(0.001);
     visit.userData.baseY = -0.15;
