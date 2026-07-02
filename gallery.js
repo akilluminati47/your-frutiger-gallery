@@ -362,7 +362,12 @@ const GAZE_LOAD_DUR  = 2.0;                 // bar fill for gaze-triggered frame
 
 const WALL_X  = HALF + 2.0;             // glass side walls
 const FRAME_X = WALL_X - 0.12;          // frames hang pressed flat against the glass walls
-const WALL_H  = 4.8;                    // taller: leaves a title-padding band above each panel
+// 4.98 = console slab height (4.725) + equal 0.1275 glass margins above and
+// below — the slab floats centred on the backwall pane, same reveal top + bottom
+const WALL_H  = 4.98;
+// back-wall console flag lives up here (not in section 5c) because the corridor
+// rails below need it to weld a clean corner when the backwall closes the hall
+const CON_ENABLED = CONFIG.console?.enabled !== false;
 const PLAT_Z0 = -7, PLAT_Z1 = END_Z + 7;
 const DESK_CZ = (PLAT_Z0 + PLAT_Z1) / 2;
 const DESK_W  = (WALL_X + 1.0) * 2;
@@ -716,7 +721,12 @@ function dontNestReflections(){
   floor.renderOrder = 1;        // stable transparent order: floor < walls < panels < labels
   scene.add(floor);
 
-  // glass side walls — same reflective look as the floor, carried up the sides
+  // glass side walls — same reflective look as the floor, carried up the sides.
+  // When the console backwall closes the corridor, the side rails stop flush
+  // against the back rail's hall-side face (see buildConsole) — a welded
+  // corner instead of rails passing through each other.
+  const RAIL_L  = CON_ENABLED ? DESK_D - 0.76 : DESK_D - 0.6;
+  const RAIL_CZ = CON_ENABLED ? DESK_CZ - 0.08 : DESK_CZ;
   function buildWall(side){
     const x = side * WALL_X;
     // real planar reflection on EVERY device, so the gallery reflects across the
@@ -732,13 +742,13 @@ function dontNestReflections(){
 
     // crisp glossy top rail so the glass wall reads as a solid pane edge
     const rail = new THREE.Mesh(
-      new RoundedBoxGeometry(0.12, 0.12, DESK_D-0.6, 3, 0.05),
+      new RoundedBoxGeometry(0.12, 0.12, RAIL_L, 3, 0.05),
       new THREE.MeshPhysicalMaterial({
         color:0xffffff, roughness:0.08, clearcoat:1, envMapIntensity:1.4,
         iridescence: lowPerf ? 0 : 0.4, iridescenceIOR: 1.3,
       })
     );
-    rail.position.set(x, WALL_H, DESK_CZ);
+    rail.position.set(x, WALL_H, RAIL_CZ);
     scene.add(rail);
   }
   buildWall(-1); buildWall(1);
@@ -1250,9 +1260,11 @@ function buildGallery(font){
         your view — the cursor rides the slab — click / E to press,
         type to fill fields.
    ════════════════════════════════════════════════════════════════ */
-const CON_ENABLED = CONFIG.console?.enabled !== false;
 const CON = { W: lowPerf ? 1536 : 2048, H: lowPerf ? 864 : 1152 };   // 16:9 canvas
+const CON_CW = 8.4, CON_CH = CON_CW * (CON.H / CON.W);   // slab size in world units
+const CON_PX = CON_CW / 2048;                            // one layout px on the slab
 let consoleMesh = null, consoleTex = null, consoleCtx = null, consoleGroup = null;
+let conCursor = null;                                    // the aero pointer: its own tiny quad
 
 // ── the draft: the visitor's design-in-progress. Seeds from the live CONFIG,
 // survives the OAuth round-trip (and reloads) via localStorage.
@@ -1327,7 +1339,7 @@ const ui = {
   hover: null, focus: null,
   cursor: { x: -1, y: -1, on: false },
   page: 0,                         // worlds-list pager
-  dirty: true, lastPaint: 0, lastCurX: -9, lastCurY: -9,
+  dirty: true, lastPaint: 0,
   note: null, noteT: 0,            // transient toast ("copied ✓")
   gh: { mode: 'unknown', login: null, forkRepo: null, forkUrl: null, busy: null,
         doneFork: false, doneConfig: false, err: null },
@@ -1338,12 +1350,15 @@ function toast(msg){ ui.note = msg; ui.noteT = performance.now(); ui.dirty = tru
 function buildConsole(){
   if (!CON_ENABLED) return;
   consoleGroup = new THREE.Group();
-  consoleGroup.position.set(0, 0, PLAT_Z1 - 0.35);
+  // sits exactly where the side panes end (PLAT_Z1 - 0.4), so the back pane's
+  // edges land ON the side panes at x = ±WALL_X — a clean glass corner
+  consoleGroup.position.set(0, 0, PLAT_Z1 - 0.4);
   consoleGroup.rotation.y = Math.PI;                    // face back down the hall
 
-  // the glass backwall: closes the far end of the corridor like the side panes
+  // the glass backwall: closes the far end of the corridor like the side panes,
+  // spanning exactly between them
   const backGlass = new THREE.Mesh(
-    new THREE.PlaneGeometry(DESK_W - 0.8, WALL_H),
+    new THREE.PlaneGeometry(WALL_X * 2, WALL_H),
     new THREE.MeshPhysicalMaterial({
       color: 0xa9cde6, roughness: 0.15, metalness: 0,
       transparent: true, opacity: 0.4, envMapIntensity: 1.1, side: THREE.DoubleSide,
@@ -1351,8 +1366,10 @@ function buildConsole(){
   );
   backGlass.position.set(0, WALL_H/2, 0);
   consoleGroup.add(backGlass);
+  // back rail caps across the corner: its ends sit flush with the side rails'
+  // outer faces, and the (shortened) side rails butt into its hall-side face
   const backRail = new THREE.Mesh(
-    new RoundedBoxGeometry(DESK_W - 0.6, 0.12, 0.12, 3, 0.05),
+    new RoundedBoxGeometry(WALL_X * 2 + 0.12, 0.12, 0.12, 3, 0.05),
     new THREE.MeshPhysicalMaterial({
       color: 0xffffff, roughness: 0.08, clearcoat: 1, envMapIntensity: 1.4,
       iridescence: lowPerf ? 0 : 0.4, iridescenceIOR: 1.3,
@@ -1362,22 +1379,47 @@ function buildConsole(){
   consoleGroup.add(backRail);
 
   // the world-rounded-canvas XXL slab the console UI is skinned onto
-  const CW = 8.4, CH = CW * (CON.H / CON.W);
+  const CW = CON_CW, CH = CON_CH;
   const slabGeo = new RoundedBoxGeometry(CW, CH, 0.26, 6, 0.12);
   planarUV(slabGeo, CW, CH);
   const cnv = document.createElement('canvas'); cnv.width = CON.W; cnv.height = CON.H;
-  consoleCtx = cnv.getContext('2d');
+  consoleCtx = cnv.getContext('2d', { alpha: false });  // opaque face → cheaper GPU uploads
   consoleTex = new THREE.CanvasTexture(cnv);
   consoleTex.colorSpace = THREE.SRGBColorSpace;
   consoleTex.generateMipmaps = false;                   // repainted on interaction
   consoleTex.minFilter = THREE.LinearFilter;
-  consoleTex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  consoleTex.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());  // 16× is unpayable for a screen-filling slab
   const slabMat = new THREE.MeshBasicMaterial({ map: consoleTex, toneMapped: false });
   if (FX) slabMat.color.setScalar(1.12);                // same ACES lift as the screens
   consoleMesh = new THREE.Mesh(slabGeo, slabMat);
-  consoleMesh.position.set(0, CH/2 + 0.12, 0.3);
+  // centred on the pane → identical glass reveal above and below the slab
+  consoleMesh.position.set(0, WALL_H/2, 0.3);
   consoleMesh.castShadow = true;
   consoleGroup.add(consoleMesh);
+
+  // the aero pointer rides the slab as its own tiny quad: moving it per frame
+  // costs nothing, so the big UI canvas repaints only when the UI itself changes
+  // (before, every cursor twitch re-uploaded the whole 2048px texture at 30fps)
+  const pc = document.createElement('canvas'); pc.width = 132; pc.height = 164;   // 66×82 layout px @2x
+  const pcc = pc.getContext('2d');
+  pcc.scale(2, 2); pcc.translate(16, 16);               // pad for the drop shadow, tip at (16,16)
+  pcc.shadowColor = 'rgba(10,60,120,.4)'; pcc.shadowBlur = 14; pcc.shadowOffsetY = 4;
+  pcc.beginPath();                                      // classic pointer, aero-glossed
+  pcc.moveTo(0, 0); pcc.lineTo(0, 44); pcc.lineTo(11, 33); pcc.lineTo(19, 50);
+  pcc.lineTo(27, 46); pcc.lineTo(19, 30); pcc.lineTo(34, 30); pcc.closePath();
+  const pg = pcc.createLinearGradient(0, 0, 0, 50);
+  pg.addColorStop(0, '#ffffff'); pg.addColorStop(1, '#bfe2ff');
+  pcc.fillStyle = pg; pcc.fill();
+  pcc.shadowColor = 'transparent';
+  pcc.strokeStyle = AERO.deep; pcc.lineWidth = 3; pcc.stroke();
+  const pTex = new THREE.CanvasTexture(pc); pTex.colorSpace = THREE.SRGBColorSpace;
+  const pMat = new THREE.MeshBasicMaterial({ map: pTex, transparent: true, toneMapped: false, depthWrite: false });
+  if (FX) pMat.color.setScalar(1.12);
+  conCursor = new THREE.Mesh(new THREE.PlaneGeometry(66 * CON_PX, 82 * CON_PX), pMat);
+  conCursor.visible = false;
+  conCursor.renderOrder = 2;                            // always over the slab face
+  consoleMesh.add(conCursor);
+
   scene.add(consoleGroup);
 
   if (draftEdited) applyDraftLive();                    // returning mid-design → wear it
@@ -1400,9 +1442,9 @@ function buildConsole(){
     };
     cnv.addEventListener('mousemove', e => {
       const p = toCanvas(e), S = CON.W / 2048;
-      ui.cursor = { x: p.x, y: p.y, on: true };
-      const h = widgetAt(p.x / S, p.y / S); if (h !== ui.hover){ ui.hover = h; }
-      ui.dirty = true; drawConsole();
+      ui.cursor = { x: p.x, y: p.y, on: true };            // the OS pointer is the cursor here
+      const h = widgetAt(p.x / S, p.y / S);
+      if (h?.id !== ui.hover?.id){ ui.hover = h; ui.dirty = true; drawConsole(); }
     });
     cnv.addEventListener('click', e => { const p = toCanvas(e); ui.cursor = { x:p.x, y:p.y, on:true }; consolePress(); drawConsole(); });
   }
@@ -1554,25 +1596,9 @@ function drawConsole(){
     cc.fillStyle = AERO.deep; cc.textAlign = 'center'; cc.textBaseline = 'middle';
     cc.fillText(ui.note, LW/2, LH - 130 + 33);
   } else ui.note = null;
-  // the aero cursor rides the slab
-  if (ui.cursor.on){
-    const cx = ui.cursor.x / S, cy = ui.cursor.y / S;
-    cc.save(); cc.translate(cx, cy);
-    cc.shadowColor = 'rgba(10,60,120,.4)'; cc.shadowBlur = 14; cc.shadowOffsetY = 4;
-    cc.beginPath();                                   // classic pointer, aero-glossed
-    cc.moveTo(0, 0); cc.lineTo(0, 44); cc.lineTo(11, 33); cc.lineTo(19, 50);
-    cc.lineTo(27, 46); cc.lineTo(19, 30); cc.lineTo(34, 30); cc.closePath();
-    const pg = cc.createLinearGradient(0, 0, 0, 50);
-    pg.addColorStop(0, '#ffffff'); pg.addColorStop(1, '#bfe2ff');
-    cc.fillStyle = pg; cc.fill();
-    cc.shadowColor = 'transparent';
-    cc.strokeStyle = AERO.deep; cc.lineWidth = 3; cc.stroke();
-    cc.restore();
-  }
   cc.restore();
   consoleTex.needsUpdate = true;
   ui.dirty = false; ui.lastPaint = performance.now();
-  ui.lastCurX = ui.cursor.x; ui.lastCurY = ui.cursor.y;
 }
 
 function drawIdentity(cc, top){
@@ -1709,7 +1735,8 @@ function drawPublish(cc, top){
     toast('pick your new repo · accept the defaults · deploy');
   });
   cc.fillStyle = AERO.inkFaint; cFont(cc, 21); cc.textAlign = 'left'; cc.textBaseline = 'alphabetic';
-  cc.fillText('connect the repo you just made · no build command · every push redeploys', x1 + 60, y + 165);
+  cc.fillText('connect the repo you just made · no build command', x1 + 60, y + 165);
+  cc.fillText('every push redeploys', x1 + 60, y + 196);
   // right rail — the design payload
   cGlassInset(cc, x2, top + 10, 800, 700, 26, false);
   cc.fillStyle = AERO.deep; cFont(cc, 34, 700); cc.textAlign = 'left'; cc.textBaseline = 'alphabetic';
@@ -1732,8 +1759,11 @@ function drawPublish(cc, top){
     try { await navigator.clipboard.writeText(JSON.stringify(buildOwnerJson(), null, 2)); toast('copied ✓ — paste into a Pages secret named OWNER_CONFIG'); }
     catch { toast('clipboard blocked — use ?console mode'); }
   }, 'ghost');
-  cc.fillStyle = AERO.inkFaint; cFont(cc, 21);
-  cc.fillText('secret = same JSON, kept out of the repo (Settings → Env vars)', x2 + 40, top + 620);
+  // privacy tip — rides with the copy buttons it talks about
+  cc.fillStyle = AERO.inkFaint; cFont(cc, 21); cc.textAlign = 'left'; cc.textBaseline = 'alphabetic';
+  cc.fillText('prefer privacy? the OWNER_CONFIG secret is the same JSON,', x2 + 40, top + 616);
+  cc.fillText('kept out of the repo — paste it in Pages Settings →', x2 + 40, top + 646);
+  cc.fillText('Environment variables', x2 + 40, top + 676);
 }
 
 /* ── publish actions ── */
@@ -1809,16 +1839,19 @@ function updateConsole(){
       if (hit?.uv){ on = true; cx = hit.uv.x * CON.W; cy = (1 - hit.uv.y) * CON.H; }
     }
   }
-  const was = ui.cursor.on;
   ui.cursor = { x: cx, y: cy, on };
+  if (conCursor){                                        // pointer quad: free per-frame motion
+    conCursor.visible = on;
+    if (on) conCursor.position.set((cx / CON.W - 0.5) * CON_CW + 17 * CON_PX,
+                                   (0.5 - cy / CON.H) * CON_CH - 25 * CON_PX, 0.15);
+  }
   if (on){
     const h = widgetAt(cx / (CON.W/2048), cy / (CON.W/2048));
     if (h?.id !== ui.hover?.id){ ui.hover = h; ui.dirty = true; }
   } else if (ui.hover){ ui.hover = null; ui.dirty = true; }
-  if (was !== on) ui.dirty = true;
-  const moved = on && (Math.abs(cx - ui.lastCurX) > 3 || Math.abs(cy - ui.lastCurY) > 3);
   const caret = ui.focus && now - ui.lastPaint > 500;    // caret keep-alive
-  if ((ui.dirty || moved || caret || ui.note) && now - ui.lastPaint > 33) drawConsole();
+  const staleNote = ui.note && now - ui.noteT > 2600;    // one repaint clears the toast
+  if ((ui.dirty || caret || staleNote) && now - ui.lastPaint > 33) drawConsole();
 }
 
 /* ── pressing & typing ── */
