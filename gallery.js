@@ -668,9 +668,15 @@ function dontNestReflections(){
   const slab = new THREE.Mesh(
     new RoundedBoxGeometry(DESK_W, 0.7, DESK_D, 5, 0.22),
     new THREE.MeshPhysicalMaterial({
-      color:0xbfe6ff, roughness:0.08, metalness:0,
-      clearcoat:1, clearcoatRoughness:0.06,
-      transparent:true, opacity:0.3, envMapIntensity:1.6,
+      // frosted, NOT mirror-smooth: the slab top shows through the 52%-alpha
+      // floor Reflector above it, and any tight specular here paints a second
+      // "stagelight" sun next to the mirror's real one — the analytic sun glint
+      // and the env-map sun sit at the true mirror direction, while the
+      // Reflector's sun (a reflection of the finite sky dome) lands slightly
+      // off it. Rough gloss keeps the blue tint + soft sky sheen, no hot blob.
+      color:0xbfe6ff, roughness:0.45, metalness:0,
+      clearcoat:1, clearcoatRoughness:0.55,
+      transparent:true, opacity:0.3, envMapIntensity:0.8,
       // soap-film shimmer along the slab edge as you walk past (desktop only)
       iridescence: lowPerf ? 0 : 0.35, iridescenceIOR: 1.3,
     })
