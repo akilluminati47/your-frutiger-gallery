@@ -362,6 +362,12 @@ const SUN_DIR = new THREE.Vector3(-22, 58, -70).normalize();   // sun beams from
 /* ── premium sky dome: gradient + sun glow + animated FBM clouds ── */
 let skyMat;
 {
+  // CONFIG.clouds → baked into the shader at build time (no per-frame uniform
+  // cost): cover 0…1 slides the coverage threshold (1 = the stock sky, and the
+  // max), cirrus 0…1 gates how many FBM peaks survive as streaks (1 = the old
+  // stock amount, also the max — rarer by default, see config.js).
+  const COVER  = clamp(+(CONFIG.clouds?.cover  ?? 1)    || 0, 0, 1);
+  const CIRRUS = clamp(+(CONFIG.clouds?.cirrus ?? 0.35) || 0, 0, 1);
   skyMat = new THREE.ShaderMaterial({
     side: THREE.BackSide,
     uniforms:{
@@ -425,17 +431,22 @@ let skyMat;
         vec2 q = vec2(fbm(uv + uTime*0.006), fbm(uv + vec2(5.2, 1.3) - uTime*0.005));
         vec2 cuv = uv + q*0.6 + vec2(uTime*0.010, uTime*0.004);`}
         float dens = fbm(cuv)*0.68 + fbm(cuv*2.3 + 7.0)*0.32;
-        float cov  = smoothstep(0.45, 0.80, dens) * above;
+        ${COVER < 0.02 ? `
+        float cov  = 0.0;` : `
+        float cov  = smoothstep(${(0.80 - 0.35*COVER).toFixed(4)}, 0.80, dens) * above;`}
         // shade the base of each puff darker, and silver-line the ones near the sun
         vec3 cloudCol = mix(vec3(0.66,0.76,0.90), vec3(1.0), smoothstep(0.28,0.94,dens));
         cloudCol += sunCol * (halo*0.5 + pow(sd, 3.0)*0.22);
         sky = mix(sky, cloudCol, cov*0.92);
-        ${lowPerf ? '' : `
-        // thin high cirrus streaks drifting on their own layer (desktop only)
+        ${(lowPerf || CIRRUS < 0.02) ? '' : `
+        // thin high cirrus streaks drifting on their own layer (desktop only).
+        // CONFIG.clouds.cirrus slides the survival threshold, so low values
+        // make the streaks genuinely RARER (only the tallest FBM peaks make
+        // it), not just dimmer; cirrus = 1 is exactly the old stock amount.
         float ciBand = smoothstep(0.20, 0.55, dir.y);
         vec2 cuv2 = dir.xz / max(dir.y, 0.30);
         float ci = fbm(cuv2 * vec2(0.55, 2.8) + vec2(uTime*0.006, 0.0));
-        ci = smoothstep(0.60, 0.88, ci) * ciBand * 0.30 * (1.0 - cov);
+        ci = smoothstep(${(0.82 - 0.22*CIRRUS).toFixed(4)}, 0.88, ci) * ciBand * ${(0.30*(0.55 + 0.45*CIRRUS)).toFixed(4)} * (1.0 - cov);
         sky = mix(sky, vec3(1.0), ci);`}
 
         ${FX ? `
@@ -773,12 +784,15 @@ function drawBubble(hx, hy){
   x.fillStyle = h; x.beginPath(); x.arc(hx,hy,16,0,7); x.fill();
 }
 const bubbleTex = (() => { drawBubble(46,42); const t = new THREE.CanvasTexture(bubbleCanvas); t.colorSpace = THREE.SRGBColorSpace; return t; })();
+// CONFIG.bubbles knobs: count (0 disables; phones run ~2/3 of it) and
+// size/speed multipliers on the stock feel — see config.js
+const BUB = { count: 44, size: 1, speed: 1, ...(CONFIG.bubbles || {}) };
 {
-  const COUNT = lowPerf ? 28 : 44;
+  const COUNT = Math.max(0, Math.round(BUB.count * (lowPerf ? 28/44 : 1)));
   for (let i = 0; i < COUNT; i++){
     const s = new THREE.Sprite(new THREE.SpriteMaterial({ map:bubbleTex, transparent:true, depthWrite:false }));
     resetBubble(s, true);
-    s.userData.speed = 0.3 + Math.random()*0.7;
+    s.userData.speed = (0.3 + Math.random()*0.7) * BUB.speed;
     s.userData.sway  = Math.random()*Math.PI*2;
     s.userData.popT  = 0;            // >0 while a cursor-pop splash is playing
     scene.add(s); bubbles.push(s);
@@ -802,7 +816,7 @@ function updateBubbleShine(){
 // scratch vectors for the cursor-pop screen-space test (see animate)
 const _camRight = new THREE.Vector3(), _bv = new THREE.Vector3(), _bv2 = new THREE.Vector3();
 function resetBubble(s, anywhere){
-  const sc = 0.1 + Math.random()*0.4;
+  const sc = (0.1 + Math.random()*0.4) * BUB.size;
   s.scale.set(sc, sc, 1);
   // the spawn field expands the longer the visitor lingers (full size after 3 min),
   // so bubbles gradually bloom outward across the landscape for people who stay
@@ -1959,7 +1973,18 @@ addEventListener('resize', () => {
 addEventListener('pageshow', (e) => { if (e.persisted) resetToMenu(); });
 
 $('title').textContent = CONFIG.title;
-$('subtitle').textContent = CONFIG.subtitle;
+// splash + pause lines are all configurable; an empty string ("") in CONFIG
+// removes that line from the card entirely instead of leaving a blank row
+function setLine(id, text){
+  const el = $(id); if (!el) return;
+  el.textContent = text || '';
+  el.style.display = text ? '' : 'none';
+}
+setLine('subtitle',   CONFIG.subtitle);
+setLine('loadnote',   CONFIG.loadingNote ?? 'Loading the world…');
+setLine('pauseTitle', CONFIG.pause?.title ?? 'Paused');
+setLine('pauseNote',  CONFIG.pause?.note  ?? 'Take a breath.');
+$('resumeBtn').textContent = CONFIG.pause?.resume || 'Resume';
 // entrance button is just the owner's handle (CONFIG.creator) — the one breadcrumb
 // a new owner edits after cloning (or a future sign-up Worker writes)
 $('enterBtn').textContent = CONFIG.creator;
@@ -1986,7 +2011,8 @@ new FontLoader().load(
   (font) => {
     buildGallery(font);
     renderer.shadowMap.needsUpdate = true;   // render the static shadow map once, now that all casters exist
-    $('loadnote').textContent = `${CONFIG.projects.length} worlds ready`;
+    setLine('loadnote', (CONFIG.readyNote ?? '{n} worlds ready')
+      .replace('{n}', CONFIG.projects.length));
     $('enterBtn').disabled = false;
     renderer.setAnimationLoop(animate);      // renderer-managed loop (pauses cleanly with the tab)
   },

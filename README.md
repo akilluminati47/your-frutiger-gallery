@@ -8,8 +8,8 @@ lens flare. Keyboard + mouse, gamepad, and touch are all supported and auto-dete
 Rendering runs through a full HDR post pipeline: MSAA into a half-float target,
 Unreal-style bloom, ACES filmic tonemapping, then a film grade (corner chromatic
 aberration, vignette, animated grain). The sky is a domain-warped FBM cloudscape
-with silver linings and a cirrus layer; sun-lit dust motes drift up the corridor;
-panels sit behind iridescent glass covers. A dynamic-resolution governor watches
+with silver linings and a rare-cirrus layer; sun-lit dust motes drift up the
+corridor past crisp, bare panels. A dynamic-resolution governor watches
 the frame time and trades internal resolution for a locked frame rate, so it stays
 smooth from an iGPU laptop to a phone (`postFX: false` in `config.js` is the
 kill-switch back to plain forward rendering).
@@ -62,16 +62,42 @@ floor/walls span  = endZ + 14               // floor + both walls scale to this
 So 4 works gives a short hall; 20 works gives a long one — no manual resizing. The
 legs, reflections, and grass keep up on their own.
 
-### 3. Title + subtitle
+### 3. Title + entry-card lines
 
 ```js
-title: "DIGITAL REALM",
-subtitle: "choose a world to enter",
+title:       "DIGITAL REALM",
+subtitle:    "choose a world to enter",
+loadingNote: "Loading the world…",
+readyNote:   "{n} worlds ready",      // {n} = number of worlds
 ```
 
-Shown on the entry card (and the big title is what the `<h1>` renders).
+`title` is the big `<h1>`. The other three are the smaller splash lines — set any
+of them to `""` to remove that line entirely and make the entry card fully yours.
 
-### 4. Other knobs
+### 4. Pause menu
+
+```js
+pause: { title: "Paused", note: "Take a breath.", resume: "Resume" },
+```
+
+The pause-card texts. `title` and `note` also accept `""` to drop that line.
+
+### 5. Atmosphere — bubbles + clouds
+
+```js
+bubbles: { count: 44, size: 1.0, speed: 1.0 },
+clouds:  { cover: 1.0, cirrus: 0.35 },
+```
+
+* `bubbles.count` — how many drift around the platform (`0` disables them; phones
+  automatically run ~⅔ of it). `size` / `speed` are multipliers on the stock feel.
+* `clouds.cover` — puffy-cloud coverage, `0` (clear sky) … `1` (max — the stock sky).
+* `clouds.cirrus` — the thin stretched horizontal streaks, `0` (none) … `1` (max —
+  the old stock amount). Low values make them genuinely *rarer* (only the strongest
+  streaks survive), not just fainter; they're deliberately an occasional accent by
+  default.
+
+### 6. Other knobs
 
 ```js
 openInNewTab: false,          // true = open the work in a new tab instead of same-tab swoop
@@ -100,6 +126,29 @@ back an odd ratio anyway, the panel "contain"-fits the image so it's never disto
 
 You can only trigger the panel you're **looking at** and within range — you can't back
 into one and click a panel that's now behind you.
+
+---
+
+## Fork-safe by design — the owner handshake
+
+The repo is a **template**. At the bottom of `config.js` sits a hostname handshake:
+
+```js
+export const OWNER = {
+  hosts: ["frutiger-gallery.pages.dev"],  // the owner's own deployment(s)
+  settings: "/owner.config.json",         // the owner's real config (same shape as CONFIG)
+};
+```
+
+Only when the site is served from one of `hosts` does the gallery fetch `settings`
+and deep-merge it over the template **before** the world boots. A fork or clone
+hosted anywhere else never matches the handshake, so it starts from the clean
+defaults above — it can't accidentally ship the owner's branding.
+
+To claim a fork as your own: put your domain(s) in `hosts` and your overrides in
+`owner.config.json` (any subset of CONFIG keys — only what differs from the
+template), or point `settings` at a JSON you host elsewhere (a Worker, R2, another
+Pages project) so your personal settings never live in the repo at all.
 
 ---
 
