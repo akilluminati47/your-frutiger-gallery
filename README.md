@@ -1,246 +1,202 @@
-# Your Frutiger Gallery — a walk-through Frutiger Aero 3D gallery that signs you up in-world
+# Your Frutiger Gallery
 
-Walk to the **back of the hall**: a glass console on an XXL rounded slab lets any
-visitor design their own gallery live — name, worlds, atmosphere — then fork this
-repo (optionally under a custom name), auto-commit their design into the fork,
-and deploy it on Cloudflare Pages. The whole sign-up pipeline happens inside the
-3D world.
+[![Live](https://img.shields.io/badge/build-live-brightgreen)](https://frutiger-gallery.pages.dev)
+[![Use this template](https://img.shields.io/badge/template-use%20this-blue)](https://github.com/akilluminati47/your-frutiger-gallery/generate)
+[![three.js](https://img.shields.io/badge/three.js-r180-049EF4)](https://threejs.org)
+[![Cloudflare Pages](https://img.shields.io/badge/hosted%20on-Cloudflare%20Pages-F38020)](https://pages.cloudflare.com)
 
-A walk-through, first-person 3D gallery in the Frutiger Aero style. Each work is a
-live screenshot of a site, hung on glass walls along a floating glass corridor over
-a grassy "Bliss" landscape, with drifting bubbles, volumetric sky, and a dynamic sun
-lens flare. Keyboard + mouse, gamepad, and touch are all supported and auto-detected.
+A walk-through, first-person 3D gallery in the Frutiger Aero style. Every panel is a
+live screenshot of a site, hung on glass walls over a grassy Bliss landscape, with
+drifting bubbles, a volumetric sky, and a dynamic sun flare. At the end of the hall
+stands the **Aero Sign-Ups wall**: a glass console where any visitor designs their own
+gallery, forks this repository, and deploys it, all without leaving the world.
 
-Rendering runs through a full HDR post pipeline: MSAA into a half-float target,
-Unreal-style bloom, ACES filmic tonemapping, then a film grade (vignette,
-animated grain, a touch of saturation — no chromatic aberration, so bubbles
-and edges stay crisp). The sky is a domain-warped FBM cloudscape
-with silver linings and a rare-cirrus layer; sun-lit dust motes drift up the
-corridor past crisp, bare panels. A dynamic-resolution governor watches
-the frame time and trades internal resolution for a locked frame rate, so it stays
-smooth from an iGPU laptop to a phone (`postFX: false` in `config.js` is the
-kill-switch back to plain forward rendering).
+**Walk it now: [frutiger-gallery.pages.dev](https://frutiger-gallery.pages.dev)**
 
-Built with [three.js](https://threejs.org) (loaded from a CDN). **No build step** —
-it's plain `index.html` + `styles.css` + `gallery.js` + `config.js`. Open the file or
-serve the folder statically.
+## Contents
 
----
+- [Features](#features)
+- [The Aero Sign-Ups wall](#the-aero-sign-ups-wall)
+- [Get your own gallery](#get-your-own-gallery)
+- [Configuration](#configuration)
+- [Deployment](#deployment)
+- [Sign-up API](#sign-up-api)
+- [Controls](#controls)
+- [Local development](#local-development)
+- [Rendering notes](#rendering-notes)
+- [Credits](#credits)
 
-## Customize everything in `config.js`
+## Features
 
-You only ever edit [`config.js`](config.js). Nothing else needs touching.
+| | |
+|---|---|
+| No build step | Plain `index.html` + `styles.css` + `gallery.js` + `config.js`. Serve the folder statically and it runs. |
+| Live panels | Each work is captured at the visitor's own viewport aspect, so phones see phone layouts and desktops see desktop layouts. |
+| Self-scaling hall | Add or remove works freely: frames auto-arrange two per row and the glass floor, walls, and legs lengthen to fit. |
+| In-world sign-ups | The back-wall console designs, forks, and hands off deployment: a complete registration pipeline inside the 3D scene. |
+| Fork-safe template | The repository ships anonymous. An owner's real branding lives in a Cloudflare secret or a committed `owner.config.json`, never in the template. |
+| Full input support | Keyboard + mouse, gamepad, and touch are auto-detected, with an adaptive on-screen hint. |
 
-### 1. The entrance button — your name (`creator`)
+## The Aero Sign-Ups wall
 
-```js
-creator: "your-name",
+The corridor ends at a glass backwall carrying the **GALLERY CONSOLE**, painted on an
+extra-large rounded canvas slab. Aim with your view (an Aero cursor rides the slab),
+press with click or `E`, and type directly into the highlighted field. Movement keys
+pause while you type.
+
+| Tab | What it does | Preview |
+|---|---|---|
+| identity | Handle, gallery title, browser-tab title, splash and pause lines | Live, on the real splash |
+| worlds | Paged plaque + URL editor with add/remove and a wall-balance hint | On your deployed gallery |
+| atmosphere | Bubble count/size/speed, cloud sliders, volume, shuffle and new-tab toggles | Bubbles and volume live |
+| publish | The sign-up pipeline, described below | |
+
+### The pipeline
+
+| Step | Default | Notes |
+|---|---|---|
+| 1. Name it | Forks as-is | The *custom name* toggle opens a naming modal. Enter saves, Esc keeps the default. |
+| 2. GitHub | Connect, then one click | *Create my gallery* forks this repo under your account (custom name honored) and commits your whole design into the fork as `owner.config.json`. |
+| 3. Cloudflare | Guided hand-off | Opens the Pages new-project flow; connect the fork, accept the defaults, deploy. |
+| 4. Privacy (optional) | Copy buttons | The same design as a paste-ready `OWNER_CONFIG` secret, for owners who want their links out of the repo entirely. |
+
+Every draft persists in `localStorage`, so the OAuth round-trip never loses a design.
+If the deployment has no OAuth configured, the publish tab degrades gracefully to
+fork-page deep links plus the copy buttons: the pipeline still works with zero setup.
+
+Appending `?console` to the URL renders the identical console as a flat overlay with
+direct mouse input, for machines without pointer lock and for debugging.
+
+## Get your own gallery
+
+| Route | How | Best for |
+|---|---|---|
+| In-world | Walk to the back wall of the [live gallery](https://frutiger-gallery.pages.dev), design, publish | Everyone |
+| Template | [Use this template](https://github.com/akilluminati47/your-frutiger-gallery/generate), pick a name, then edit `config.js` or commit an `owner.config.json` | Developers |
+| Fork | [Fork the repo](https://github.com/akilluminati47/your-frutiger-gallery/fork), same editing options | Developers |
+
+Then deploy on Cloudflare Pages: create a Pages project, connect the repo, accept the
+defaults (no build command, no output directory). Every push to `main` redeploys.
+
+## Configuration
+
+Everything lives in [`config.js`](config.js). The template boots with neutral values;
+an owner's real settings arrive through the handshake below.
+
+<details>
+<summary><strong>Key reference</strong></summary>
+
+| Key | Type | Purpose |
+|---|---|---|
+| `creator` | string | The handle on the entrance button |
+| `title` | string | Big title on the entry card and floating in the world |
+| `tabTitle` | string | Browser-tab / bookmark text; `""` keeps the baked-in default |
+| `subtitle`, `loadingNote`, `readyNote` | string | Splash lines; `""` removes a line and the card re-balances itself (`{n}` = world count) |
+| `pause` | object | Pause-card texts: `title`, `note`, `resume` |
+| `bubbles` | object | `count` (0 disables, phones run about two-thirds), `size`, `speed` multipliers |
+| `clouds` | object | `cover` 0..1 puffy coverage, `cirrus` 0..1 streak amount |
+| `projects` | array | `{ name, url }` per panel; pairs fill the hall front to back, an even count balances both walls |
+| `console` | object | `enabled: false` removes the sign-ups wall; `sourceRepo` is the template it forks |
+| `shuffleOrder` | bool | Shuffle the hall on every load |
+| `openInNewTab` | bool | Open chosen worlds in a new tab instead of the same-tab swoop |
+| `screenshotProvider` | string | `thumio`, `mshots`, or `microlink`; failures fall through the whole list |
+| `postFX` | bool | HDR bloom, filmic grade, dynamic resolution; `false` is the low-end kill switch |
+| `movement` | object | Walk feel: `accel`, `friction`, `maxSpeed`, look sensitivities |
+| `volume` | number | Master volume for the synthesized SFX, 0..1 |
+
+</details>
+
+### The owner handshake
+
+The template never wears an owner's face. On load the gallery tries, in order:
+
+1. `/api/owner-config`, a Pages Function that answers with the `OWNER_CONFIG` secret
+   set in the Cloudflare dashboard (404 when unset).
+2. `/owner.config.json`, a real file: committed by the console's sign-up flow, or kept
+   locally for development (the template gitignores it).
+3. Neither found: the clean template stands.
+
+Whatever JSON it finds deep-merges over `CONFIG` before the world boots, so an owner
+writes only the keys that differ. [`owner.config.txt`](owner.config.txt) is a
+fill-in-the-blanks worksheet whose `_` lines are ignored notes; the whole file pastes
+directly into an `OWNER_CONFIG` secret.
+
+## Deployment
+
+The static gallery needs nothing beyond a Pages project. The connected sign-up flow
+needs one GitHub OAuth App and two environment variables on the Pages project.
+
+| Variable | Type | Purpose |
+|---|---|---|
+| `GH_CLIENT_ID` | Plain text | OAuth App client id |
+| `GH_CLIENT_SECRET` | Secret | OAuth App client secret |
+| `TEMPLATE_REPO` | Plain text, optional | `owner/repo` to fork; defaults to this repository |
+| `OWNER_CONFIG` | Secret, optional | This deployment's own branding JSON |
+
+Setup, once:
+
+1. Create the OAuth App at [github.com/settings/developers](https://github.com/settings/developers):
+   homepage `https://your-domain.pages.dev`, callback
+   `https://your-domain.pages.dev/api/gh/callback`. Leave device flow off.
+2. Add the variables above in the Pages project settings, then retry the deployment
+   (environment variables apply to new builds only).
+3. The console's publish tab switches from deep links to the connected flow on its own.
+
+## Sign-up API
+
+Pages Functions under [`functions/api/`](functions/api/):
+
+| Endpoint | Method | Role |
+|---|---|---|
+| `/api/gh/login` | GET | Starts the OAuth dance, `public_repo` scope, CSRF state cookie |
+| `/api/gh/callback` | GET | Exchanges the code; the token lands in an `HttpOnly` cookie (8 h), never in page JS |
+| `/api/gh/me` | GET | `200 {login}` connected, `401` not signed in, `501` OAuth unconfigured |
+| `/api/gh/fork` | POST | Forks the template, optional `{name}` for the custom-name toggle, waits for the fork to materialize |
+| `/api/gh/commit` | POST | Writes `owner.config.json` into the fork; refuses any repo the connected account does not own |
+| `/api/owner-config` | GET | Serves the `OWNER_CONFIG` secret to the handshake above |
+
+## Controls
+
+| Input | Move | Look | Visit / press | Pause |
+|---|---|---|---|---|
+| Keyboard + mouse | `WASD` / arrows | Mouse | `E` / click | `Esc` |
+| Gamepad | Left stick | Right stick | `A` | `Start` |
+| Touch | Left-thumb stick | Drag | Tap | Pause button |
+
+You can only trigger the panel or console control you are actually looking at and
+within range of.
+
+## Local development
+
+```sh
+# static gallery only
+python -m http.server 4173
+
+# gallery + sign-up functions
+npx wrangler pages dev .
 ```
 
-This single **breadcrumb** is the only thing a new owner changes after cloning. It
-becomes the label on the entrance button (e.g. **akilluminati47**). Change the string,
-and the button updates. (A future sign-up Worker can write this one field to mint a
-gallery per user.)
+A local `owner.config.json` next to `index.html` (gitignored) previews an owner
+configuration during development. `http://localhost:4173/?console` gives the flat
+console overlay for quick UI work.
 
-### 2. The works — names + hyperlinks (`projects`)
+## Rendering notes
 
-```js
-projects: [
-  { name: "YouTube", url: "https://www.youtube.com/" },
-  { name: "Twitch",  url: "https://www.twitch.tv/" },
-  // …add as many as you like (an even number keeps both walls balanced)
-],
-```
+<details>
+<summary><strong>How the frame is drawn</strong></summary>
 
-* `name` → the plaque mounted on that panel.
-* `url`  → where the **visit?** swoop takes you, and the page that gets screenshotted
-  onto the panel. `https://` is added automatically if you omit it.
+Rendering runs through a full HDR pipeline: MSAA into a half-float target,
+Unreal-style bloom, ACES filmic tonemapping, then a film grade (vignette, animated
+grain, a saturation lift; no chromatic aberration, so bubbles and edges stay crisp).
+The sky is a domain-warped FBM cloudscape with silver linings and a rare-cirrus
+layer; sun-lit dust motes drift up the corridor. A dynamic-resolution governor
+watches frame time and trades internal resolution for a locked frame rate, from iGPU
+laptops to phones. Loading cutscenes draw on a small strip plane that maps one-to-one
+to its screen pixels, so the barber-pole bar stays sharp at a fixed upload cost.
 
-**Add or remove works freely.** Frames auto-arrange two-per-row down the corridor,
-and **the glass floor and side walls lengthen automatically to fit** — the platform
-depth is derived from the number of works:
-
-```
-rows   = ceil(projects.length / 2)
-endZ   = START_Z + (rows - 1) * DZ          // last row's depth
-floor/walls span  = endZ + 14               // floor + both walls scale to this
-```
-
-So 4 works gives a short hall; 20 works gives a long one — no manual resizing. The
-legs, reflections, and grass keep up on their own.
-
-### 3. Title + entry-card lines
-
-```js
-title:       "FRUTIGER GALLERY",
-tabTitle:    "Frutiger Gallery ● 3D Gallery",  // browser-tab / bookmark text
-subtitle:    "choose a world to enter",
-loadingNote: "Loading the world…",
-readyNote:   "{n} worlds ready",      // {n} = number of worlds
-```
-
-`title` is the big `<h1>`, `tabTitle` is what the browser tab shows. The other
-three are the smaller splash lines — set any of them (or `title`) to `""` to
-remove that line entirely; the card re-balances its spacing around whatever
-remains, so a stripped-down entry card still looks composed.
-
-### 4. Pause menu
-
-```js
-pause: { title: "Paused", note: "Take a breath.", resume: "Resume" },
-```
-
-The pause-card texts. `title` and `note` also accept `""` to drop that line.
-
-### 5. Atmosphere — bubbles + clouds
-
-```js
-bubbles: { count: 44, size: 1.0, speed: 1.0 },
-clouds:  { cover: 1.0, cirrus: 0.35 },
-```
-
-* `bubbles.count` — how many drift around the platform (`0` disables them; phones
-  automatically run ~⅔ of it). `size` / `speed` are multipliers on the stock feel.
-* `clouds.cover` — puffy-cloud coverage, `0` (clear sky) … `1` (max — the stock sky).
-* `clouds.cirrus` — the thin stretched horizontal streaks, `0` (none) … `1` (max —
-  the old stock amount). Low values make them genuinely *rarer* (only the strongest
-  streaks survive), not just fainter; they're deliberately an occasional accent by
-  default.
-
-### 6. Other knobs
-
-```js
-openInNewTab: false,          // true = open the work in a new tab instead of same-tab swoop
-screenshotProvider: "thumio", // "thumio" | "mshots" | "microlink"
-movement: {
-  accel: 43, friction: 8, maxSpeed: 6.4, mouseSensitivity: 1.0,
-  padLook: 2.6,            // gamepad right-stick look speed (rad/sec)
-  touchLook: 0.0045,       // touch-drag look sensitivity (rad/pixel)
-},
-volume: 0.6,               // master volume for the synthesised SFX (0–1)
-```
-
-Each panel is captured at the **visitor's own viewport aspect ratio** and given a few
-seconds to fully load, so renders aren't stretched or half-painted. If a provider hands
-back an odd ratio anyway, the panel "contain"-fits the image so it's never distorted.
-
----
-
-## Controls (auto-detected — the on-screen hint adapts)
-
-| Input | Move | Look | Visit | Pause |
-|-------|------|------|-------|-------|
-| **Keyboard + mouse** | WASD / arrows | mouse | `E` / click | `Esc` |
-| **Gamepad** | left stick | right stick | `A` | `Start` |
-| **Touch** | left-thumb stick | drag | tap / Visit button | Pause button |
-
-You can only trigger the panel you're **looking at** and within range — you can't back
-into one and click a panel that's now behind you.
-
----
-
-## Fork-safe by design — your settings live in a Cloudflare secret, not the repo
-
-The repo is a **pure template**: no personal links, no branding, nothing to scrub
-before forking. Your real settings live in a **Cloudflare secret** that only your
-deployment can read. On load the gallery tries, in order:
-
-1. **`/api/owner-config`** — a tiny Pages Function
-   ([`functions/api/owner-config.js`](functions/api/owner-config.js)) that answers
-   with the `OWNER_CONFIG` secret set in your Cloudflare dashboard. No secret →
-   404 → next step.
-2. **`/owner.config.json`** — a gitignored local file, handy while previewing on
-   your own machine.
-3. **Neither found** → the clean template defaults in `config.js` stand.
-
-Whatever JSON it finds is deep-merged over `CONFIG` **before** the world boots, so
-you only write the keys that differ from the template. A fork has no secret and no
-local file, so it always boots the clean template — it can't accidentally wear
-your face, and your links never appear in the repo.
-
-### Set it up (one time, ~2 minutes)
-
-1. Open [`owner.config.txt`](owner.config.txt) — it's a fill-in-the-blanks copy of
-   the settings, with notes inline. Put in your name, title and links.
-2. In the Cloudflare dashboard: **Workers & Pages → your Pages project →
-   Settings → Environment variables → Add**. Name it `OWNER_CONFIG`, set the type
-   to **Secret**, environment **Production**, and paste the whole edited file as
-   the value.
-3. Redeploy (or push any commit). Done — your live site wears your settings, the
-   repo stays anonymous.
-
-The lines starting with `_` in `owner.config.txt` are just notes — they're valid
-JSON and get ignored, so you can paste the file exactly as-is.
-
----
-
-## The back-wall console — sign-ups inside the world
-
-At the end of the corridor stands a glass backwall with the **GALLERY CONSOLE**:
-a Frutiger Aero control panel painted on a world-rounded canvas slab. Aim with
-your view (the cursor rides the slab), **click / E** to press, and type straight
-into the lit field. Four tabs:
-
-* **identity** — handle, titles, splash & pause lines. Previews live.
-* **worlds** — the visitor's own project list (plaque + url, add/remove, paged).
-* **atmosphere** — bubbles (live), clouds, volume, shuffle/new-tab toggles.
-* **publish ✦** — the pipeline: name the repo (default: fork as-is; the
-  *custom name* toggle pops a naming modal), **connect GitHub**, one-click
-  **create my gallery** (forks this repo + commits the design into the fork as
-  `owner.config.json`), then **open Cloudflare** to deploy. Copy buttons cover
-  the manual path and the `OWNER_CONFIG` secret path too.
-
-`?console` in the URL renders the same console as a flat overlay with direct
-mouse input — handy on machines without pointer lock (and for debugging).
-
-The console lives in `CONFIG.console` (`config.js`): `enabled: false` removes
-it; `sourceRepo` is the template it forks.
-
-### One-time setup for the connected pipeline (repo owner)
-
-The manual pipeline (fork page + copy buttons) works with **zero setup**. For
-the one-click OAuth flow, the deployment needs a tiny bit of server — the
-Pages Functions in [`functions/api/gh/`](functions/api/gh/):
-
-1. Create a **GitHub OAuth App** (github.com → Settings → Developer settings →
-   OAuth Apps): homepage `https://frutiger-gallery.pages.dev`, callback
-   `https://frutiger-gallery.pages.dev/api/gh/callback` (swap in your domain).
-2. On the Cloudflare Pages project: **Settings → Environment variables** — add
-   `GH_CLIENT_ID` (plain) and `GH_CLIENT_SECRET` (secret). Optional:
-   `TEMPLATE_REPO` = `owner/repo` if your fork source differs.
-3. Redeploy. The console's publish tab switches from deep links to the
-   connected flow automatically.
-
-Privacy shape: the OAuth token only ever lives in an HttpOnly cookie (8 h),
-scope `public_repo`, and the commit endpoint refuses to write to any repo the
-connected account doesn't own.
-
----
-
-## Run / deploy
-
-This gallery is meant to be **forked and made your own** — not run from this repo as-is,
-and not by pointing people at the unedited original.
-
-1. **Fork** this repository to your own GitHub account.
-2. **Deploy your fork to Cloudflare Pages**: create a Pages project, connect your
-   forked repo, and accept the defaults — **no build command, no output
-   directory**, it's already static. Every push to `main` redeploys.
-3. **Make it yours** with the `OWNER_CONFIG` secret (see the section above) — your
-   name and links stay out of the repo. Prefer keeping it simple? You can instead
-   just edit `creator` and `projects` in [`config.js`](config.js) and commit; the
-   secret path is only there so your personal info never lands in git.
-
-> Don't ship the unedited gallery — fork it so the worlds, the entrance name, and the
-> link-preview card are all yours.
-
-**Local preview (optional, while editing):** serve the folder with any static server,
-e.g. `python -m http.server 4173`, then open `http://localhost:4173`. A server avoids
-module/CORS quirks you'd hit opening `index.html` straight off disk. This is just for
-checking your edits before you push — the real home is your deployed fork.
-
----
+</details>
 
 ## Credits
 
-Frutiger Aero gallery · three.js · screenshots via thum.io / mShots / microlink.
+Frutiger Aero gallery. Built with [three.js](https://threejs.org).
+Screenshots by [thum.io](https://www.thum.io), [mShots](https://developer.wordpress.com/docs/site-previews/), and [microlink](https://microlink.io).
