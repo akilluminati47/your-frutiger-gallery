@@ -62,8 +62,8 @@ export const CONFIG = {
     { name: "Google",        url: "https://www.google.com/" },     // row2 · left
     { name: "Twitch",        url: "https://www.twitch.tv/" },      // row3 · right
     { name: "Facebook",      url: "https://www.facebook.com/" },   // row3 · left
-    { name: "akilluminati47", url: "https://akilluminati47.pages.dev/" },                 // back · right (gaze — an inception)
-    { name: "GitHub Repo",   url: "https://github.com/akilluminati47/frutiger-gallery" }, // back · left  (gaze — fork me)
+    { name: "akilluminati47", url: "https://akilluminati47.pages.dev/" },                      // back · right (gaze — an inception)
+    { name: "Fork Me",        url: "https://github.com/akilluminati47/your-frutiger-gallery" }, // back · left  (gaze — this template, Aero Wall Console included)
   ],
 
   // ── CREATE-YOUR-OWN CONSOLE ────────────────────────────────────────
