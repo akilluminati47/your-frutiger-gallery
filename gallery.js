@@ -1113,7 +1113,9 @@ function buildGallery(font){
     tg.computeBoundingBox();
     const bb = tg.boundingBox;
     tg.translate(-(bb.max.x-bb.min.x)/2, -(bb.max.y-bb.min.y)/2, 0);
-    const visit = new THREE.Mesh(tg, visitMat);
+    // own material clone per frame (same shader program, no extra compiles) so
+    // each visit?'s glow can fade in/out independently in the animate loop
+    const visit = new THREE.Mesh(tg, visitMat.clone());
     visit.position.set(0, -0.15, 0.9);
     visit.scale.setScalar(0.001);
     visit.userData.baseY = -0.15;
@@ -1799,12 +1801,20 @@ function animate(){
     const yaw = Math.atan2(_camWorld.x - fw.x, _camWorld.z - fw.z) - f.rotation.y;
     u.visit.rotation.y = yaw;
 
+    const pulse = 0.5 + 0.5*Math.sin(t*3.4);   // shared breathing: plaque + glow
+    // visit? glow: EMISSIVE, not specular — the old "glow" was just a sun glint
+    // crossing the bloom threshold, so it only showed from the spawn sightline.
+    // Emissive is view-independent (halo from any angle); it fades in/out with
+    // u.scale as visit? pops, breathing in step with the name badge above it.
+    // At full strength the aqua sits over the bloom threshold (1.2) on purpose.
+    u.visit.material.emissiveIntensity =
+      0.22 + (FX ? 1.5 + 0.6*pulse : 0.45 + 0.2*pulse) * u.scale;
+
     // name plaque "hover": once it has bloomed in, lift + scale + brighten it
     // while the visit? prompt is showing — the same reaction as the Enter button
     // on mouseover (u.scale is the 0→1 active amount driving the visit text).
     if (u.labelBloop >= 1){
       const hov = u.scale;                                     // 0→1 "you're at this world" amount
-      const pulse = 0.5 + 0.5*Math.sin(t*3.4);                 // gentle breathing while it's active
       u.label.scale.setScalar(1 + (0.12 + 0.04*pulse) * hov);  // bigger pop + a soft pulse
       u.label.position.y = u.labelBaseY + (0.07 + 0.015*pulse) * hov;   // lifts + bobs a touch
       // brighter on hover — but clamped under the bloom threshold (1.2) so the
