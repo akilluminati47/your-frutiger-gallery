@@ -100,6 +100,19 @@
     </div>
   </div>
 
+  <!-- Custom repo-name modal — popped by the back-wall console's "custom name"
+       toggle. Enter saves, Esc keeps the default (works while pointer-locked). -->
+  <div id="repoModal" class="hidden">
+    <div class="glass card small">
+      <h2>Name your gallery</h2>
+      <p>This becomes your GitHub repository name.</p>
+      <input id="repoNameInput" class="aero-input" type="text" maxlength="64"
+             placeholder="my-frutiger-gallery" autocomplete="off" spellcheck="false" />
+      <button id="repoModalOk" class="aero-btn">Save name</button>
+      <p class="fineprint">Enter saves &nbsp;·&nbsp; Esc keeps the default</p>
+    </div>
+  </div>
+
   <!-- Fatal-error notice if WebGL / network fails -->
   <div id="oops" class="hidden">
     <div class="glass card small">

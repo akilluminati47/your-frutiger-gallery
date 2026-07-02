@@ -1,4 +1,10 @@
-# Frutiger Gallery — a walk-through Frutiger Aero 3D gallery
+# Your Frutiger Gallery — a walk-through Frutiger Aero 3D gallery that signs you up in-world
+
+Walk to the **back of the hall**: a glass console on an XXL rounded slab lets any
+visitor design their own gallery live — name, worlds, atmosphere — then fork this
+repo (optionally under a custom name), auto-commit their design into the fork,
+and deploy it on Cloudflare Pages. The whole sign-up pipeline happens inside the
+3D world.
 
 A walk-through, first-person 3D gallery in the Frutiger Aero style. Each work is a
 live screenshot of a site, hung on glass walls along a floating glass corridor over
@@ -165,6 +171,49 @@ your face, and your links never appear in the repo.
 
 The lines starting with `_` in `owner.config.txt` are just notes — they're valid
 JSON and get ignored, so you can paste the file exactly as-is.
+
+---
+
+## The back-wall console — sign-ups inside the world
+
+At the end of the corridor stands a glass backwall with the **GALLERY CONSOLE**:
+a Frutiger Aero control panel painted on a world-rounded canvas slab. Aim with
+your view (the cursor rides the slab), **click / E** to press, and type straight
+into the lit field. Four tabs:
+
+* **identity** — handle, titles, splash & pause lines. Previews live.
+* **worlds** — the visitor's own project list (plaque + url, add/remove, paged).
+* **atmosphere** — bubbles (live), clouds, volume, shuffle/new-tab toggles.
+* **publish ✦** — the pipeline: name the repo (default: fork as-is; the
+  *custom name* toggle pops a naming modal), **connect GitHub**, one-click
+  **create my gallery** (forks this repo + commits the design into the fork as
+  `owner.config.json`), then **open Cloudflare** to deploy. Copy buttons cover
+  the manual path and the `OWNER_CONFIG` secret path too.
+
+`?console` in the URL renders the same console as a flat overlay with direct
+mouse input — handy on machines without pointer lock (and for debugging).
+
+The console lives in `CONFIG.console` (`config.js`): `enabled: false` removes
+it; `sourceRepo` is the template it forks.
+
+### One-time setup for the connected pipeline (repo owner)
+
+The manual pipeline (fork page + copy buttons) works with **zero setup**. For
+the one-click OAuth flow, the deployment needs a tiny bit of server — the
+Pages Functions in [`functions/api/gh/`](functions/api/gh/):
+
+1. Create a **GitHub OAuth App** (github.com → Settings → Developer settings →
+   OAuth Apps): homepage `https://frutiger-gallery.pages.dev`, callback
+   `https://frutiger-gallery.pages.dev/api/gh/callback` (swap in your domain).
+2. On the Cloudflare Pages project: **Settings → Environment variables** — add
+   `GH_CLIENT_ID` (plain) and `GH_CLIENT_SECRET` (secret). Optional:
+   `TEMPLATE_REPO` = `owner/repo` if your fork source differs.
+3. Redeploy. The console's publish tab switches from deep links to the
+   connected flow automatically.
+
+Privacy shape: the OAuth token only ever lives in an HttpOnly cookie (8 h),
+scope `public_repo`, and the commit endpoint refuses to write to any repo the
+connected account doesn't own.
 
 ---
 

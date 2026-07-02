@@ -798,17 +798,29 @@ const bubbleTex = (() => { drawBubble(46,42); const t = new THREE.CanvasTexture(
 // CONFIG.bubbles knobs: count (0 disables; phones run ~2/3 of it) and
 // size/speed multipliers on the stock feel — see config.js
 const BUB = { count: 44, size: 1, speed: 1, ...(CONFIG.bubbles || {}) };
-{
-  const COUNT = Math.max(0, Math.round(BUB.count * (lowPerf ? 28/44 : 1)));
-  for (let i = 0; i < COUNT; i++){
-    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map:bubbleTex, transparent:true, depthWrite:false }));
-    resetBubble(s, true);
-    s.userData.speed = (0.3 + Math.random()*0.7) * BUB.speed;
-    s.userData.sway  = Math.random()*Math.PI*2;
-    s.userData.popT  = 0;            // >0 while a cursor-pop splash is playing
-    scene.add(s); bubbles.push(s);
+function spawnBubble(){
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map:bubbleTex, transparent:true, depthWrite:false }));
+  resetBubble(s, true);
+  s.userData.speed = (0.3 + Math.random()*0.7) * BUB.speed;
+  s.userData.sway  = Math.random()*Math.PI*2;
+  s.userData.popT  = 0;            // >0 while a cursor-pop splash is playing
+  scene.add(s); bubbles.push(s); noReflect.push(s);   // main view only, not the mirrors
+}
+for (let i = 0, n = Math.max(0, Math.round(BUB.count * (lowPerf ? 28/44 : 1))); i < n; i++) spawnBubble();
+// Console live-preview: re-seed the swarm to the current BUB knobs. Removing
+// pops sprites off both lists (scene + noReflect) so the mirror cull stays true.
+function reseedBubbles(){
+  const want = Math.max(0, Math.round(BUB.count * (lowPerf ? 28/44 : 1)));
+  while (bubbles.length > want){
+    const b = bubbles.pop();
+    scene.remove(b); b.material.dispose();
+    const ni = noReflect.indexOf(b); if (ni >= 0) noReflect.splice(ni, 1);
   }
-  noReflect.push(...bubbles);      // bubbles drift in the main view only, not the mirrors
+  while (bubbles.length < want) spawnBubble();
+  for (const b of bubbles){
+    resetBubble(b, true);
+    b.userData.speed = (0.3 + Math.random()*0.7) * BUB.speed;
+  }
 }
 // Repaint the shared bubble's hot-spot toward the sun's screen-direction. The sun is
 // directional + far, so its view-space x,y give the same shine offset for every
@@ -1229,6 +1241,617 @@ function buildGallery(font){
 }
 
 /* ════════════════════════════════════════════════════════════════
+   5c · the back-wall console — an in-world Frutiger Aero config
+        builder on an XXL rounded canvas slab. Visitors design their
+        own gallery live (identity, worlds, atmosphere), then the
+        publish tab walks the whole sign-up pipeline: fork the
+        template repo (optionally under a custom name), commit their
+        design into the fork, deploy on Cloudflare Pages. Aim with
+        your view — the cursor rides the slab — click / E to press,
+        type to fill fields.
+   ════════════════════════════════════════════════════════════════ */
+const CON_ENABLED = CONFIG.console?.enabled !== false;
+const CON = { W: lowPerf ? 1536 : 2048, H: lowPerf ? 864 : 1152 };   // 16:9 canvas
+let consoleMesh = null, consoleTex = null, consoleCtx = null, consoleGroup = null;
+
+// ── the draft: the visitor's design-in-progress. Seeds from the live CONFIG,
+// survives the OAuth round-trip (and reloads) via localStorage.
+const DRAFT_KEY = 'gallery-console-draft';
+function seedDraft(){
+  return {
+    creator: CONFIG.creator, title: CONFIG.title, tabTitle: CONFIG.tabTitle ?? '',
+    subtitle: CONFIG.subtitle, loadingNote: CONFIG.loadingNote, readyNote: CONFIG.readyNote,
+    pause: { ...(CONFIG.pause || { title:'Paused', note:'Take a breath.', resume:'Resume' }) },
+    bubbles: { ...(CONFIG.bubbles || { count:44, size:1, speed:1 }) },
+    clouds:  { ...(CONFIG.clouds  || { cover:1, cirrus:0.35 }) },
+    volume: CONFIG.volume ?? 0.6,
+    shuffleOrder: CONFIG.shuffleOrder !== false,
+    openInNewTab: !!CONFIG.openInNewTab,
+    projects: CONFIG.projects.map(p => ({ name: p.name, url: p.url })),
+    customName: false, repoName: (CONFIG.console?.sourceRepo || 'you/frutiger-gallery').split('/')[1],
+  };
+}
+let draft = seedDraft(), draftEdited = false;
+try {
+  const saved = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null');
+  if (saved && typeof saved === 'object'){ draft = { ...draft, ...saved }; draftEdited = true; }
+} catch { /* corrupt draft → fresh seed */ }
+let _saveT = null;
+function saveDraft(){
+  draftEdited = true;
+  clearTimeout(_saveT);
+  _saveT = setTimeout(() => { try { localStorage.setItem(DRAFT_KEY, JSON.stringify(draft)); } catch {} }, 250);
+}
+
+// what the visitor designed, as the file their fork will serve (see the
+// commit endpoint / the copy buttons — same shape as owner.config.json)
+function buildOwnerJson(){
+  const d = draft;
+  return {
+    creator: d.creator, title: d.title, tabTitle: d.tabTitle,
+    subtitle: d.subtitle, loadingNote: d.loadingNote, readyNote: d.readyNote,
+    pause: { ...d.pause },
+    bubbles: { count: Math.round(d.bubbles.count), size: +d.bubbles.size.toFixed(2), speed: +d.bubbles.speed.toFixed(2) },
+    clouds:  { cover: +d.clouds.cover.toFixed(2), cirrus: +d.clouds.cirrus.toFixed(2) },
+    volume: +d.volume.toFixed(2),
+    shuffleOrder: d.shuffleOrder, openInNewTab: d.openInNewTab,
+    projects: d.projects.filter(p => p.url.trim()).map(p => ({ name: p.name.trim() || 'World', url: p.url.trim() })),
+  };
+}
+
+// live preview: pour the draft over the running world wherever that's cheap.
+// (clouds are baked into the sky shader at build; projects rebuild the hall —
+// both apply on the deployed fork instead, and the console says so.)
+function applyDraftLive(){
+  CONFIG.creator = draft.creator; CONFIG.title = draft.title; CONFIG.tabTitle = draft.tabTitle;
+  CONFIG.subtitle = draft.subtitle; CONFIG.loadingNote = draft.loadingNote; CONFIG.readyNote = draft.readyNote;
+  CONFIG.pause = { ...draft.pause }; CONFIG.volume = draft.volume;
+  setLine('title', draft.title);
+  setLine('subtitle', draft.subtitle);
+  setLine('pauseTitle', draft.pause.title);
+  setLine('pauseNote',  draft.pause.note);
+  $('resumeBtn').textContent = draft.pause.resume || 'Resume';
+  $('enterBtn').textContent = draft.creator;
+  if (draft.tabTitle) document.title = draft.tabTitle;
+  audio.setVolume(draft.volume);
+  if (BUB.count !== draft.bubbles.count || BUB.size !== draft.bubbles.size || BUB.speed !== draft.bubbles.speed){
+    BUB.count = draft.bubbles.count; BUB.size = draft.bubbles.size; BUB.speed = draft.bubbles.speed;
+    reseedBubbles();
+  }
+}
+
+// ── console UI state ──
+const ui = {
+  tab: 'identity',                 // 'identity' | 'worlds' | 'vibe' | 'publish'
+  widgets: [],                     // rebuilt every paint: {id,x,y,w,h,label,act,get,set,...}
+  hover: null, focus: null,
+  cursor: { x: -1, y: -1, on: false },
+  page: 0,                         // worlds-list pager
+  dirty: true, lastPaint: 0, lastCurX: -9, lastCurY: -9,
+  note: null, noteT: 0,            // transient toast ("copied ✓")
+  gh: { mode: 'unknown', login: null, forkRepo: null, forkUrl: null, busy: null,
+        doneFork: false, doneConfig: false, err: null },
+};
+function toast(msg){ ui.note = msg; ui.noteT = performance.now(); ui.dirty = true; }
+
+// ── geometry: glass backwall pane + rail + the XXL console slab ──
+function buildConsole(){
+  if (!CON_ENABLED) return;
+  consoleGroup = new THREE.Group();
+  consoleGroup.position.set(0, 0, PLAT_Z1 - 0.35);
+  consoleGroup.rotation.y = Math.PI;                    // face back down the hall
+
+  // the glass backwall: closes the far end of the corridor like the side panes
+  const backGlass = new THREE.Mesh(
+    new THREE.PlaneGeometry(DESK_W - 0.8, WALL_H),
+    new THREE.MeshPhysicalMaterial({
+      color: 0xa9cde6, roughness: 0.15, metalness: 0,
+      transparent: true, opacity: 0.4, envMapIntensity: 1.1, side: THREE.DoubleSide,
+    })
+  );
+  backGlass.position.set(0, WALL_H/2, 0);
+  consoleGroup.add(backGlass);
+  const backRail = new THREE.Mesh(
+    new RoundedBoxGeometry(DESK_W - 0.6, 0.12, 0.12, 3, 0.05),
+    new THREE.MeshPhysicalMaterial({
+      color: 0xffffff, roughness: 0.08, clearcoat: 1, envMapIntensity: 1.4,
+      iridescence: lowPerf ? 0 : 0.4, iridescenceIOR: 1.3,
+    })
+  );
+  backRail.position.set(0, WALL_H, 0);
+  consoleGroup.add(backRail);
+
+  // the world-rounded-canvas XXL slab the console UI is skinned onto
+  const CW = 8.4, CH = CW * (CON.H / CON.W);
+  const slabGeo = new RoundedBoxGeometry(CW, CH, 0.26, 6, 0.12);
+  planarUV(slabGeo, CW, CH);
+  const cnv = document.createElement('canvas'); cnv.width = CON.W; cnv.height = CON.H;
+  consoleCtx = cnv.getContext('2d');
+  consoleTex = new THREE.CanvasTexture(cnv);
+  consoleTex.colorSpace = THREE.SRGBColorSpace;
+  consoleTex.generateMipmaps = false;                   // repainted on interaction
+  consoleTex.minFilter = THREE.LinearFilter;
+  consoleTex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  const slabMat = new THREE.MeshBasicMaterial({ map: consoleTex, toneMapped: false });
+  if (FX) slabMat.color.setScalar(1.12);                // same ACES lift as the screens
+  consoleMesh = new THREE.Mesh(slabGeo, slabMat);
+  consoleMesh.position.set(0, CH/2 + 0.12, 0.3);
+  consoleMesh.castShadow = true;
+  consoleGroup.add(consoleMesh);
+  scene.add(consoleGroup);
+
+  if (draftEdited) applyDraftLive();                    // returning mid-design → wear it
+  refreshGhState();
+  drawConsole();
+  document.fonts?.ready?.then(() => { ui.dirty = true; });   // repaint once Quicksand lands
+
+  // ── ?console debug/desk mode: the live canvas as a DOM overlay with direct
+  // mouse interaction — used for development and as an escape hatch anywhere
+  // pointer lock is unavailable. Same widgets, same actions.
+  if (new URLSearchParams(location.search).has('console')){
+    Object.assign(cnv.style, {
+      position:'fixed', inset:'auto 2vw 2vh 2vw', width:'96vw', zIndex: 200,
+      borderRadius:'18px', boxShadow:'0 30px 80px rgba(10,60,120,.45)',
+    });
+    document.body.appendChild(cnv);
+    const toCanvas = (e) => {
+      const r = cnv.getBoundingClientRect();
+      return { x: (e.clientX - r.left) / r.width * CON.W, y: (e.clientY - r.top) / r.height * CON.H };
+    };
+    cnv.addEventListener('mousemove', e => {
+      const p = toCanvas(e), S = CON.W / 2048;
+      ui.cursor = { x: p.x, y: p.y, on: true };
+      const h = widgetAt(p.x / S, p.y / S); if (h !== ui.hover){ ui.hover = h; }
+      ui.dirty = true; drawConsole();
+    });
+    cnv.addEventListener('click', e => { const p = toCanvas(e); ui.cursor = { x:p.x, y:p.y, on:true }; consolePress(); drawConsole(); });
+  }
+}
+
+function widgetAt(x, y){
+  for (let i = ui.widgets.length - 1; i >= 0; i--){
+    const w = ui.widgets[i];
+    if (x >= w.x && x <= w.x + w.w && y >= w.y && y <= w.y + w.h) return w;
+  }
+  return null;
+}
+
+/* ── painting: a tiny immediate-mode aero toolkit on the slab canvas ── */
+const AERO = {
+  ink: '#14507e', inkSoft: 'rgba(20,80,126,.62)', inkFaint: 'rgba(20,80,126,.42)',
+  aqua: '#1a96ff', deep: '#0a5aa8', green: '#33c75a',
+  glassFill: 'rgba(255,255,255,.55)', glassLine: 'rgba(70,150,215,.38)',
+};
+function cFont(cc, px, w = 500){ cc.font = `${w} ${px}px Quicksand, "Segoe UI", sans-serif`; }
+function cGlassInset(cc, x, y, w, h, r, hot){
+  cc.fillStyle = hot ? 'rgba(255,255,255,.8)' : AERO.glassFill;
+  roundRect(cc, x, y, w, h, r); cc.fill();
+  cc.strokeStyle = hot ? AERO.aqua : AERO.glassLine; cc.lineWidth = hot ? 4 : 2;
+  roundRect(cc, x, y, w, h, r); cc.stroke();
+}
+function cAeroPill(cc, x, y, w, h, style, hot){
+  const g = cc.createLinearGradient(0, y, 0, y + h);
+  if (style === 'green'){ g.addColorStop(0,'#8ee69a'); g.addColorStop(.5,'#3ecb62'); g.addColorStop(1,'#1d9e46'); }
+  else if (style === 'ghost'){ g.addColorStop(0,'rgba(255,255,255,.9)'); g.addColorStop(1,'rgba(215,240,255,.9)'); }
+  else { g.addColorStop(0,'#9fd8ff'); g.addColorStop(.5,'#2a9df4'); g.addColorStop(1,'#0b6cc9'); }
+  cc.fillStyle = g; roundRect(cc, x, y, w, h, h/2); cc.fill();
+  // top gloss
+  const gl = cc.createLinearGradient(0, y, 0, y + h*0.55);
+  gl.addColorStop(0,'rgba(255,255,255,.85)'); gl.addColorStop(1,'rgba(255,255,255,.06)');
+  cc.save(); roundRect(cc, x+3, y+3, w-6, h*0.5, h/2 - 3); cc.clip();
+  cc.fillStyle = gl; cc.fillRect(x, y, w, h*0.6); cc.restore();
+  cc.strokeStyle = hot ? '#ffffff' : 'rgba(255,255,255,.65)'; cc.lineWidth = hot ? 4 : 2;
+  roundRect(cc, x, y, w, h, h/2); cc.stroke();
+}
+// widget emitters — each draws AND registers its hit-rect + action
+function wButton(cc, id, label, x, y, w, h, act, style = 'aqua', sub){
+  const hot = ui.hover?.id === id;
+  cAeroPill(cc, x, y, w, h, style, hot);
+  cc.fillStyle = style === 'ghost' ? AERO.deep : '#ffffff';
+  let px = h * 0.42;                                  // shrink-to-fit long labels
+  cFont(cc, px, 600);
+  while (px > 18 && cc.measureText(label).width > w - 44){ px -= 1; cFont(cc, px, 600); }
+  cc.textAlign = 'center'; cc.textBaseline = 'middle';
+  cc.fillText(label, x + w/2, y + h/2 + 1);
+  if (sub){ cc.fillStyle = AERO.inkSoft; cFont(cc, 22); cc.fillText(sub, x + w/2, y + h + 24); }
+  ui.widgets.push({ id, x, y, w, h, label, act });
+}
+function wField(cc, id, label, x, y, w, get, set, max = 60){
+  const h = 62, focused = ui.focus === id, hot = ui.hover?.id === id;
+  cc.fillStyle = AERO.inkSoft; cFont(cc, 24, 600); cc.textAlign = 'left'; cc.textBaseline = 'alphabetic';
+  cc.fillText(label, x + 6, y - 10);
+  cGlassInset(cc, x, y, w, h, 16, hot || focused);
+  cc.fillStyle = AERO.ink; cFont(cc, 30); cc.textAlign = 'left'; cc.textBaseline = 'middle';
+  const v = get();
+  let shown = v;
+  while (shown.length && cc.measureText(shown + '▎').width > w - 36) shown = shown.slice(1);
+  cc.fillText(shown + (focused ? '▎' : ''), x + 18, y + h/2 + 1);
+  if (!v && !focused){ cc.fillStyle = AERO.inkFaint; cc.fillText('· empty ·', x + 18, y + h/2 + 1); }
+  ui.widgets.push({ id, x, y, w, h, label, type:'field', get, set, max,
+                    act(){ ui.focus = id; ui.dirty = true; } });
+}
+function wSlider(cc, id, label, x, y, w, val, min, max, set, fmt, note){
+  const hot = ui.hover?.id === id;
+  cc.fillStyle = AERO.inkSoft; cFont(cc, 24, 600); cc.textAlign = 'left'; cc.textBaseline = 'alphabetic';
+  cc.fillText(label, x + 6, y - 8);
+  cc.textAlign = 'right'; cc.fillStyle = AERO.deep; cFont(cc, 24, 700);
+  cc.fillText(fmt(val), x + w - 6, y - 8);
+  if (note){ cc.textAlign = 'left'; cc.fillStyle = AERO.inkFaint; cFont(cc, 19); cc.fillText(note, x + 6, y + 44); }
+  const th = 18, ty = y + 6;
+  cc.fillStyle = 'rgba(150,200,235,.45)'; roundRect(cc, x, ty, w, th, th/2); cc.fill();
+  const t = clamp((val - min) / (max - min), 0, 1);
+  const g = cc.createLinearGradient(x, 0, x + w, 0);
+  g.addColorStop(0, AERO.green); g.addColorStop(1, AERO.aqua);
+  cc.fillStyle = g; roundRect(cc, x, ty, Math.max(th, w*t), th, th/2); cc.fill();
+  cc.beginPath(); cc.arc(x + w*t, ty + th/2, hot ? 17 : 14, 0, 7);
+  cc.fillStyle = '#ffffff'; cc.fill();
+  cc.strokeStyle = AERO.aqua; cc.lineWidth = 3; cc.stroke();
+  ui.widgets.push({ id, x: x - 10, y: y - 14, w: w + 20, h: 52, label, type:'slider',
+                    act(cx){ set(min + clamp((cx - x)/w, 0, 1) * (max - min)); } });
+}
+function wToggle(cc, id, label, x, y, on, set, sub){
+  const w = 92, h = 48, hot = ui.hover?.id === id;
+  cc.fillStyle = on ? '#57c46e' : 'rgba(150,180,205,.55)';
+  roundRect(cc, x, y, w, h, h/2); cc.fill();
+  cc.strokeStyle = hot ? AERO.aqua : 'rgba(255,255,255,.7)'; cc.lineWidth = hot ? 4 : 2;
+  roundRect(cc, x, y, w, h, h/2); cc.stroke();
+  cc.beginPath(); cc.arc(on ? x + w - h/2 : x + h/2, y + h/2, h/2 - 6, 0, 7);
+  cc.fillStyle = '#ffffff'; cc.fill();
+  cc.fillStyle = AERO.ink; cFont(cc, 26, 600); cc.textAlign = 'left'; cc.textBaseline = 'middle';
+  cc.fillText(label, x + w + 18, y + h/2 + 1);
+  if (sub){ cc.fillStyle = AERO.inkFaint; cFont(cc, 19); cc.fillText(sub, x + w + 18, y + h/2 + 30); }
+  ui.widgets.push({ id, x, y, w: w + 20 + cc.measureText(label).width, h, label, act(){ set(!on); } });
+}
+
+function drawConsole(){
+  if (!consoleCtx) return;
+  const cc = consoleCtx, W = CON.W, H = CON.H, S = W / 2048;   // layout designed at 2048-wide
+  cc.save(); cc.scale(S, S);
+  const LW = 2048, LH = 1152;
+  ui.widgets.length = 0;
+  // aero glass face
+  const bg = cc.createLinearGradient(0, 0, 0, LH);
+  bg.addColorStop(0, '#f4fbff'); bg.addColorStop(.45, '#ddf1fe'); bg.addColorStop(1, '#c9e7fb');
+  cc.fillStyle = bg; cc.fillRect(0, 0, LW, LH);
+  const sheen = cc.createLinearGradient(0, 0, 0, LH*0.4);
+  sheen.addColorStop(0, 'rgba(255,255,255,.85)'); sheen.addColorStop(1, 'rgba(255,255,255,0)');
+  cc.fillStyle = sheen; cc.fillRect(0, 0, LW, LH*0.4);
+  // header
+  cc.fillStyle = AERO.deep; cFont(cc, 58, 700); cc.textAlign = 'left'; cc.textBaseline = 'alphabetic';
+  cc.fillText('GALLERY CONSOLE', 64, 96);
+  cc.fillStyle = AERO.inkSoft; cFont(cc, 27);
+  cc.textAlign = 'right'; cc.fillText('design yours · fork it · deploy it', LW - 64, 96);
+  // tabs
+  const tabs = [['identity','identity'],['worlds','worlds'],['vibe','atmosphere'],['publish','publish ✦']];
+  let tx = 64;
+  for (const [id, label] of tabs){
+    const tw = 300, th = 72, on = ui.tab === id, hot = ui.hover?.id === 'tab:' + id;
+    if (on) cAeroPill(cc, tx, 130, tw, th, 'aqua', hot);
+    else { cGlassInset(cc, tx, 130, tw, th, th/2, hot); }
+    cc.fillStyle = on ? '#ffffff' : AERO.deep; cFont(cc, 30, 700);
+    cc.textAlign = 'center'; cc.textBaseline = 'middle';
+    cc.fillText(label, tx + tw/2, 130 + th/2 + 1);
+    const tid = 'tab:' + id;
+    ui.widgets.push({ id: tid, x: tx, y: 130, w: tw, h: th, label,
+                      act(){ ui.tab = id; ui.focus = null; ui.dirty = true; } });
+    tx += tw + 28;
+  }
+  const top = 280;
+  if (ui.tab === 'identity')  drawIdentity(cc, top);
+  else if (ui.tab === 'worlds') drawWorlds(cc, top);
+  else if (ui.tab === 'vibe')  drawVibe(cc, top);
+  else drawPublish(cc, top);
+  // footer hint
+  cc.fillStyle = AERO.inkFaint; cFont(cc, 24); cc.textAlign = 'center'; cc.textBaseline = 'alphabetic';
+  cc.fillText(isTouch ? 'aim by dragging · tap to press fields & buttons'
+                      : 'aim with your view · click / E to press · type to fill the lit field',
+              LW/2, LH - 28);
+  // toast
+  if (ui.note && performance.now() - ui.noteT < 2600){
+    cFont(cc, 28, 600);
+    const tw2 = cc.measureText(ui.note).width + 72;
+    cGlassInset(cc, LW/2 - tw2/2, LH - 130, tw2, 64, 32, true);
+    cc.fillStyle = AERO.deep; cc.textAlign = 'center'; cc.textBaseline = 'middle';
+    cc.fillText(ui.note, LW/2, LH - 130 + 33);
+  } else ui.note = null;
+  // the aero cursor rides the slab
+  if (ui.cursor.on){
+    const cx = ui.cursor.x / S, cy = ui.cursor.y / S;
+    cc.save(); cc.translate(cx, cy);
+    cc.shadowColor = 'rgba(10,60,120,.4)'; cc.shadowBlur = 14; cc.shadowOffsetY = 4;
+    cc.beginPath();                                   // classic pointer, aero-glossed
+    cc.moveTo(0, 0); cc.lineTo(0, 44); cc.lineTo(11, 33); cc.lineTo(19, 50);
+    cc.lineTo(27, 46); cc.lineTo(19, 30); cc.lineTo(34, 30); cc.closePath();
+    const pg = cc.createLinearGradient(0, 0, 0, 50);
+    pg.addColorStop(0, '#ffffff'); pg.addColorStop(1, '#bfe2ff');
+    cc.fillStyle = pg; cc.fill();
+    cc.shadowColor = 'transparent';
+    cc.strokeStyle = AERO.deep; cc.lineWidth = 3; cc.stroke();
+    cc.restore();
+  }
+  cc.restore();
+  consoleTex.needsUpdate = true;
+  ui.dirty = false; ui.lastPaint = performance.now();
+  ui.lastCurX = ui.cursor.x; ui.lastCurY = ui.cursor.y;
+}
+
+function drawIdentity(cc, top){
+  const colW = 900, x1 = 64, x2 = 64 + colW + 120;
+  const d = draft, mk = (id, label, x, y, get, set, max) =>
+    wField(cc, id, label, x, y, colW, get, set, max);
+  let y = top + 40;
+  mk('f:creator', 'your handle — the entrance button', x1, y, () => d.creator, v => { d.creator = v; }, 40);
+  mk('f:title', 'gallery title', x1, y += 130, () => d.title, v => { d.title = v; }, 40);
+  mk('f:tab', 'browser-tab title', x1, y += 130, () => d.tabTitle, v => { d.tabTitle = v; }, 60);
+  mk('f:sub', 'splash subtitle  (empty hides it)', x1, y += 130, () => d.subtitle, v => { d.subtitle = v; }, 60);
+  mk('f:load', 'loading line  (empty hides it)', x1, y += 130, () => d.loadingNote, v => { d.loadingNote = v; }, 60);
+  y = top + 40;
+  mk('f:ready', 'ready line — {n} = world count', x2, y, () => d.readyNote, v => { d.readyNote = v; }, 60);
+  mk('f:ptitle', 'pause title', x2, y += 130, () => d.pause.title, v => { d.pause.title = v; }, 40);
+  mk('f:pnote', 'pause note', x2, y += 130, () => d.pause.note, v => { d.pause.note = v; }, 60);
+  mk('f:presume', 'resume button', x2, y += 130, () => d.pause.resume, v => { d.pause.resume = v; }, 30);
+  cc.fillStyle = AERO.inkFaint; cFont(cc, 22); cc.textAlign = 'left'; cc.textBaseline = 'alphabetic';
+  cc.fillText('everything here previews live — check the splash & pause card', x2 + 6, top + 40 + 3*130 + 130);
+}
+
+function drawWorlds(cc, top){
+  const d = draft, PER = 6, pages = Math.max(1, Math.ceil(d.projects.length / PER));
+  ui.page = clamp(ui.page, 0, pages - 1);
+  cc.fillStyle = AERO.inkSoft; cFont(cc, 26); cc.textAlign = 'left'; cc.textBaseline = 'alphabetic';
+  cc.fillText(`your worlds — ${d.projects.length} panels` +
+              (d.projects.length % 2 ? '  ·  add one more to balance both walls' : '  ·  walls balanced ✓'),
+              64, top + 6);
+  let y = top + 70;
+  const start = ui.page * PER;
+  d.projects.slice(start, start + PER).forEach((p, k) => {
+    const i = start + k;
+    wField(cc, `w:name:${i}`, k === 0 ? 'plaque' : '', 64, y, 430, () => p.name, v => { p.name = v; }, 30);
+    wField(cc, `w:url:${i}`, k === 0 ? 'url' : '', 540, y, 1280, () => p.url, v => { p.url = v; }, 200);
+    wButton(cc, `w:del:${i}`, '✕', 1860, y, 62, 62, () => {
+      d.projects.splice(i, 1); ui.focus = null; saveDraft(); ui.dirty = true;
+    }, 'ghost');
+    y += 108;
+  });
+  wButton(cc, 'w:add', '+ add a world', 64, y + 10, 360, 70, () => {
+    d.projects.push({ name: 'New World', url: 'https://' });
+    ui.page = Math.floor((d.projects.length - 1) / PER);
+    saveDraft(); ui.dirty = true;
+  }, 'green');
+  cc.fillStyle = AERO.inkFaint; cFont(cc, 22); cc.textAlign = 'left'; cc.textBaseline = 'middle';
+  cc.fillText('applies on your deployed gallery — the hall rebuilds itself to fit', 458, y + 46);
+  if (pages > 1){
+    wButton(cc, 'w:prev', '‹', 1700, y + 10, 70, 70, () => { ui.page--; ui.dirty = true; }, 'ghost');
+    wButton(cc, 'w:next', '›', 1852, y + 10, 70, 70, () => { ui.page++; ui.dirty = true; }, 'ghost');
+    cc.fillStyle = AERO.inkSoft; cFont(cc, 26, 600); cc.textAlign = 'center'; cc.textBaseline = 'middle';
+    cc.fillText(`${ui.page + 1} / ${pages}`, 1811, y + 45);
+  }
+}
+
+function drawVibe(cc, top){
+  const d = draft, colW = 860, x1 = 64, x2 = 64 + colW + 200;
+  let y = top + 50;
+  wSlider(cc, 'v:bcount', 'bubbles', x1, y, colW, d.bubbles.count, 0, 96,
+    v => { d.bubbles.count = Math.round(v); vibeLive(); }, v => `${Math.round(v)}`);
+  wSlider(cc, 'v:bsize', 'bubble size', x1, y += 130, colW, d.bubbles.size, 0.4, 2,
+    v => { d.bubbles.size = v; vibeLive(); }, v => `${v.toFixed(2)}×`);
+  wSlider(cc, 'v:bspeed', 'bubble speed', x1, y += 130, colW, d.bubbles.speed, 0.3, 2.5,
+    v => { d.bubbles.speed = v; vibeLive(); }, v => `${v.toFixed(2)}×`);
+  wSlider(cc, 'v:vol', 'sound volume', x1, y += 130, colW, d.volume, 0, 1,
+    v => { d.volume = v; vibeLive(); }, v => `${Math.round(v*100)}%`);
+  y = top + 50;
+  wSlider(cc, 'v:cover', 'cloud cover', x2, y, colW, d.clouds.cover, 0, 1,
+    v => { d.clouds.cover = v; saveDraft(); }, v => v.toFixed(2), 'applies on your deployed gallery');
+  wSlider(cc, 'v:cirrus', 'cirrus streaks', x2, y += 130, colW, d.clouds.cirrus, 0, 1,
+    v => { d.clouds.cirrus = v; saveDraft(); }, v => v.toFixed(2), 'applies on your deployed gallery');
+  wToggle(cc, 'v:shuffle', 'shuffle world order each visit', x2, y += 150, d.shuffleOrder,
+    v => { d.shuffleOrder = v; saveDraft(); ui.dirty = true; });
+  wToggle(cc, 'v:newtab', 'open worlds in a new tab', x2, y += 110, d.openInNewTab,
+    v => { d.openInNewTab = v; saveDraft(); ui.dirty = true; });
+}
+function vibeLive(){ saveDraft(); applyDraftLive(); ui.dirty = true; }
+
+function drawPublish(cc, top){
+  const d = draft, gh = ui.gh, x1 = 64, colW = 1000, x2 = 1180;
+  const step = (n, label, done, y) => {
+    cc.beginPath(); cc.arc(x1 + 22, y - 10, 20, 0, 7);
+    cc.fillStyle = done ? AERO.green : 'rgba(150,190,220,.6)'; cc.fill();
+    cc.fillStyle = '#ffffff'; cFont(cc, 24, 700); cc.textAlign = 'center'; cc.textBaseline = 'middle';
+    cc.fillText(done ? '✓' : `${n}`, x1 + 22, y - 9);
+    cc.fillStyle = AERO.deep; cFont(cc, 32, 700); cc.textAlign = 'left'; cc.textBaseline = 'middle';
+    cc.fillText(label, x1 + 60, y - 10);
+  };
+  let y = top + 40;
+  // 1 · name
+  step(1, 'name it', true, y);
+  const shownName = d.customName ? d.repoName : (CONFIG.console?.sourceRepo || 'x/your-frutiger-gallery').split('/')[1];
+  cGlassInset(cc, x1 + 60, y + 20, 620, 62, 16, false);
+  cc.fillStyle = AERO.ink; cFont(cc, 30, 600); cc.textAlign = 'left'; cc.textBaseline = 'middle';
+  cc.fillText(shownName, x1 + 78, y + 52);
+  wToggle(cc, 'p:custom', 'custom name', x1 + 720, y + 27, d.customName, v => {
+    if (v) openRepoModal(); else { d.customName = false; saveDraft(); ui.dirty = true; }
+  });
+  // 2 · github
+  y += 170;
+  step(2, 'get your copy on GitHub', gh.doneFork, y);
+  if (gh.mode === 'connected'){
+    cc.fillStyle = AERO.inkSoft; cFont(cc, 25); cc.textAlign = 'left'; cc.textBaseline = 'alphabetic';
+    cc.fillText(`connected as ${gh.login} ✓`, x1 + 60, y + 44);
+    const busy = gh.busy != null;
+    wButton(cc, 'p:fork', busy ? (gh.busy === 'fork' ? 'forking…' : 'writing your design…')
+                               : (gh.doneFork ? 'fork again' : 'create my gallery ✦'),
+            x1 + 60, y + 62, 560, 84, busy ? null : doCreateGallery, gh.doneFork ? 'ghost' : 'green');
+    if (gh.forkRepo){
+      cc.fillStyle = AERO.inkSoft; cFont(cc, 22); cc.textAlign = 'left'; cc.textBaseline = 'alphabetic';
+      cc.fillText(`${gh.forkRepo}${gh.doneConfig ? '  ·  design committed ✓' : ''}`, x1 + 60, y + 185);
+    }
+  } else if (gh.mode === 'anon'){
+    wButton(cc, 'p:connect', 'connect GitHub', x1 + 60, y + 40, 480, 84, () => {
+      saveDraft(); location.href = '/api/gh/login';
+    });
+    cc.fillStyle = AERO.inkFaint; cFont(cc, 21); cc.textAlign = 'left'; cc.textBaseline = 'alphabetic';
+    cc.fillText('one click — we fork the template into your account & commit your design', x1 + 60, y + 165);
+  } else {
+    wButton(cc, 'p:forklink', 'fork on GitHub ↗', x1 + 60, y + 40, 480, 84, () => {
+      saveDraft();
+      window.open(`https://github.com/${CONFIG.console?.sourceRepo || ''}/fork`, '_blank');
+      toast('fork page opened — pick your name there');
+    });
+    cc.fillStyle = AERO.inkFaint; cFont(cc, 21); cc.textAlign = 'left'; cc.textBaseline = 'alphabetic';
+    cc.fillText(gh.mode === 'nooauth' ? 'name yours on the fork page, then copy your design (right) into it'
+                                      : 'checking sign-in…', x1 + 60, y + 165);
+  }
+  if (gh.err){ cc.fillStyle = '#b3403f'; cFont(cc, 22); cc.textAlign='left'; cc.textBaseline='alphabetic'; cc.fillText(gh.err, x1 + 60, y + 210); }
+  // 3 · cloudflare
+  y += 250;
+  step(3, 'deploy on Cloudflare Pages', false, y);
+  wButton(cc, 'p:deploy', 'open Cloudflare ↗', x1 + 60, y + 40, 480, 84, () => {
+    window.open('https://dash.cloudflare.com/?to=/:account/pages/new/provider/github', '_blank');
+    toast('pick your new repo · accept the defaults · deploy');
+  });
+  cc.fillStyle = AERO.inkFaint; cFont(cc, 21); cc.textAlign = 'left'; cc.textBaseline = 'alphabetic';
+  cc.fillText('connect the repo you just made · no build command · every push redeploys', x1 + 60, y + 165);
+  // right rail — the design payload
+  cGlassInset(cc, x2, top + 10, 800, 700, 26, false);
+  cc.fillStyle = AERO.deep; cFont(cc, 34, 700); cc.textAlign = 'left'; cc.textBaseline = 'alphabetic';
+  cc.fillText('your design', x2 + 40, top + 70);
+  cc.fillStyle = AERO.inkSoft; cFont(cc, 26);
+  const oj = buildOwnerJson();
+  [
+    `“${oj.title}”  by  ${oj.creator}`,
+    `${oj.projects.length} worlds  ·  ${Math.round(oj.bubbles.count)} bubbles`,
+    `tab: ${oj.tabTitle || '(default)'}`,
+    gh.doneConfig ? 'committed to your fork as owner.config.json ✓'
+                  : 'connected sign-ups commit this automatically —',
+    gh.doneConfig ? '' : 'or copy it yourself:',
+  ].forEach((l, i) => l && cc.fillText(l, x2 + 40, top + 130 + i * 48));
+  wButton(cc, 'p:copyjson', 'copy owner.config.json', x2 + 40, top + 400, 460, 74, async () => {
+    try { await navigator.clipboard.writeText(JSON.stringify(buildOwnerJson(), null, 2)); toast('copied ✓ — commit it to your fork'); }
+    catch { toast('clipboard blocked — use ?console mode'); }
+  }, 'ghost');
+  wButton(cc, 'p:copysecret', 'copy as OWNER_CONFIG secret', x2 + 40, top + 500, 460, 74, async () => {
+    try { await navigator.clipboard.writeText(JSON.stringify(buildOwnerJson(), null, 2)); toast('copied ✓ — paste into a Pages secret named OWNER_CONFIG'); }
+    catch { toast('clipboard blocked — use ?console mode'); }
+  }, 'ghost');
+  cc.fillStyle = AERO.inkFaint; cFont(cc, 21);
+  cc.fillText('secret = same JSON, kept out of the repo (Settings → Env vars)', x2 + 40, top + 620);
+}
+
+/* ── publish actions ── */
+async function refreshGhState(){
+  if (!CON_ENABLED) return;
+  try {
+    const r = await fetch('/api/gh/me');
+    if (r.ok){ const j = await r.json(); ui.gh.mode = 'connected'; ui.gh.login = j.login; }
+    else if (r.status === 401) ui.gh.mode = 'anon';
+    else ui.gh.mode = 'nooauth';
+  } catch { ui.gh.mode = 'nooauth'; }
+  ui.dirty = true;
+}
+async function doCreateGallery(){
+  const gh = ui.gh;
+  if (gh.busy) return;
+  gh.err = null; gh.busy = 'fork'; ui.dirty = true; drawConsole();
+  try {
+    const body = draft.customName && draft.repoName ? { name: draft.repoName.trim() } : {};
+    const fr = await fetch('/api/gh/fork', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(body) });
+    const fj = await fr.json().catch(() => ({}));
+    if (!fr.ok) throw new Error(fj.error || `fork failed (${fr.status})`);
+    gh.forkRepo = fj.repo; gh.forkUrl = fj.url; gh.doneFork = true;
+    gh.busy = 'commit'; ui.dirty = true; drawConsole();
+    const cr = await fetch('/api/gh/commit', { method:'POST', headers:{'content-type':'application/json'},
+      body: JSON.stringify({ repo: fj.repo, config: buildOwnerJson() }) });
+    const cj = await cr.json().catch(() => ({}));
+    if (!cr.ok) throw new Error(cj.error || `config commit failed (${cr.status})`);
+    gh.doneConfig = true;
+    audio.bloop(consoleGroup?.position);
+    toast('your gallery exists ✦ now deploy it on Cloudflare');
+  } catch (e){
+    gh.err = String(e.message || e).slice(0, 90);
+  }
+  gh.busy = null; ui.dirty = true;
+}
+
+/* ── the custom repo-name modal (DOM, pointer-lock aware) ── */
+let modalOpen = false, relockAfterModal = false;
+function openRepoModal(){
+  const m = $('repoModal'); if (!m) return;
+  modalOpen = true;
+  relockAfterModal = !isTouch && controls.isLocked;
+  if (relockAfterModal) controls.unlock();             // unlock handler skips pause via modalOpen
+  const inp = $('repoNameInput');
+  inp.value = draft.customName ? draft.repoName : '';
+  m.classList.remove('hidden');
+  setTimeout(() => inp.focus(), 40);
+}
+function closeRepoModal(save){
+  const m = $('repoModal'); if (!m) return;
+  const v = $('repoNameInput').value.trim().replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+  if (save && v){ draft.customName = true; draft.repoName = v; saveDraft(); }
+  else if (save && !v){ draft.customName = false; saveDraft(); }
+  if (!save) draft.customName = false;
+  m.classList.add('hidden');
+  modalOpen = false; ui.dirty = true;
+  if (relockAfterModal){ relockAfterModal = false; controls.lock(); }
+}
+$('repoModalOk')?.addEventListener('click', () => closeRepoModal(true));
+
+/* ── per-frame: aim, hover, repaint ── */
+const _conRay = new THREE.Raycaster();
+function updateConsole(){
+  if (!consoleMesh) return;
+  const now = performance.now();
+  let on = false, cx = -1, cy = -1;
+  if ((state === 'play' || state === 'intro') && player.position.z > PLAT_Z1 - 9.5){
+    camera.getWorldDirection(_gazeDir);
+    if (_gazeDir.z > 0.25){
+      _conRay.setFromCamera({ x: 0, y: 0 }, camera);
+      const hit = _conRay.intersectObject(consoleMesh, false)[0];
+      if (hit?.uv){ on = true; cx = hit.uv.x * CON.W; cy = (1 - hit.uv.y) * CON.H; }
+    }
+  }
+  const was = ui.cursor.on;
+  ui.cursor = { x: cx, y: cy, on };
+  if (on){
+    const h = widgetAt(cx / (CON.W/2048), cy / (CON.W/2048));
+    if (h?.id !== ui.hover?.id){ ui.hover = h; ui.dirty = true; }
+  } else if (ui.hover){ ui.hover = null; ui.dirty = true; }
+  if (was !== on) ui.dirty = true;
+  const moved = on && (Math.abs(cx - ui.lastCurX) > 3 || Math.abs(cy - ui.lastCurY) > 3);
+  const caret = ui.focus && now - ui.lastPaint > 500;    // caret keep-alive
+  if ((ui.dirty || moved || caret || ui.note) && now - ui.lastPaint > 33) drawConsole();
+}
+
+/* ── pressing & typing ── */
+function consolePress(){
+  if (!consoleMesh || !ui.cursor.on) return false;
+  const S = CON.W / 2048;
+  const w = widgetAt(ui.cursor.x / S, ui.cursor.y / S);
+  if (ui.focus && (!w || w.id !== ui.focus)) ui.focus = null;   // click elsewhere blurs
+  if (!w){ ui.dirty = true; return true; }                      // on-slab click still consumed
+  audio.init(); audio.tick();
+  if (w.type === 'slider') w.act(ui.cursor.x / S);
+  else w.act?.(ui.cursor.x / S);
+  ui.dirty = true;
+  return true;
+}
+function consoleTypeKey(e){
+  if (modalOpen){                                        // modal owns the keyboard
+    if (e.key === 'Enter'){ closeRepoModal(true); e.preventDefault(); }
+    else if (e.key === 'Escape'){ closeRepoModal(false); e.preventDefault(); }
+    return true;
+  }
+  if (!ui.focus) return false;
+  const w = ui.widgets.find(x => x.id === ui.focus && x.type === 'field');
+  if (!w){ ui.focus = null; return false; }
+  if (e.key === 'Enter' || e.key === 'Escape' || e.key === 'Tab'){ ui.focus = null; }
+  else if (e.key === 'Backspace'){ w.set(w.get().slice(0, -1)); saveDraft(); applyDraftLive(); }
+  else if (e.key.length === 1 && w.get().length < w.max){ w.set(w.get() + e.key); saveDraft(); applyDraftLive(); }
+  else return true;                                      // swallow arrows etc. while typing
+  e.preventDefault(); ui.dirty = true;
+  return true;
+}
+
+/* ════════════════════════════════════════════════════════════════
    6 · controls — pointer-lock mouse + gamepad + touch, all smoothed
    ════════════════════════════════════════════════════════════════ */
 controls = new PointerLockControls(camera, renderer.domElement);
@@ -1277,6 +1900,7 @@ function setInputMode(mode){
 /* ── keyboard ── */
 const keys = {};
 addEventListener('keydown', e => {
+  if (consoleTypeKey(e)) return;      // a console field (or its modal) owns the keyboard
   keys[e.code] = true;
   if (e.code === 'KeyE') tryLaunch();
   if (e.code !== 'Escape') setInputMode('keyboard');
@@ -1579,7 +2203,16 @@ const audio = (() => {
     env(o2,t+0.06, 0.008,0.50,0.28,sp); o2.start(t+0.06); o2.stop(t+0.7);
     env(o3,t+0.10, 0.008,0.45,0.18,sp); o3.start(t+0.10); o3.stop(t+0.7);
   }
-  return { init, droplet, pop, whoosh, bloop };
+  // short glassy tick for console-widget presses — quieter than a bubble pop
+  function tick(){
+    if (!ctx) return; const t = ctx.currentTime;
+    const o = ctx.createOscillator(); o.type = 'sine';
+    o.frequency.setValueAtTime(1320, t); o.frequency.exponentialRampToValueAtTime(880, t+0.05);
+    env(o, t, 0.003, 0.07, 0.22); o.start(t); o.stop(t+0.12);
+  }
+  // console volume slider drives the master gain live
+  function setVolume(v){ if (master) master.gain.value = clamp(v, 0, 1); }
+  return { init, droplet, pop, whoosh, bloop, tick, setVolume };
 })();
 // unlock the AudioContext on the first user gesture so menu bubble-pops have sound
 // before the visitor ever clicks Enter (browsers gate audio behind a real gesture)
@@ -1764,7 +2397,7 @@ controls.addEventListener('lock', () => {
   crosshairEl?.classList.remove('show');     // clear the menu cursor while in-game
   if (!started) beginPlay(); else resumeGame();
 });
-controls.addEventListener('unlock', () => { if (state === 'launching') return; pauseGame(); });
+controls.addEventListener('unlock', () => { if (state === 'launching' || modalOpen) return; pauseGame(); });
 
 $('enterBtn').addEventListener('click', startExperience);
 $('resumeBtn').addEventListener('click', () => {
@@ -1784,6 +2417,7 @@ renderer.domElement.addEventListener('click', () => {
 });
 
 function tryLaunch(){
+  if (consolePress()) return;           // aiming at the back-wall console → press it
   if (state !== 'play' || !activeFrame || launch) return;
   if (activeFrame.userData.loadState !== 'done') return;   // world still loading
   const f = activeFrame;
@@ -1833,6 +2467,7 @@ function animate(){
   perfGovern(dt);              // dynamic resolution: trade pixels for a locked frame rate
   pollPad(dt);                 // every frame — also drives the pause‑menu cursor
   updateLoadingSystem(dt, t);
+  updateConsole();             // back-wall console: aim, hover, repaint
   updateSunGaze(dt);
 
   // Name-plaque bloop-in: scale 0.01→1.22→1.0 with overshoot, opacity 0→1
@@ -2092,6 +2727,7 @@ new FontLoader().load(
   'https://unpkg.com/three@0.180.0/examples/fonts/helvetiker_bold.typeface.json',
   (font) => {
     buildGallery(font);
+    buildConsole();                          // back-wall config console (before the one-shot shadow bake)
     renderer.shadowMap.needsUpdate = true;   // render the static shadow map once, now that all casters exist
     setLine('loadnote', (CONFIG.readyNote ?? '{n} worlds ready')
       .replace('{n}', CONFIG.projects.length));

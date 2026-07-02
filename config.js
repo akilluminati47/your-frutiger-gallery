@@ -66,6 +66,17 @@ export const CONFIG = {
     { name: "GitHub Repo",   url: "https://github.com/akilluminati47/frutiger-gallery" }, // back · left  (gaze — fork me)
   ],
 
+  // ── CREATE-YOUR-OWN CONSOLE ────────────────────────────────────────
+  // The glass config console on the hall's back wall: an interactive
+  // builder where visitors design their own gallery live, then fork this
+  // repo and deploy it — the whole sign-up pipeline in-world.
+  //   enabled    → false removes the back-wall console entirely
+  //   sourceRepo → the GitHub template repo the console forks for new owners
+  console: {
+    enabled: true,
+    sourceRepo: "akilluminati47/your-frutiger-gallery",
+  },
+
   // Shuffle the gallery order on every page load. Set false to keep the
   // fixed order written above.
   shuffleOrder: false,
