@@ -66,6 +66,16 @@ body{
 .card.small p{ margin-bottom:0; opacity:.82; }
 .card.small .aero-btn{ margin-top:26px; }
 
+/* ── configurable card lines ──
+   gallery.js tags any line the owner blanks out ("" in CONFIG) with .gone,
+   and the card re-balances so every combination still reads as designed:
+   no cramped title-on-button, no orphaned gaps. */
+.gone{ display:none !important; }
+/* subtitle removed → the enter button keeps breathing room under the title */
+#title:not(.gone) + #subtitle.gone + #enterBtn{ margin-top:30px; }
+/* pause card stripped down to the Resume pill → drop its now-orphaned gap */
+#pauseTitle.gone + #pauseNote.gone + #resumeBtn{ margin-top:0; }
+
 #enter,#pause,#oops{
   position:fixed; inset:0; z-index:50;
   display:flex; align-items:center; justify-content:center;

@@ -5,6 +5,9 @@
   "creator": "your-name",
   "title": "FRUTIGER GALLERY",
 
+  "_tab_title":     "The text shown on the browser tab / bookmark.",
+  "tabTitle": "Frutiger Gallery ● 3D Gallery",
+
   "_splash_lines":  "The three small lines on the entry card. Put text between the quotes, or leave them empty (\"\") to hide a line. {n} becomes the number of worlds.",
   "subtitle": "choose a world to enter",
   "loadingNote": "Loading the world…",

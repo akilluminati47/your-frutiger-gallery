@@ -11,6 +11,10 @@ export const CONFIG = {
   // Big title shown on the entry card and floating in the world.
   title: "FRUTIGER GALLERY",
 
+  // Browser-tab title (the text on the tab / bookmark). "" keeps the
+  // one baked into index.html.
+  tabTitle: "Frutiger Gallery ● 3D Gallery",
+
   // ── ENTRY-CARD LINES ───────────────────────────────────────────────
   // Set ANY of these to "" to remove that line from the splash entirely.
   //   subtitle    → under the title

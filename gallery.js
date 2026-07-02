@@ -210,9 +210,9 @@ const pmrem = new THREE.PMREMGenerator(renderer);
    the composer — crisp edges, no FXAA smear). UnrealBloomPass runs on the HDR
    values so only genuinely bright things glow: the sun disk, the lens flare,
    white panel screens. OutputPass then applies ACES + the sRGB transform, and a
-   final grade pass adds the subtle film-camera artifacts (corner chromatic
-   aberration, vignette, animated grain, a touch of saturation) that make real-
-   time output read as "engine-rendered" rather than flat rasterisation. */
+   final grade pass adds the subtle film-camera artifacts (vignette, animated
+   grain, a touch of saturation) that make real-time output read as
+   "engine-rendered" rather than flat rasterisation. */
 let composer = null, gradePass = null, bloomPass = null;
 // overlay scene for the lens flare — rendered directly to the canvas after the
 // composer (see the flare block in section 3 for why it can't live in-scene)
@@ -239,12 +239,10 @@ const GradeShader = {
     void main(){
       vec2 c = vUv - 0.5;
       float r2 = dot(c, c);
-      // chromatic aberration — zero at centre, grows quadratically to the corners
-      float ca = r2 * 0.012;
-      vec3 col;
-      col.r = texture2D(tDiffuse, vUv + c * ca).r;
-      col.g = texture2D(tDiffuse, vUv).g;
-      col.b = texture2D(tDiffuse, vUv - c * ca).b;
+      // (no chromatic aberration: the RGB split read as "misaligned" red/blue
+      // fringes on small high-contrast sprites like the bubbles near the screen
+      // edges — the frame stays crisp, the vignette/grain carry the filmic feel)
+      vec3 col = texture2D(tDiffuse, vUv).rgb;
       // gentle filmic vignette
       col *= 1.0 - smoothstep(0.18, 0.85, r2) * 0.30;
       // slight saturation lift (post-tonemap, so it never clips hues)
@@ -1982,14 +1980,18 @@ addEventListener('resize', () => {
 // on the entry screen again, not a frozen white/blank realm
 addEventListener('pageshow', (e) => { if (e.persisted) resetToMenu(); });
 
-$('title').textContent = CONFIG.title;
+// browser-tab title — configurable like everything else; "" keeps index.html's
+if (CONFIG.tabTitle) document.title = CONFIG.tabTitle;
 // splash + pause lines are all configurable; an empty string ("") in CONFIG
-// removes that line from the card entirely instead of leaving a blank row
+// removes that line from the card entirely instead of leaving a blank row.
+// Hiding goes through the .gone class so the stylesheet can re-balance the
+// card's spacing around whichever lines remain (see styles.css).
 function setLine(id, text){
   const el = $(id); if (!el) return;
   el.textContent = text || '';
-  el.style.display = text ? '' : 'none';
+  el.classList.toggle('gone', !text);
 }
+setLine('title',      CONFIG.title);
 setLine('subtitle',   CONFIG.subtitle);
 setLine('loadnote',   CONFIG.loadingNote ?? 'Loading the world…');
 setLine('pauseTitle', CONFIG.pause?.title ?? 'Paused');

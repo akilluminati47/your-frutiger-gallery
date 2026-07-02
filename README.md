@@ -1,4 +1,4 @@
-# Digital Realm — Frutiger Aero 3D Gallery
+# Frutiger Gallery — a walk-through Frutiger Aero 3D gallery
 
 A walk-through, first-person 3D gallery in the Frutiger Aero style. Each work is a
 live screenshot of a site, hung on glass walls along a floating glass corridor over
@@ -6,8 +6,9 @@ a grassy "Bliss" landscape, with drifting bubbles, volumetric sky, and a dynamic
 lens flare. Keyboard + mouse, gamepad, and touch are all supported and auto-detected.
 
 Rendering runs through a full HDR post pipeline: MSAA into a half-float target,
-Unreal-style bloom, ACES filmic tonemapping, then a film grade (corner chromatic
-aberration, vignette, animated grain). The sky is a domain-warped FBM cloudscape
+Unreal-style bloom, ACES filmic tonemapping, then a film grade (vignette,
+animated grain, a touch of saturation — no chromatic aberration, so bubbles
+and edges stay crisp). The sky is a domain-warped FBM cloudscape
 with silver linings and a rare-cirrus layer; sun-lit dust motes drift up the
 corridor past crisp, bare panels. A dynamic-resolution governor watches
 the frame time and trades internal resolution for a locked frame rate, so it stays
@@ -65,14 +66,17 @@ legs, reflections, and grass keep up on their own.
 ### 3. Title + entry-card lines
 
 ```js
-title:       "DIGITAL REALM",
+title:       "FRUTIGER GALLERY",
+tabTitle:    "Frutiger Gallery ● 3D Gallery",  // browser-tab / bookmark text
 subtitle:    "choose a world to enter",
 loadingNote: "Loading the world…",
 readyNote:   "{n} worlds ready",      // {n} = number of worlds
 ```
 
-`title` is the big `<h1>`. The other three are the smaller splash lines — set any
-of them to `""` to remove that line entirely and make the entry card fully yours.
+`title` is the big `<h1>`, `tabTitle` is what the browser tab shows. The other
+three are the smaller splash lines — set any of them (or `title`) to `""` to
+remove that line entirely; the card re-balances its spacing around whatever
+remains, so a stripped-down entry card still looks composed.
 
 ### 4. Pause menu
 
