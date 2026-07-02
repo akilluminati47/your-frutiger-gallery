@@ -338,6 +338,9 @@ function perfGovern(dt){
    3 · world — layout, premium sky, light, hills, glass corridor
    ════════════════════════════════════════════════════════════════ */
 const bubbles = [];
+// loading-strip plane shared bits — sized in buildGallery (needs FW/DEV_DEPTH),
+// consumed by startFrameLoading
+let stripGeo = null, stripZ = 0;
 // decorative objects that are SKIPPED inside the mirror passes (they barely show
 // in a faint reflection but cost a full extra draw in each of the 3 reflectors)
 const noReflect = [];
@@ -904,16 +907,12 @@ texLoader.setCrossOrigin('anonymous');
      2. "loading"  → Aero barber-pole progress bar 0 → 100 %
      3. "done"     → live screenshot snaps in; name plaque bloops up
    ─────────────────────────────────────────────────────────────────────────── */
-// Loading-cutscene canvas, drawn near the panel's on-screen pixel density so
-// the bar + typography stay sharp on every gallery (a fixed 512 looked soft
-// stretched over a big panel). Sized by an AREA budget rather than a width so
-// portrait phone panels — taller than wide — can't blow the per-repaint
-// texture-upload cost; capped at the device's own screenshot resolution
-// because sharper than the screen it's shown on buys nothing.
-const TEX_AREA = lowPerf ? 950_000 : 1_500_000;
-const TEX_W = Math.max(512, Math.min(Math.round(SHOT_W * realDpr),
-                                     Math.round(Math.sqrt(TEX_AREA * ASPECT))));
-const TEX_H = Math.max(2, Math.round(TEX_W / ASPECT));
+// The animated cutscene lives on a SMALL strip plane floating over the panel
+// (label / barber-pole bar / percentage) — NOT on a full-panel canvas. The
+// strip's canvas maps ~1:1 to its on-screen pixels so it's always crisp, and
+// each repaint uploads a fixed 1024×256 whatever the panel or device size.
+// The panel behind it is a static backdrop texture uploaded once, ever.
+const STRIP_W = 1024, STRIP_H = 256;
 
 function makeWhiteCanvas(){
   // solid fill — 2×2 is enough, the GPU stretches a flat colour losslessly
@@ -924,35 +923,39 @@ function makeWhiteCanvas(){
   return c;
 }
 
-function makeLoadCanvas(){
-  const c = document.createElement('canvas'); c.width = TEX_W; c.height = TEX_H; return c;
+function makeStripCanvas(){
+  const c = document.createElement('canvas'); c.width = STRIP_W; c.height = STRIP_H; return c;
 }
 
-// Frutiger Aero loading screen: barber-pole green/blue/white bar over a bg that's
-// white on desktop and black on mobile (a phone booting up behind its black bezel)
-function drawLoadingBar(canvas, progress, animTime){
+// Panel backdrop while loading — the old full-canvas background (white on
+// desktop / black phone bezel, faint blue Aero glow at the top) baked into one
+// tiny texture SHARED by every panel: 4×256, uploaded to the GPU exactly once.
+const loadBackdropTex = (() => {
+  const c = document.createElement('canvas'); c.width = 4; c.height = 256;
+  const x = c.getContext('2d');
+  x.fillStyle = isTouch ? '#000000' : '#ffffff'; x.fillRect(0, 0, 4, 256);
+  const tg = x.createLinearGradient(0, 0, 0, 256 * 0.28);
+  tg.addColorStop(0,'rgba(195,238,255,.55)'); tg.addColorStop(1,'rgba(195,238,255,0)');
+  x.fillStyle = tg; x.fillRect(0, 0, 4, 256 * 0.28);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+})();
+
+// Frutiger Aero loading strip: barber-pole green/blue/white bar with the
+// status label above and the percentage below, on a TRANSPARENT canvas \u2014 the
+// white/black panel background lives in loadBackdropTex behind it. Fixed
+// 1024\u00d7256 whatever the panel aspect, so layout metrics are plain pixels.
+function drawLoadingStrip(canvas, progress, animTime){
   const c2 = canvas.getContext('2d'), W = canvas.width, H = canvas.height;
   const dark = isTouch;
-  // Metric base: the panel's SHORT side. Portrait phone panels are over twice
-  // as tall as wide, so height-derived sizes drew a comically oversized bar +
-  // type there; the short side reads the same on both orientations (on a
-  // landscape desktop panel S === H, i.e. pixel-identical to the old sizing).
-  // k trims mobile a touch further so the cluster sits daintily in the bezel.
-  const S = Math.min(W, H);
-  const k = dark ? 0.85 : 1;
-  c2.fillStyle = dark ? '#000000' : '#ffffff'; c2.fillRect(0, 0, W, H);
-  // Soft top-light Aero tint (a faint blue glow on either bg)
-  const tg = c2.createLinearGradient(0, 0, 0, H * 0.28);
-  tg.addColorStop(0,'rgba(195,238,255,.55)'); tg.addColorStop(1,'rgba(195,238,255,0)');
-  c2.fillStyle = tg; c2.fillRect(0, 0, W, H * 0.28);
-  // Bar geometry (first \u2014 the label + percentage anchor to the bar, so the
-  // whole cluster stays tight and centred whatever the panel's aspect)
-  const padX=W*(dark? .16 : .1), barW=W-padX*2, barH=Math.round(S*.09*k), barX=padX, barY=H*.5-barH/2, rr=barH/2;
+  c2.clearRect(0, 0, W, H);
+  // Bar geometry \u2014 vertically centred; the label + percentage anchor to it
+  const barH = 64, barX = 24, barW = W - barX*2, barY = (H - barH)/2, rr = barH/2;
   // Status label
   c2.fillStyle = dark ? 'rgba(170,215,255,.92)' : 'rgba(50,130,200,.65)';
-  c2.font = `500 ${Math.round(S * .055 * k)}px Quicksand, Segoe UI, sans-serif`;
+  c2.font = '500 44px Quicksand, Segoe UI, sans-serif';
   c2.textAlign = 'center'; c2.textBaseline = 'middle';
-  c2.fillText(progress < 0.995 ? 'loading world\u2026' : 'rendering\u2026', W/2, barY - S * .075 * k);
+  c2.fillText(progress < 0.995 ? 'loading world\u2026' : 'rendering\u2026', W/2, barY - 42);
   // Track (empty pill)
   c2.fillStyle = 'rgba(150,200,235,.38)'; roundRect(c2,barX,barY,barW,barH,rr); c2.fill();
   // Filled portion — barber-pole: diagonal green / blue / white twist
@@ -975,14 +978,14 @@ function drawLoadingBar(canvas, progress, animTime){
     gl.addColorStop(0,'rgba(255,255,255,.72)'); gl.addColorStop(.44,'rgba(255,255,255,.16)');
     gl.addColorStop(.45,'rgba(255,255,255,0)'); gl.addColorStop(1,'rgba(255,255,255,0)');
     c2.fillStyle=gl; c2.fillRect(barX,barY,fillW,barH); c2.restore();
-    c2.strokeStyle='rgba(255,255,255,.82)'; c2.lineWidth=2;
+    c2.strokeStyle='rgba(255,255,255,.82)'; c2.lineWidth=3;
     roundRect(c2,barX,barY,fillW,barH,Math.min(rr,fillW/2)); c2.stroke();
   }
   // Percentage (below bar)
   c2.fillStyle = dark ? 'rgba(180,220,255,.95)' : 'rgba(50,130,200,.75)';
-  c2.font=`600 ${Math.round(S*.046*k)}px Quicksand, Segoe UI, sans-serif`;
+  c2.font='600 36px Quicksand, Segoe UI, sans-serif';
   c2.textBaseline='top';
-  c2.fillText(`${Math.min(100,Math.round(progress*100))}%`, W/2, barY+barH+Math.round(S*.016*(dark?2:1)));
+  c2.fillText(`${Math.min(100,Math.round(progress*100))}%`, W/2, barY+barH+14);
 }
 
 // Auto-load delay: bar fires before the player walks up to that row.
@@ -1092,6 +1095,14 @@ function buildGallery(font){
   const deviceGeo = new RoundedBoxGeometry(FW, FH, DEV_DEPTH, 6, DEV_RADIUS);
   planarUV(deviceGeo, FW, FH);
 
+  // loading-strip plane shared by every panel: ~80% of the panel's width (a
+  // touch narrower on phones so the cluster sits daintily on the tall bezel),
+  // floated just off the slab's front face. Geometry is shared; each loading
+  // panel gets its own small canvas texture (see startFrameLoading).
+  const stripW = FW * (isTouch ? 0.72 : 0.8);
+  stripGeo = new THREE.PlaneGeometry(stripW, stripW * (STRIP_H / STRIP_W));
+  stripZ   = DEV_Z + DEV_DEPTH / 2 + 0.012;
+
   const visitMat = new THREE.MeshPhysicalMaterial({
     color:0xffffff, roughness:0.08, metalness:0, clearcoat:1, clearcoatRoughness:0.05,
     emissive:0x2aa9ff, emissiveIntensity:0.22, envMapIntensity:1.4,
@@ -1157,8 +1168,9 @@ function buildGallery(font){
     // by updateLoadingSystem(). Pending = clean white, loading = Aero bar 0→100 %.
     const wc = makeWhiteCanvas();
     const whiteTex = new THREE.CanvasTexture(wc); whiteTex.colorSpace = THREE.SRGBColorSpace;
-    // NOTE: the load-bar canvas is allocated lazily in startFrameLoading — at
-    // full panel resolution it's too big to pre-allocate for every frame at once
+    // NOTE: the loading strip (canvas + plane) is allocated lazily in
+    // startFrameLoading and freed on reveal — only panels actually mid-
+    // cutscene hold one, so peak cost is a couple of small canvases
 
     // the screen material carries the preview (idle tile → loading bar → screenshot);
     // it skins the whole rounded slab, the image wrapping the curved rim (planarUV)
@@ -1200,7 +1212,7 @@ function buildGallery(font){
       autoDelay:    isGazeFrame ? Infinity : autoDelayForRow(row, i%2),
       loadDuration: isGazeFrame ? GAZE_LOAD_DUR : LOAD_DUR,
       loadProgress: 0, imageReady: false, liveTexture: null,
-      screenMat, panel, whiteTex, loadCanvas: null, loadTex: null,
+      screenMat, panel, whiteTex, strip: null, stripTex: null, stripCanvas: null,
       labelBloop: -1,
     };
     group.getWorldPosition(group.userData.worldPos);
@@ -1631,21 +1643,30 @@ function startFrameLoading(f){
   const u = f.userData;
   if (u.loadState !== 'pending') return;
   u.loadState = 'loading';
-  // lazy-alloc the full-res bar canvas: only panels actually mid-cutscene hold
-  // one (revealWorld frees it), so peak memory is a couple of canvases, not 12+
-  if (!u.loadTex){
-    u.loadCanvas = makeLoadCanvas();
-    u.loadTex = new THREE.CanvasTexture(u.loadCanvas);
-    u.loadTex.colorSpace = THREE.SRGBColorSpace;
-    // repainted ~30×/s — regenerating a mip chain on every upload would eat
-    // the budget the higher resolution just bought; plain linear stays sharp
-    u.loadTex.generateMipmaps = false;
-    u.loadTex.minFilter = THREE.LinearFilter;
+  // lazy-alloc the strip (canvas + texture + plane): only panels actually
+  // mid-cutscene hold one — revealWorld frees it again
+  if (!u.strip){
+    u.stripCanvas = makeStripCanvas();
+    u.stripTex = new THREE.CanvasTexture(u.stripCanvas);
+    u.stripTex.colorSpace = THREE.SRGBColorSpace;
+    // repainted ~30×/s — regenerating a mip chain on every upload would waste
+    // most of what the small canvas saves; plain linear stays sharp
+    u.stripTex.generateMipmaps = false;
+    u.stripTex.minFilter = THREE.LinearFilter;
+    const m = new THREE.MeshBasicMaterial({
+      map: u.stripTex, transparent: true, depthWrite: false, toneMapped: false,
+    });
+    if (FX) m.color.setScalar(1.12);   // same ACES lift as the screens
+    u.strip = new THREE.Mesh(stripGeo, m);
+    u.strip.position.set(0, 0, stripZ);
+    u.strip.renderOrder = 4;           // over its panel, under the name plaque
+    f.add(u.strip);
   }
   u.lastBarPaint = -1;
-  u.screenMat.map = u.loadTex;
+  // panel behind the strip: the shared white/black + Aero-tint backdrop
+  u.screenMat.map = loadBackdropTex;
   u.screenMat.needsUpdate = true;
-  drawLoadingBar(u.loadCanvas, 0, 0); u.loadTex.needsUpdate = true;
+  drawLoadingStrip(u.stripCanvas, 0, 0); u.stripTex.needsUpdate = true;
   // Check pre-fetch cache — image may already be ready before we even entered
   const cached = prefetchMap.get(u.project.url);
   if (cached !== 'pending'){
@@ -1659,15 +1680,21 @@ function revealWorld(f){
   const u = f.userData;
   if (u.loadState === 'done') return;
   u.loadState = 'done';
-  // Swap in the live screenshot (keep bar canvas on error) and SNAP the panel to
-  // the screenshot's true aspect so the whole page shows, filling it without a crop
+  // Swap in the live screenshot and SNAP the panel to the screenshot's true
+  // aspect so the whole page shows, filling it without a crop. On a failed
+  // fetch the shared backdrop stays — a clean blank screen, no dead texture.
+  // (Never dispose the current map here: it's the SHARED loadBackdropTex.)
   if (u.liveTexture){
-    u.screenMat.map?.dispose?.(); u.screenMat.map = u.liveTexture; u.screenMat.needsUpdate = true;
+    u.screenMat.map = u.liveTexture; u.screenMat.needsUpdate = true;
     fitPanelToImage(u, u.liveTexture);
   }
-  // Free canvas textures — not needed anymore (loadCanvas too: at full panel
-  // resolution the backing canvas is the expensive part)
-  u.loadTex?.dispose?.();  u.loadTex  = null; u.loadCanvas = null;
+  // Free the strip + canvas textures — not needed anymore
+  if (u.strip){
+    f.remove(u.strip);
+    u.strip.material.dispose();      // strip geometry is shared — keep it
+    u.strip = null;
+  }
+  u.stripTex?.dispose?.(); u.stripTex = null; u.stripCanvas = null;
   u.whiteTex?.dispose?.(); u.whiteTex = null;
   // Trigger name-plaque bloop — chimes from the panel's spot on its wall
   u.labelBloop = 0;
@@ -1700,10 +1727,10 @@ function updateLoadingSystem(dt, t){
       const speed = (f === activeFrame) ? 1.65 : 1.0;
       u.loadProgress = Math.min(1, u.loadProgress + (dt / u.loadDuration) * speed);
       // repaint at ~30 Hz — the pole drifts slowly enough that half-rate reads
-      // as smooth, and it halves the (now full-res) canvas → GPU upload cost
+      // as smooth, and it halves the strip's repaint + GPU upload cost
       if (t - u.lastBarPaint >= 1/32){
         u.lastBarPaint = t;
-        drawLoadingBar(u.loadCanvas, u.loadProgress, t); u.loadTex.needsUpdate = true;
+        drawLoadingStrip(u.stripCanvas, u.loadProgress, t); u.stripTex.needsUpdate = true;
       }
       if (u.loadProgress >= 1 && u.imageReady) revealWorld(f);
     }
