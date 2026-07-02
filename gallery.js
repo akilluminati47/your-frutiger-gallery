@@ -101,13 +101,23 @@ function screenshotURL(provider, url, w, h){
 const PROVIDERS = [...new Set([CONFIG.screenshotProvider, 'thumio', 'mshots', 'microlink'])];
 function fetchScreenshot(url, onImg, onFail){
   let i = 0;
-  const tryNext = () => {
+  const tryNext = async () => {
     if (i >= PROVIDERS.length){ onFail?.(); return; }
     const prov = PROVIDERS[i++];
-    const img = new Image(); img.crossOrigin = 'anonymous';
-    img.onload  = () => (img.naturalWidth > 1 ? onImg(img) : tryNext());
-    img.onerror = tryNext;
-    img.src = screenshotURL(prov, url, SHOT_W, SHOT_H);
+    try {
+      // fetch first so the HTTP status is visible: thum.io answers rate-limits
+      // with a 403 that still carries a decodable "error" image, which would
+      // sail through a plain <img> onload and paint a blank panel forever.
+      const res = await fetch(screenshotURL(prov, url, SHOT_W, SHOT_H), { mode: 'cors' });
+      if (!res.ok) return tryNext();
+      const blob = await res.blob();
+      if (!blob.type.startsWith('image/')) return tryNext();
+      const obj = URL.createObjectURL(blob);
+      const img = new Image();
+      img.onload  = () => { URL.revokeObjectURL(obj); img.naturalWidth > 1 ? onImg(img) : tryNext(); };
+      img.onerror = () => { URL.revokeObjectURL(obj); tryNext(); };
+      img.src = obj;
+    } catch { tryNext(); } // no CORS / network error → next provider
   };
   tryNext();
 }

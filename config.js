@@ -6,10 +6,10 @@ export const CONFIG = {
   // Your handle / artist name. This is the ONE value a new owner changes
   // after cloning (a future sign-up Worker can write it too). It becomes the
   // label on the entrance button.
-  creator: "akilluminati47",
+  creator: "your-name",
 
   // Big title shown on the entry card and floating in the world.
-  title: "DIGITAL REALM",
+  title: "FRUTIGER GALLERY",
 
   // ── ENTRY-CARD LINES ───────────────────────────────────────────────
   // Set ANY of these to "" to remove that line from the splash entirely.
@@ -52,18 +52,14 @@ export const CONFIG = {
   // With shuffleOrder off, the LAST row is gaze-triggered (walk to the end and look
   // to reveal it); the rest auto-load as you approach.
   projects: [
-    { name: "YouTube",       url: "https://youtube.com/@akilluminati47" }, // front · right
-    { name: "Twitch",        url: "https://twitch.tv/akilluminati47" },    // front · left
-    { name: "Demon Bot",     url: "https://demonbot.win/" },               // row2  · right
-    { name: "guns.lol",      url: "https://guns.lol/akilluminati47" },     // row2  · left
-    { name: "Dots",          url: "https://playdots.app/" },               // row3  · right
-    { name: "Peanut Run",    url: "https://peanut-run.pages.dev/" },       // row3  · left
-    { name: "Saucer Patrol", url: "https://saucer-patrol.pages.dev/" },    // row4  · right
-    { name: "GoW Casino",    url: "https://gow-casino.pages.dev/" },       // row4  · left
-    { name: "MIC FX",        url: "https://mic-fx.pages.dev/" },           // row5  · right
-    { name: "DW Gallery",    url: "https://dw-gallery.pages.dev/" },       // row5  · left
-    { name: "GitHub Repo",   url: "https://github.com/akilluminati47/frutiger-gallery" }, // back · right (gaze)
-    { name: "Donate",        url: "https://streamelements.com/akilluminati47" },          // back · left  (gaze)
+    { name: "This Gallery",  url: "https://akilluminati47.pages.dev/" },                  // front · right (an inception)
+    { name: "GitHub Repo",   url: "https://github.com/akilluminati47/frutiger-gallery" }, // front · left  (fork me)
+    { name: "Wikipedia",     url: "https://www.wikipedia.org/" },  // row2 · right
+    { name: "YouTube",       url: "https://www.youtube.com/" },    // row2 · left
+    { name: "Reddit",        url: "https://www.reddit.com/" },     // row3 · right
+    { name: "Google",        url: "https://www.google.com/" },     // row3 · left
+    { name: "Twitch",        url: "https://www.twitch.tv/" },      // back · right (gaze)
+    { name: "Facebook",      url: "https://www.facebook.com/" },   // back · left  (gaze)
   ],
 
   // Shuffle the gallery order on every page load. Set false to keep the
@@ -95,17 +91,18 @@ export const CONFIG = {
 
 // ════════════════════════════════════════════════════════════════════
 //  OWNER HANDSHAKE — a fork of this repo never wears the owner's face.
-//  Everything above is the TEMPLATE every clone boots with. When the
-//  site is served from one of the owner's own domains below, the
-//  gallery fetches `settings` (a JSON file with the same shape as
-//  CONFIG) and deep-merges it over the template BEFORE anything reads
-//  it. Any other host fails the hostname handshake and stays a pure
-//  template — so the owner's branding, links and tweaks can live in
-//  that JSON (or a Worker behind it) instead of in the repo.
+//  Everything above is the TEMPLATE every clone boots with. On load the
+//  gallery fetches `settings` (JSON, same shape as CONFIG) and deep-
+//  merges it over the template BEFORE anything reads it. On Cloudflare
+//  Pages that URL is answered by functions/owner.config.json.js, which
+//  serves the OWNER_CONFIG secret set in the dashboard — so the owner's
+//  branding and links never live in the repo. Forks have no secret, the
+//  fetch 404s, and they boot the pure template. For local dev you can
+//  drop a real owner.config.json next to index.html (it's gitignored).
 // ════════════════════════════════════════════════════════════════════
 export const OWNER = {
-  hosts: ["frutiger-gallery.pages.dev"],   // the owner's Cloudflare deployment(s)
-  settings: "/owner.config.json",          // where the owner's real config lives
+  settings: ["/api/owner-config",          // Pages Function → OWNER_CONFIG secret
+             "/owner.config.json"],        // local-dev fallback (gitignored file)
 };
 function mergeDeep(dst, src){
   for (const k of Object.keys(src)){
@@ -115,11 +112,11 @@ function mergeDeep(dst, src){
     else dst[k] = v;
   }
 }
-if (OWNER.hosts.includes(location.hostname)){
+for (const url of OWNER.settings){
   try {
     // top-level await: gallery.js imports CONFIG, so the module graph waits
     // for the merge — the world never boots half-templated
-    const res = await fetch(OWNER.settings, { cache: "no-store" });
-    if (res.ok) mergeDeep(CONFIG, await res.json());
-  } catch { /* offline / file missing → the template above stands */ }
+    const res = await fetch(url, { cache: "no-store" });
+    if (res.ok){ mergeDeep(CONFIG, await res.json()); break; }
+  } catch { /* offline / no secret / file missing → try next, else template stands */ }
 }

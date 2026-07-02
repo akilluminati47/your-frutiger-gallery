@@ -1,0 +1,20 @@
+{
+  "_what_is_this":  "Your personal gallery settings. Edit the values below, then copy this WHOLE file and paste it into a Cloudflare secret named OWNER_CONFIG (Pages project -> Settings -> Environment variables -> Add -> type: Secret). Your live site reads the secret; this file never has to be committed, so your links stay out of the repo.",
+  "_how_to_edit":   "Keep the quotes and commas exactly as they are. Any setting you delete from this file simply keeps the default from config.js. Lines starting with _ are ignored notes like this one.",
+
+  "creator": "your-name",
+  "title": "FRUTIGER GALLERY",
+
+  "_splash_lines":  "The three small lines on the entry card. Put text between the quotes, or leave them empty (\"\") to hide a line. {n} becomes the number of worlds.",
+  "subtitle": "choose a world to enter",
+  "loadingNote": "Loading the world…",
+  "readyNote": "{n} worlds ready",
+
+  "_projects":      "Your works. Add or remove rows freely (keep it an even number so the walls stay balanced). name = the plaque, url = where visit? takes you. The gallery lengthens automatically.",
+  "projects": [
+    { "name": "My Site",    "url": "https://example.com/" },
+    { "name": "My YouTube", "url": "https://www.youtube.com/" },
+    { "name": "My Twitch",  "url": "https://www.twitch.tv/" },
+    { "name": "My GitHub",  "url": "https://github.com/" }
+  ]
+}

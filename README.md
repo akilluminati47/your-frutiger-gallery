@@ -27,7 +27,7 @@ You only ever edit [`config.js`](config.js). Nothing else needs touching.
 ### 1. The entrance button — your name (`creator`)
 
 ```js
-creator: "akilluminati47",
+creator: "your-name",
 ```
 
 This single **breadcrumb** is the only thing a new owner changes after cloning. It
@@ -39,9 +39,9 @@ gallery per user.)
 
 ```js
 projects: [
-  { name: "YouTube", url: "https://youtube.com/@akilluminati47" },
-  { name: "Twitch",  url: "https://twitch.tv/akilluminati47" },
-  // …add as many as you like
+  { name: "YouTube", url: "https://www.youtube.com/" },
+  { name: "Twitch",  url: "https://www.twitch.tv/" },
+  // …add as many as you like (an even number keeps both walls balanced)
 ],
 ```
 
@@ -129,26 +129,38 @@ into one and click a panel that's now behind you.
 
 ---
 
-## Fork-safe by design — the owner handshake
+## Fork-safe by design — your settings live in a Cloudflare secret, not the repo
 
-The repo is a **template**. At the bottom of `config.js` sits a hostname handshake:
+The repo is a **pure template**: no personal links, no branding, nothing to scrub
+before forking. Your real settings live in a **Cloudflare secret** that only your
+deployment can read. On load the gallery tries, in order:
 
-```js
-export const OWNER = {
-  hosts: ["frutiger-gallery.pages.dev"],  // the owner's own deployment(s)
-  settings: "/owner.config.json",         // the owner's real config (same shape as CONFIG)
-};
-```
+1. **`/api/owner-config`** — a tiny Pages Function
+   ([`functions/api/owner-config.js`](functions/api/owner-config.js)) that answers
+   with the `OWNER_CONFIG` secret set in your Cloudflare dashboard. No secret →
+   404 → next step.
+2. **`/owner.config.json`** — a gitignored local file, handy while previewing on
+   your own machine.
+3. **Neither found** → the clean template defaults in `config.js` stand.
 
-Only when the site is served from one of `hosts` does the gallery fetch `settings`
-and deep-merge it over the template **before** the world boots. A fork or clone
-hosted anywhere else never matches the handshake, so it starts from the clean
-defaults above — it can't accidentally ship the owner's branding.
+Whatever JSON it finds is deep-merged over `CONFIG` **before** the world boots, so
+you only write the keys that differ from the template. A fork has no secret and no
+local file, so it always boots the clean template — it can't accidentally wear
+your face, and your links never appear in the repo.
 
-To claim a fork as your own: put your domain(s) in `hosts` and your overrides in
-`owner.config.json` (any subset of CONFIG keys — only what differs from the
-template), or point `settings` at a JSON you host elsewhere (a Worker, R2, another
-Pages project) so your personal settings never live in the repo at all.
+### Set it up (one time, ~2 minutes)
+
+1. Open [`owner.config.txt`](owner.config.txt) — it's a fill-in-the-blanks copy of
+   the settings, with notes inline. Put in your name, title and links.
+2. In the Cloudflare dashboard: **Workers & Pages → your Pages project →
+   Settings → Environment variables → Add**. Name it `OWNER_CONFIG`, set the type
+   to **Secret**, environment **Production**, and paste the whole edited file as
+   the value.
+3. Redeploy (or push any commit). Done — your live site wears your settings, the
+   repo stays anonymous.
+
+The lines starting with `_` in `owner.config.txt` are just notes — they're valid
+JSON and get ignored, so you can paste the file exactly as-is.
 
 ---
 
@@ -158,11 +170,13 @@ This gallery is meant to be **forked and made your own** — not run from this r
 and not by pointing people at the unedited original.
 
 1. **Fork** this repository to your own GitHub account.
-2. **Edit [`config.js`](config.js)** in your fork: set `creator` to your handle and
-   replace `projects` with your own works. That's the only file you touch.
-3. **Deploy your fork to Cloudflare Pages** (or any static host): create a Pages
-   project, connect your forked repo, and accept the defaults — **no build command,
-   no output directory**, it's already static. Every push to `main` redeploys.
+2. **Deploy your fork to Cloudflare Pages**: create a Pages project, connect your
+   forked repo, and accept the defaults — **no build command, no output
+   directory**, it's already static. Every push to `main` redeploys.
+3. **Make it yours** with the `OWNER_CONFIG` secret (see the section above) — your
+   name and links stay out of the repo. Prefer keeping it simple? You can instead
+   just edit `creator` and `projects` in [`config.js`](config.js) and commit; the
+   secret path is only there so your personal info never lands in git.
 
 > Don't ship the unedited gallery — fork it so the worlds, the entrance name, and the
 > link-preview card are all yours.

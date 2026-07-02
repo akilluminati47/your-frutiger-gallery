@@ -4,6 +4,11 @@
 # stale build archive (predates current source)
 index.zip
 
+# The owner's real config never ships in the repo — on Cloudflare it is
+# served from the OWNER_CONFIG secret by functions/api/owner-config.js.
+# This local copy is only for dev; forks boot the template in config.js.
+owner.config.json
+
 # OS cruft
 Thumbs.db
 desktop.ini
