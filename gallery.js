@@ -989,11 +989,13 @@ function drawLoadingStrip(canvas, progress, animTime){
 }
 
 // Auto-load delay: bar fires before the player walks up to that row.
+// The clock starts WITH the intro whoosh (not after it), so the front row's
+// bars are already filling as you glide in and the hall lands alive.
 // Sequential ping: left (sideIdx=0) always fires first, then right (sideIdx=1) 0.45 s later,
 // so each row visibly pings left → right before moving to the next pair.
 function autoDelayForRow(row, sideIdx){
   const walkTime = (START_Z + row * DZ) / CONFIG.movement.maxSpeed;
-  return Math.max(0, INTRO_DUR + walkTime - 1.5) + row * 0.12 + sideIdx * 0.45;
+  return Math.max(0, walkTime - 1.5) + row * 0.12 + sideIdx * 0.45;
 }
 
 // Planar UVs from each vertex's local x,y so the full screenshot maps 1:1 across the
