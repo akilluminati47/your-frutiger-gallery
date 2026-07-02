@@ -4,7 +4,6 @@ import { Reflector } from 'three/addons/objects/Reflector.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { FontLoader } from 'three/addons/loaders/FontLoader.js';
 import { TextGeometry } from 'three/addons/geometries/TextGeometry.js';
-import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { Lensflare, LensflareElement } from 'three/addons/objects/Lensflare.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
@@ -191,9 +190,10 @@ camera = new THREE.PerspectiveCamera(62, innerWidth/innerHeight, 0.1, 1000);
 camera.position.set(0, eyeHeight, -6);
 camera.lookAt(0, eyeHeight, 10);
 
-// studio reflections for the glossy glass frames / text
+// reflections for the glossy glass frames / text — the environment map itself is
+// built from the real sky dome in section 3 (once skyMat exists), so every env
+// reflection in the world shows clouds + sun, never phantom studio lights
 const pmrem = new THREE.PMREMGenerator(renderer);
-scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
 
 /* ── HDR post pipeline: scene → UnrealBloom (HDR) → ACES/sRGB → filmic grade ──
    The scene is rendered into a half-float, multisampled target (real MSAA inside
@@ -258,9 +258,10 @@ if (FX){
   bloomPass = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight),
     lowPerf ? 0.28 : 0.35,   // strength — a halo, not a smear
     0.4,                     // radius
-    1.0);                    // threshold ≥ 1: only genuinely HDR pixels bloom (sun,
-                             // silver linings, the lifted screen whites — not the
-                             // whole white corridor, which would veil the frame)
+    1.2);                    // threshold — sits ABOVE the ACES-lifted screen whites
+                             // (1.12) and name plaques (1.15) so the gallery reads
+                             // crisp, while genuinely HDR pixels (sun disk, silver
+                             // linings) still feed the glow
   composer.addPass(bloomPass);
   composer.addPass(new OutputPass());          // ACES tonemap + sRGB, exactly once
   gradePass = new ShaderPass(GradeShader);
@@ -424,6 +425,15 @@ let skyMat;
       }`
   });
   scene.add(new THREE.Mesh(new THREE.SphereGeometry(500, 48, 24), skyMat));
+
+  // IBL / env reflections come from THIS sky (a small stand-in dome sharing the
+  // material), not three's RoomEnvironment: the room env's bright light panels
+  // reflected off the huge glossy slab under the glass floor and bloomed into
+  // giant phantom "ceiling light" glare blobs. With the real sky as the env,
+  // glossy surfaces (slab, rails, visit text) mirror clouds + the one true sun.
+  const envScene = new THREE.Scene();
+  envScene.add(new THREE.Mesh(new THREE.SphereGeometry(50, 32, 16), skyMat));
+  scene.environment = pmrem.fromScene(envScene, 0.04).texture;
 }
 
 // lighting: soft sky/grass hemisphere + warm Vista sun
@@ -1004,23 +1014,15 @@ function buildGallery(font){
   const DEV_Z = 0.06;                              // lifts the slab off the glass wall
   const deviceGeo = new RoundedBoxGeometry(FW, FH, DEV_DEPTH, 6, DEV_RADIUS);
   planarUV(deviceGeo, FW, FH);
-  const DEV_FRONT_Z = DEV_Z + DEV_DEPTH / 2;       // world-local z of the front face
 
   const visitMat = new THREE.MeshPhysicalMaterial({
     color:0xffffff, roughness:0.08, metalness:0, clearcoat:1, clearcoatRoughness:0.05,
     emissive:0x2aa9ff, emissiveIntensity:0.22, envMapIntensity:1.4,
   });
 
-  // glossy protective glass sheet floating just off each screen (desktop only):
-  // a near-transparent physical plane whose env reflection sweeps across the
-  // screenshot as you walk past — sells "real device behind museum glass". The
-  // iridescence gives it the faint soap-film hue shift of the Aero aesthetic.
-  const coverGeo = isTouch ? null : new THREE.PlaneGeometry(FW * 0.985, FH * 0.985);
-  const coverMat = isTouch ? null : new THREE.MeshPhysicalMaterial({
-    color:0xffffff, roughness:0.05, metalness:0,
-    transparent:true, opacity:0.10, depthWrite:false,
-    envMapIntensity:2.2, iridescence:0.5, iridescenceIOR:1.3,
-  });
+  // NOTE: no glass cover sheet over the screens — a near-transparent reflective
+  // plane floating off each panel read as a milky rectangle washing out the
+  // screenshot. The device slab is bare so every screen stays crisp.
 
   CONFIG.projects.forEach((project, i) => {
     const group = new THREE.Group();
@@ -1048,19 +1050,13 @@ function buildGallery(font){
     const screenMat = new THREE.MeshBasicMaterial({ map: whiteTex, toneMapped: false });
     // Under the HDR composer the WHOLE frame goes through ACES (toneMapped:false
     // only skips the direct-to-canvas path), which would grey the screens down.
-    // Lifting to ~1.12 tone-maps back to full brightness — and sits just over the
-    // bloom threshold, so white screens get a whisper of backlight glow.
+    // Lifting to ~1.12 tone-maps back to full brightness while staying UNDER the
+    // bloom threshold (1.2), so the screens stay crisp — no glow veil.
     if (FX) screenMat.color.setScalar(1.12);
     const panel = new THREE.Mesh(deviceGeo, screenMat);
     panel.position.z = DEV_Z;
     panel.castShadow = true;
     group.add(panel);
-    if (coverGeo){
-      const cover = new THREE.Mesh(coverGeo, coverMat);
-      cover.position.z = DEV_FRONT_Z + 0.006;
-      cover.renderOrder = 4;         // over its own panel, under the name plaque
-      group.add(cover);
-    }
     // NOTE: no immediate fetch — loading is orchestrated by updateLoadingSystem()
 
     // name plaque — hidden until world loads, then bloops in
@@ -1774,7 +1770,10 @@ function animate(){
       const pulse = 0.5 + 0.5*Math.sin(t*3.4);                 // gentle breathing while it's active
       u.label.scale.setScalar(1 + (0.12 + 0.04*pulse) * hov);  // bigger pop + a soft pulse
       u.label.position.y = u.labelBaseY + (0.07 + 0.015*pulse) * hov;   // lifts + bobs a touch
-      const b = (FX ? LABEL_LIFT : 1) * (1 + 0.24 * hov);      // brighter glow
+      // brighter on hover — but clamped under the bloom threshold (1.2) so the
+      // plaque brightens without ever hazing over into a bloom rectangle
+      let b = (FX ? LABEL_LIFT : 1) * (1 + 0.24 * hov);
+      if (FX) b = Math.min(b, 1.19);
       u.label.material.color.setRGB(b, b, b);
     }
   }
