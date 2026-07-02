@@ -483,7 +483,7 @@ let skyMat;
   // material), not three's RoomEnvironment: the room env's bright light panels
   // reflected off the huge glossy slab under the glass floor and bloomed into
   // giant phantom "ceiling light" glare blobs. With the real sky as the env,
-  // glossy surfaces (slab, rails, visit text) mirror clouds + the one true sun.
+  // glossy surfaces (slab, rails) mirror clouds + the one true sun.
   const envScene = new THREE.Scene();
   envScene.add(new THREE.Mesh(new THREE.SphereGeometry(50, 32, 16), skyMat));
   scene.environment = pmrem.fromScene(envScene, 0.04).texture;
@@ -1105,9 +1105,14 @@ function buildGallery(font){
   stripGeo = new THREE.PlaneGeometry(stripW, stripW * (STRIP_H / STRIP_W));
   stripZ   = DEV_Z + DEV_DEPTH / 2 + 0.012;
 
-  const visitMat = new THREE.MeshPhysicalMaterial({
-    color:0xffffff, roughness:0.08, metalness:0, clearcoat:1, clearcoatRoughness:0.05,
-    emissive:0x2aa9ff, emissiveIntensity:0.22, envMapIntensity:1.4,
+  // Matte "visit?" — the CLICK's emissive flare (see the animate loop) is the
+  // text's highlight now. No clearcoat/gloss means the sun can't strike a
+  // blinding glint when you face a panel head-on with the sun at your back
+  // (it also removes the razor-sharp clearcoat spikes the NaN-scrub pass
+  // guards bloom against). Low envMapIntensity keeps soft sky shading.
+  const visitMat = new THREE.MeshStandardMaterial({
+    color:0xffffff, roughness:0.85, metalness:0,
+    emissive:0x2aa9ff, emissiveIntensity:0.22, envMapIntensity:0.3,
   });
 
   // "visit?" geometry — built glyph-by-glyph instead of one TextGeometry call.
