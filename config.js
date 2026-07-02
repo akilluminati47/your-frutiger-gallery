@@ -27,16 +27,18 @@ export const CONFIG = {
   // With shuffleOrder off, the LAST row is gaze-triggered (walk to the end and look
   // to reveal it); the rest auto-load as you approach.
   projects: [
-    { name: "Demon Bot",     url: "https://demonbot.win/" },               // front · right
-    { name: "guns.lol",      url: "https://guns.lol/akilluminati47" },     // front · left
-    { name: "Dots",          url: "https://playdots.app/" },               // row2  · right
-    { name: "Peanut Run",    url: "https://peanut-run.pages.dev/" },       // row2  · left
-    { name: "Saucer Patrol", url: "https://saucer-patrol.pages.dev/" },    // row3  · right
-    { name: "GoW Casino",    url: "https://gow-casino.pages.dev/" },       // row3  · left
-    { name: "MIC FX",        url: "https://mic-fx.pages.dev/" },           // row4  · right
-    { name: "DW Gallery",    url: "https://dw-gallery.pages.dev/" },       // row4  · left
-    { name: "YouTube",       url: "https://youtube.com/@akilluminati47" }, // back  · right (gaze)
-    { name: "Twitch",        url: "https://twitch.tv/akilluminati47" },    // back  · left  (gaze)
+    { name: "YouTube",       url: "https://youtube.com/@akilluminati47" }, // front · right
+    { name: "Twitch",        url: "https://twitch.tv/akilluminati47" },    // front · left
+    { name: "Demon Bot",     url: "https://demonbot.win/" },               // row2  · right
+    { name: "guns.lol",      url: "https://guns.lol/akilluminati47" },     // row2  · left
+    { name: "Dots",          url: "https://playdots.app/" },               // row3  · right
+    { name: "Peanut Run",    url: "https://peanut-run.pages.dev/" },       // row3  · left
+    { name: "Saucer Patrol", url: "https://saucer-patrol.pages.dev/" },    // row4  · right
+    { name: "GoW Casino",    url: "https://gow-casino.pages.dev/" },       // row4  · left
+    { name: "MIC FX",        url: "https://mic-fx.pages.dev/" },           // row5  · right
+    { name: "DW Gallery",    url: "https://dw-gallery.pages.dev/" },       // row5  · left
+    { name: "GitHub Repo",   url: "https://github.com/akilluminati47/frutiger-gallery" }, // back · right (gaze)
+    { name: "Donate",        url: "https://streamelements.com/akilluminati47" },          // back · left  (gaze)
   ],
 
   // Shuffle the gallery order on every page load. Set false to keep the
