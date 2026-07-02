@@ -246,6 +246,36 @@ const GradeShader = {
       gl_FragColor = vec4(col, 1.0);
     }`,
 };
+
+/* NaN/Inf scrub between the scene render and bloom. The beveled "visit?"
+   TextGeometry can rasterise degenerate slivers whose zero-length normals come
+   out of normalize() as NaN, and its razor-sharp clearcoat glints can spike
+   past half-float range at close range — either poisons UnrealBloom's mip
+   chain, which smears ONE bad pixel into a screen-sized black rectangle for a
+   frame (the "black flicker" when circling the text). Scrub the buffer once
+   here so every downstream pass (bloom, ACES, grade) only ever sees finite HDR. */
+const SanitizeShader = {
+  uniforms: { tDiffuse: { value: null } },
+  vertexShader: /* glsl */`
+    varying vec2 vUv;
+    void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: /* glsl */`
+    uniform sampler2D tDiffuse;
+    varying vec2 vUv;
+    void main(){
+      vec3 c = texture2D(tDiffuse, vUv).rgb;
+      // NaN fails every comparison (and rides straight through mix()/clamp(),
+      // since NaN*0 is still NaN) — so catch "not >= 0" with real branch
+      // assignments. This also zeroes stray negatives.
+      bvec3 bad = not(greaterThanEqual(c, vec3(0.0)));
+      if (bad.r) c.r = 0.0;
+      if (bad.g) c.g = 0.0;
+      if (bad.b) c.b = 0.0;
+      // cap fireflies/Inf well above the sun disk (~3.4) so genuine HDR keeps
+      // its full bloom while a single hot glint can't flash-bomb the mip chain
+      gl_FragColor = vec4(min(c, vec3(24.0)), 1.0);
+    }`,
+};
 if (FX){
   const rt = new THREE.WebGLRenderTarget(innerWidth, innerHeight, {
     type: THREE.HalfFloatType,
@@ -255,6 +285,7 @@ if (FX){
   composer.setPixelRatio(BASE_PR);
   composer.setSize(innerWidth, innerHeight);
   composer.addPass(new RenderPass(scene, camera));
+  composer.addPass(new ShaderPass(SanitizeShader));   // scrub NaN/Inf before bloom
   bloomPass = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight),
     lowPerf ? 0.28 : 0.35,   // strength — a halo, not a smear
     0.4,                     // radius
