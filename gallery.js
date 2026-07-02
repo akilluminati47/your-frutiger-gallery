@@ -904,13 +904,23 @@ texLoader.setCrossOrigin('anonymous');
      2. "loading"  → Aero barber-pole progress bar 0 → 100 %
      3. "done"     → live screenshot snaps in; name plaque bloops up
    ─────────────────────────────────────────────────────────────────────────── */
-const TEX_W = 512, TEX_H = Math.max(2, Math.round(512 / ASPECT));
+// Loading-cutscene canvas, drawn near the panel's on-screen pixel density so
+// the bar + typography stay sharp on every gallery (a fixed 512 looked soft
+// stretched over a big panel). Sized by an AREA budget rather than a width so
+// portrait phone panels — taller than wide — can't blow the per-repaint
+// texture-upload cost; capped at the device's own screenshot resolution
+// because sharper than the screen it's shown on buys nothing.
+const TEX_AREA = lowPerf ? 950_000 : 1_500_000;
+const TEX_W = Math.max(512, Math.min(Math.round(SHOT_W * realDpr),
+                                     Math.round(Math.sqrt(TEX_AREA * ASPECT))));
+const TEX_H = Math.max(2, Math.round(TEX_W / ASPECT));
 
 function makeWhiteCanvas(){
-  const c = document.createElement('canvas'); c.width = TEX_W; c.height = TEX_H;
+  // solid fill — 2×2 is enough, the GPU stretches a flat colour losslessly
+  const c = document.createElement('canvas'); c.width = c.height = 2;
   const ctx = c.getContext('2d');
   // mobile reads each device as a phone: its idle/off screen is black, not white
-  ctx.fillStyle = isTouch ? '#000000' : '#ffffff'; ctx.fillRect(0, 0, TEX_W, TEX_H);
+  ctx.fillStyle = isTouch ? '#000000' : '#ffffff'; ctx.fillRect(0, 0, 2, 2);
   return c;
 }
 
@@ -923,18 +933,26 @@ function makeLoadCanvas(){
 function drawLoadingBar(canvas, progress, animTime){
   const c2 = canvas.getContext('2d'), W = canvas.width, H = canvas.height;
   const dark = isTouch;
+  // Metric base: the panel's SHORT side. Portrait phone panels are over twice
+  // as tall as wide, so height-derived sizes drew a comically oversized bar +
+  // type there; the short side reads the same on both orientations (on a
+  // landscape desktop panel S === H, i.e. pixel-identical to the old sizing).
+  // k trims mobile a touch further so the cluster sits daintily in the bezel.
+  const S = Math.min(W, H);
+  const k = dark ? 0.85 : 1;
   c2.fillStyle = dark ? '#000000' : '#ffffff'; c2.fillRect(0, 0, W, H);
   // Soft top-light Aero tint (a faint blue glow on either bg)
   const tg = c2.createLinearGradient(0, 0, 0, H * 0.28);
   tg.addColorStop(0,'rgba(195,238,255,.55)'); tg.addColorStop(1,'rgba(195,238,255,0)');
   c2.fillStyle = tg; c2.fillRect(0, 0, W, H * 0.28);
+  // Bar geometry (first \u2014 the label + percentage anchor to the bar, so the
+  // whole cluster stays tight and centred whatever the panel's aspect)
+  const padX=W*(dark? .16 : .1), barW=W-padX*2, barH=Math.round(S*.09*k), barX=padX, barY=H*.5-barH/2, rr=barH/2;
   // Status label
   c2.fillStyle = dark ? 'rgba(170,215,255,.92)' : 'rgba(50,130,200,.65)';
-  c2.font = `500 ${Math.round(H * .055)}px Quicksand, Segoe UI, sans-serif`;
+  c2.font = `500 ${Math.round(S * .055 * k)}px Quicksand, Segoe UI, sans-serif`;
   c2.textAlign = 'center'; c2.textBaseline = 'middle';
-  c2.fillText(progress < 0.995 ? 'loading world\u2026' : 'rendering\u2026', W/2, H * .38);
-  // Bar geometry
-  const padX=W*.1, barW=W-padX*2, barH=Math.round(H*.09), barX=padX, barY=H*.5-barH/2, rr=barH/2;
+  c2.fillText(progress < 0.995 ? 'loading world\u2026' : 'rendering\u2026', W/2, barY - S * .075 * k);
   // Track (empty pill)
   c2.fillStyle = 'rgba(150,200,235,.38)'; roundRect(c2,barX,barY,barW,barH,rr); c2.fill();
   // Filled portion — barber-pole: diagonal green / blue / white twist
@@ -962,9 +980,9 @@ function drawLoadingBar(canvas, progress, animTime){
   }
   // Percentage (below bar)
   c2.fillStyle = dark ? 'rgba(180,220,255,.95)' : 'rgba(50,130,200,.75)';
-  c2.font=`600 ${Math.round(H*.046)}px Quicksand, Segoe UI, sans-serif`;
+  c2.font=`600 ${Math.round(S*.046*k)}px Quicksand, Segoe UI, sans-serif`;
   c2.textBaseline='top';
-  c2.fillText(`${Math.min(100,Math.round(progress*100))}%`, W/2, barY+barH+Math.round(H*.016));
+  c2.fillText(`${Math.min(100,Math.round(progress*100))}%`, W/2, barY+barH+Math.round(S*.016*(dark?2:1)));
 }
 
 // Auto-load delay: bar fires before the player walks up to that row.
@@ -1139,8 +1157,8 @@ function buildGallery(font){
     // by updateLoadingSystem(). Pending = clean white, loading = Aero bar 0→100 %.
     const wc = makeWhiteCanvas();
     const whiteTex = new THREE.CanvasTexture(wc); whiteTex.colorSpace = THREE.SRGBColorSpace;
-    const lc = makeLoadCanvas();
-    const loadTex = new THREE.CanvasTexture(lc); loadTex.colorSpace = THREE.SRGBColorSpace;
+    // NOTE: the load-bar canvas is allocated lazily in startFrameLoading — at
+    // full panel resolution it's too big to pre-allocate for every frame at once
 
     // the screen material carries the preview (idle tile → loading bar → screenshot);
     // it skins the whole rounded slab, the image wrapping the curved rim (planarUV)
@@ -1182,7 +1200,7 @@ function buildGallery(font){
       autoDelay:    isGazeFrame ? Infinity : autoDelayForRow(row, i%2),
       loadDuration: isGazeFrame ? GAZE_LOAD_DUR : LOAD_DUR,
       loadProgress: 0, imageReady: false, liveTexture: null,
-      screenMat, panel, whiteTex, loadCanvas: lc, loadTex,
+      screenMat, panel, whiteTex, loadCanvas: null, loadTex: null,
       labelBloop: -1,
     };
     group.getWorldPosition(group.userData.worldPos);
@@ -1613,6 +1631,18 @@ function startFrameLoading(f){
   const u = f.userData;
   if (u.loadState !== 'pending') return;
   u.loadState = 'loading';
+  // lazy-alloc the full-res bar canvas: only panels actually mid-cutscene hold
+  // one (revealWorld frees it), so peak memory is a couple of canvases, not 12+
+  if (!u.loadTex){
+    u.loadCanvas = makeLoadCanvas();
+    u.loadTex = new THREE.CanvasTexture(u.loadCanvas);
+    u.loadTex.colorSpace = THREE.SRGBColorSpace;
+    // repainted ~30×/s — regenerating a mip chain on every upload would eat
+    // the budget the higher resolution just bought; plain linear stays sharp
+    u.loadTex.generateMipmaps = false;
+    u.loadTex.minFilter = THREE.LinearFilter;
+  }
+  u.lastBarPaint = -1;
   u.screenMat.map = u.loadTex;
   u.screenMat.needsUpdate = true;
   drawLoadingBar(u.loadCanvas, 0, 0); u.loadTex.needsUpdate = true;
@@ -1635,8 +1665,9 @@ function revealWorld(f){
     u.screenMat.map?.dispose?.(); u.screenMat.map = u.liveTexture; u.screenMat.needsUpdate = true;
     fitPanelToImage(u, u.liveTexture);
   }
-  // Free canvas textures — not needed anymore
-  u.loadTex?.dispose?.();  u.loadTex  = null;
+  // Free canvas textures — not needed anymore (loadCanvas too: at full panel
+  // resolution the backing canvas is the expensive part)
+  u.loadTex?.dispose?.();  u.loadTex  = null; u.loadCanvas = null;
   u.whiteTex?.dispose?.(); u.whiteTex = null;
   // Trigger name-plaque bloop — chimes from the panel's spot on its wall
   u.labelBloop = 0;
@@ -1668,7 +1699,12 @@ function updateLoadingSystem(dt, t){
       // Accelerate bar when the player is actively watching
       const speed = (f === activeFrame) ? 1.65 : 1.0;
       u.loadProgress = Math.min(1, u.loadProgress + (dt / u.loadDuration) * speed);
-      drawLoadingBar(u.loadCanvas, u.loadProgress, t); u.loadTex.needsUpdate = true;
+      // repaint at ~30 Hz — the pole drifts slowly enough that half-rate reads
+      // as smooth, and it halves the (now full-res) canvas → GPU upload cost
+      if (t - u.lastBarPaint >= 1/32){
+        u.lastBarPaint = t;
+        drawLoadingBar(u.loadCanvas, u.loadProgress, t); u.loadTex.needsUpdate = true;
+      }
       if (u.loadProgress >= 1 && u.imageReady) revealWorld(f);
     }
   }
