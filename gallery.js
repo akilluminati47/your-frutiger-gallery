@@ -2291,6 +2291,13 @@ addEventListener('dblclick',  () => { if (controls.isLocked) consoleSelectAll();
    ════════════════════════════════════════════════════════════════ */
 controls = new PointerLockControls(camera, renderer.domElement);
 controls.pointerSpeed = CONFIG.movement.mouseSensitivity ?? 1;
+// pitch limits in lockstep with applyLook's (0.02 rad shy of the poles): stock
+// PLC lets mouse pitch reach ±90° exactly, where the YXZ euler↔quaternion
+// round-trip turns singular and the extracted yaw can hop between atan2
+// branches — a twitch in the look while staring straight up or down. Every
+// input now turns around at the same seam, the same margin off vertical.
+controls.minPolarAngle = 0.02;
+controls.maxPolarAngle = Math.PI - 0.02;
 // PointerLockControls' controlled object IS the camera (getObject() was just a
 // deprecated alias for it — r180 warns on every call, so we address it directly)
 const player = camera;
@@ -2316,6 +2323,40 @@ function applyLook(dYaw, dPitch){
   _lookE.x -= dPitch;
   _lookE.x = clamp(_lookE.x, -_PI2 + 0.02, _PI2 - 0.02);
   camera.quaternion.setFromEuler(_lookE);
+}
+
+// ── phantom aim-punch guard ──
+// The browser can hand the FIRST mousemove after pointer lock engages — or
+// after the tab regains focus mid-session — one giant bogus delta: the cursor
+// travel accumulated while unlocked, dumped into a single event. Stock
+// PointerLockControls applies movementX/Y raw, so that one event snapped the
+// view sideways. The console made lock churn routine (Esc menus, publish tabs
+// opening and returning), which is when the punches started landing. This
+// capture-phase listener runs BEFORE PLC's document-level handler: for a beat
+// after any lock/focus flip, deltas beyond a gentle cap are dropped whole;
+// past that, a delta no wrist flick could produce in one coalesced frame is
+// saturated and fed through applyLook at PLC's own delta→radians scale.
+// Ordinary aim never enters either branch and reaches PLC untouched.
+{
+  const SETTLE_MS  = 150;   // how long after a lock/focus flip big deltas stay suspect
+  const SETTLE_CAP = 60;    // px per event allowed through while settling
+  const FLICK_CAP  = 350;   // px per event beyond any human flick at frame cadence
+  let settleUntil = 0;
+  const arm = () => { settleUntil = performance.now() + SETTLE_MS; };
+  document.addEventListener('pointerlockchange', arm);
+  addEventListener('focus', arm);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) arm(); });
+  document.addEventListener('mousemove', e => {
+    if (!controls.isLocked) return;
+    const mx = e.movementX, my = e.movementY;
+    const now = performance.now(), settling = now < settleUntil;
+    const cap = settling ? SETTLE_CAP : FLICK_CAP;
+    if (Math.abs(mx) <= cap && Math.abs(my) <= cap) return;   // clean event → PLC as usual
+    e.stopImmediatePropagation();                             // PLC never sees this one
+    if (settling) return;                                     // fresh off a flip → drop it whole
+    const k = 0.002 * controls.pointerSpeed;                  // PLC's own delta→radians scale
+    applyLook(clamp(mx, -FLICK_CAP, FLICK_CAP) * k, clamp(my, -FLICK_CAP, FLICK_CAP) * k);
+  }, true);
 }
 
 /* ── adaptive hint: show whichever scheme the visitor is actually using ── */
