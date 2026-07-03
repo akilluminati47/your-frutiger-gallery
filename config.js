@@ -55,7 +55,18 @@ export const CONFIG = {
   // The hall, glass floor/walls and surrounding hills all auto-scale to this count.
   // With shuffleOrder off, the LAST row is gaze-triggered (walk to the end and look
   // to reveal it); the rest auto-load as you approach.
+  //
+  // END WALLS: the `walls` toggles below can hang one more world on each end of
+  // the hall — those take the FIRST entries of this list (00 = west first, then
+  // 000 = east), which is why the wall slots sit at the head. An ODD count never
+  // leaves a lonely half-row either way: the spare world is forced onto a free
+  // end wall automatically (console off → the far wall, console on → the
+  // entrance), so both side walls always stay in balanced pairs.
   projects: [
+    // the odd 9th at the head: with the console on (it holds the far 00 wall)
+    // the spare world is forced onto the sun-lit entrance wall as 000 — the
+    // template designer's own gallery greets you on the way in
+    { name: "Designer",      url: "https://akilluminati47.pages.dev/" },   // east wall · 000 (forced odd)
     { name: "Wikipedia",     url: "https://www.wikipedia.org/" },  // front · right
     { name: "YouTube",       url: "https://www.youtube.com/" },    // front · left
     { name: "Reddit",        url: "https://www.reddit.com/" },     // row2 · right
@@ -65,6 +76,21 @@ export const CONFIG = {
     { name: "akilluminati47", url: "https://akilluminati47.pages.dev/" },                      // back · right (gaze — an inception)
     { name: "Fork Me",        url: "https://github.com/akilluminati47/your-frutiger-gallery" }, // back · left  (gaze — this template, Aero Wall Console included)
   ],
+
+  // ── END-WALL WORLDS (00 / 000) ─────────────────────────────────────
+  // The hall's end walls can hold a world each, drawn from the FRONT of the
+  // projects list above:
+  //   west → the FAR wall at the end of the hall, slot 00, revealed by
+  //          gaze like the last row. The console lives on this wall, so
+  //          west only applies while console.enabled is false.
+  //   east → the sun-lit ENTRANCE wall (the sun rises behind spawn), slot
+  //          000, loading on the front row's beat. Turning it on also
+  //          builds the entrance glass pane + rail.
+  // Both on (console off) → list entry 0 goes west, entry 1 goes east.
+  // With shuffleOrder on, whichever worlds land in those head slots ride
+  // the walls that visit. Odd counts are always covered even with both
+  // toggles off — see the note above the projects list.
+  walls: { east: false, west: false },
 
   // ── CREATE-YOUR-OWN CONSOLE ────────────────────────────────────────
   // The glass config console on the hall's back wall: an interactive

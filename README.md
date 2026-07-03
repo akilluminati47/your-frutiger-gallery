@@ -32,7 +32,7 @@ gallery, forks this repository, and deploys it, all without leaving the world.
 |---|---|
 | No build step | Plain `index.html` + `styles.css` + `gallery.js` + `config.js`. Serve the folder statically and it runs. |
 | Live panels | Each work is captured at the visitor's own viewport aspect, so phones see phone layouts and desktops see desktop layouts. |
-| Self-scaling hall | Add or remove works freely: frames auto-arrange two per row and the glass floor, walls, and legs lengthen to fit. |
+| Self-scaling hall | Add or remove works freely: frames auto-arrange two per row and the glass floor, walls, and legs lengthen to fit. The end walls can hang a world each (00 west, 000 east), and an odd count is always caught by a free end wall — no lonely half-rows. |
 | In-world sign-ups | The back-wall console designs, forks, and hands off deployment: a complete registration pipeline inside the 3D scene. |
 | Fork-safe template | The repository ships anonymous. An owner's real branding lives in a Cloudflare secret or a committed `owner.config.json`, never in the template. |
 | Full input support | Keyboard + mouse, gamepad, and touch are auto-detected, with an adaptive on-screen hint. |
@@ -47,7 +47,7 @@ pause while you type.
 | Tab | What it does | Preview |
 |---|---|---|
 | identity | Handle, gallery title, browser-tab title, splash and pause lines | Live, on the real splash |
-| worlds | Paged plaque + URL editor with add/remove and a wall-balance hint | On your deployed gallery |
+| worlds | Paged plaque + URL editor with add/remove, west/east end-wall toggles (00/000 badges, inserting fresh slots), and a wall-balance hint | On your deployed gallery |
 | atmosphere | Bubble count/size/speed, cloud sliders, volume, shuffle and new-tab toggles | Bubbles and volume live |
 | publish | The sign-up pipeline, described below | |
 
@@ -55,7 +55,7 @@ pause while you type.
 
 | Step | Default | Notes |
 |---|---|---|
-| 1. Name it | Forks as-is | The *custom name* toggle opens a naming modal. Enter saves, Esc keeps the default. |
+| 1. Name it | Forks as the template's name | A plain console field — type the repository name straight into it. |
 | 2. GitHub | Connect, then one click | *Create my gallery* forks this repo under your account (custom name honored) and commits your whole design into the fork as `owner.config.json`. |
 | 3. Cloudflare | Guided hand-off | Opens the Pages new-project flow; connect the fork, accept the defaults, deploy. |
 | 4. Privacy (optional) | Copy buttons | The same design as a paste-ready `OWNER_CONFIG` secret, for owners who want their links out of the repo entirely. |
@@ -95,7 +95,8 @@ an owner's real settings arrive through the handshake below.
 | `pause` | object | Pause-card texts: `title`, `note`, `resume` |
 | `bubbles` | object | `count` (0 disables, phones run about two-thirds), `size`, `speed` multipliers |
 | `clouds` | object | `cover` 0..1 puffy coverage, `cirrus` 0..1 streak amount |
-| `projects` | array | `{ name, url }` per panel; pairs fill the hall front to back, an even count balances both walls |
+| `projects` | array | `{ name, url }` per panel; pairs fill the hall front to back, and an odd spare is forced onto a free end wall (console off → far wall, console on → entrance) |
+| `walls` | object | End-wall worlds from the head of `projects`: `west` hangs world 00 on the far wall (console off only), `east` hangs world 000 on the sun-lit entrance wall (builds its glass pane + rail) |
 | `console` | object | `enabled: false` removes the sign-ups wall; `sourceRepo` is the template it forks |
 | `shuffleOrder` | bool | Shuffle the hall on every load |
 | `openInNewTab` | bool | Open chosen worlds in a new tab instead of the same-tab swoop |

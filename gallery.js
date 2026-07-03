@@ -350,8 +350,44 @@ let galleryStartTime = null;   // seconds-from-load when the visitor entered (se
 const GROUND_Y = -8;                    // grassy world far beneath the glass
 const HALF = 4.7, DZ = 7.2, START_Z = 9;
 const FH = 2.4, FW = FH * ASPECT, FRAME_Y = eyeHeight;   // frames float at eye level
-const ROWS  = Math.ceil(CONFIG.projects.length / 2);
-const END_Z = START_Z + (ROWS - 1) * DZ;
+
+/* ── end-wall worlds (00 / 000) + the odd-panel guarantee ──────────────────
+   The corridor hangs worlds in PAIRS, but the hall's END walls can each hold
+   one more: WEST is the far wall at the end of the hall — slot 00, the wall
+   the console occupies while it's enabled — and EAST the sun-lit entrance
+   wall (the sun sits up & behind spawn) — slot 000. CONFIG.walls toggles eat
+   the HEAD of the (already shuffled) projects list — 00 = west first, then
+   000 = east — which is why those labels sort before world 0. West only
+   applies on console-off builds (the console IS the 00 occupant otherwise).
+   And whenever the leftover corridor count is ODD, one wall is forced no
+   matter what: console off → the far wall takes the deepest world (00),
+   console on → the console holds 00, so the sun side takes the head link
+   (000, forcing the entrance wall to build). Either way the paired side
+   walls stay balanced in every configuration. */
+const CON_ENABLED = CONFIG.console?.enabled !== false;   // section 5c's app gate — the layout needs it up here
+function planWalls(count, eastTog, westTog, consoleOn){
+  const plan = { east: -1, west: -1, forced: null };     // indices into the projects list
+  let head = 0;
+  if (westTog && !consoleOn && count > head) plan.west = head++;   // 00 eats the head…
+  if (eastTog && count > head) plan.east = head++;                 // …then 000
+  if ((count - head) % 2 === 1){
+    if (!consoleOn && plan.west < 0){ plan.west = count - 1; plan.forced = 'west'; }  // deepest world → far wall (00)
+    else if (plan.east < 0){ plan.east = head; plan.forced = 'east'; }                // head link → sun side (000)
+    // both walls already taken → the lone world rides the last row like before
+  }
+  return plan;
+}
+const WALL_PLAN = planWalls(CONFIG.projects.length,
+  CONFIG.walls?.east === true, CONFIG.walls?.west === true, CON_ENABLED);
+const wallProjects = {
+  east: WALL_PLAN.east >= 0 ? CONFIG.projects[WALL_PLAN.east] : null,
+  west: WALL_PLAN.west >= 0 ? CONFIG.projects[WALL_PLAN.west] : null,
+};
+const sideProjects = CONFIG.projects.filter((_, i) => i !== WALL_PLAN.east && i !== WALL_PLAN.west);
+const EAST_ON = !!wallProjects.east;    // an east world brings the front glass wall + rail with it
+
+const ROWS  = Math.ceil(sideProjects.length / 2);
+const END_Z = START_Z + (Math.max(ROWS, 1) - 1) * DZ;   // a walls-only hall keeps one row of floor
 // ── loading orchestration constants ──────────────────────────────────────
 const GAZE_ROWS      = 1;                    // last N rows are gaze-only (not auto)
 const GAZE_ROW_START = ROWS - GAZE_ROWS;    // first gaze row index
@@ -365,9 +401,14 @@ const FRAME_X = WALL_X - 0.12;          // frames hang pressed flat against the 
 // 4.98 = console slab height (4.725) + equal 0.1275 glass margins above and
 // below — the slab floats centred on the backwall pane, same reveal top + bottom
 const WALL_H  = 4.98;
-// back-wall console flag lives up here (not in section 5c) because the corridor
-// rails below need it to weld a clean corner when the backwall closes the hall
-const CON_ENABLED = CONFIG.console?.enabled !== false;
+// every pane-top rail (sides + both end walls) shares one glossy material and
+// one corner radius — the corridor's weld math (RAIL_BACK / RAIL_FRONT) and
+// the end rails in buildConsole / the front wall all read these
+const RAIL_R   = 0.05;
+const RAIL_MAT = new THREE.MeshPhysicalMaterial({
+  color:0xffffff, roughness:0.08, clearcoat:1, envMapIntensity:1.4,
+  iridescence: lowPerf ? 0 : 0.4, iridescenceIOR: 1.3,
+});
 const PLAT_Z0 = -7, PLAT_Z1 = END_Z + 7;
 const DESK_CZ = (PLAT_Z0 + PLAT_Z1) / 2;
 const DESK_W  = (WALL_X + 1.0) * 2;
@@ -526,24 +567,11 @@ scene.add(sun);
   }
   const texGlow  = flareTex([[0,'rgba(255,255,255,1)'],[0.18,'rgba(255,244,214,0.92)'],[0.5,'rgba(255,224,170,0.32)'],[1,'rgba(255,210,150,0)']]);
   const texGhost = flareTex([[0,'rgba(255,255,255,0)'],[0.55,'rgba(200,225,255,0.26)'],[0.82,'rgba(170,210,255,0.12)'],[1,'rgba(170,210,255,0)']]);
-  // anamorphic streak: a radial gradient squashed flat into a thin horizontal
-  // cyan line — the classic cinematic lens artifact laid across the sun
-  const texStreak = (() => {
-    const c = document.createElement('canvas'); c.width = c.height = 256;
-    const x = c.getContext('2d');
-    x.translate(128, 128);
-    x.scale(1, 0.055);
-    const g = x.createRadialGradient(0, 0, 0, 0, 0, 126);
-    g.addColorStop(0,   'rgba(235,250,255,0.85)');
-    g.addColorStop(0.25,'rgba(170,222,255,0.38)');
-    g.addColorStop(1,   'rgba(140,205,255,0)');
-    x.fillStyle = g; x.beginPath(); x.arc(0, 0, 126, 0, 7); x.fill();
-    const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
-  })();
+  // (no anamorphic streak on the disk: the flat cyan line read as a smear ON
+  // the sun itself — the warm glow + the ghost train carry the lens feel)
 
   const lf = new Lensflare();
   lf.addElement(new LensflareElement(texGlow, 340, 0,    new THREE.Color(0xfff0cf)));
-  lf.addElement(new LensflareElement(texStreak, 620, 0,  new THREE.Color(0xbfe4ff)));
   lf.addElement(new LensflareElement(texGhost, 46, 0.18));
   lf.addElement(new LensflareElement(texGhost, 72, 0.34));
   lf.addElement(new LensflareElement(texGhost, 120, 0.5));
@@ -640,6 +668,8 @@ function glassReflector(geo, { tex=1024, color=0x9fc0dd, alpha=0.5 } = {}){
 //      scene moves slowly so a 1–2 frame-old, faint reflection is invisible
 function dontNestReflections(){
   for (const r of allReflectors){
+    if (r.userData.nestGuarded) continue;   // idempotent: late panes (the end walls) re-run this
+    r.userData.nestGuarded = true;
     const orig = r.onBeforeRender;
     r.userData.tick = 0;
     r.userData.every = r.userData.every || 1;
@@ -722,11 +752,18 @@ function dontNestReflections(){
   scene.add(floor);
 
   // glass side walls — same reflective look as the floor, carried up the sides.
-  // When the console backwall closes the corridor, the side rails stop flush
-  // against the back rail's hall-side face (see buildConsole) — a welded
-  // corner instead of rails passing through each other.
-  const RAIL_L  = CON_ENABLED ? DESK_D - 0.76 : DESK_D - 0.6;
-  const RAIL_CZ = CON_ENABLED ? DESK_CZ - 0.08 : DESK_CZ;
+  // Rail corner math: the back rail always exists (the backwall pane is hall
+  // architecture, see buildConsole) and a front rail arrives with an east
+  // wall world. The side rails run between them, overshooting each end
+  // rail's hall-side face by the shared corner radius so their rounded tips
+  // hide INSIDE the end rail's volume — the joint meets at a full square
+  // cross-section: a perfectly welded corner, no overhang, no notch. With no
+  // front rail they instead stop flush with the pane's front edge.
+  const RAIL_BACK  = PLAT_Z1 - 0.46 + RAIL_R;             // back rail's hall face sits at -0.46
+  const RAIL_FRONT = EAST_ON ? PLAT_Z0 + 0.46 - RAIL_R    // tucked into the front rail
+                             : PLAT_Z0 + 0.4;             // open entrance → flush with the pane edge
+  const RAIL_L  = RAIL_BACK - RAIL_FRONT;
+  const RAIL_CZ = (RAIL_BACK + RAIL_FRONT) / 2;
   function buildWall(side){
     const x = side * WALL_X;
     // real planar reflection on EVERY device, so the gallery reflects across the
@@ -742,16 +779,27 @@ function dontNestReflections(){
 
     // crisp glossy top rail so the glass wall reads as a solid pane edge
     const rail = new THREE.Mesh(
-      new RoundedBoxGeometry(0.12, 0.12, RAIL_L, 3, 0.05),
-      new THREE.MeshPhysicalMaterial({
-        color:0xffffff, roughness:0.08, clearcoat:1, envMapIntensity:1.4,
-        iridescence: lowPerf ? 0 : 0.4, iridescenceIOR: 1.3,
-      })
-    );
+      new RoundedBoxGeometry(0.12, 0.12, RAIL_L, 3, RAIL_R), RAIL_MAT);
     rail.position.set(x, WALL_H, RAIL_CZ);
     scene.add(rail);
   }
   buildWall(-1); buildWall(1);
+
+  // the front (east) glass wall — arrives with an east wall world: the same
+  // live-reflection pane as the sides, plus the capping rail the side rails
+  // weld into. Without it the entrance stays open, exactly as before.
+  if (EAST_ON){
+    const fwall = glassReflector(new THREE.PlaneGeometry(WALL_X * 2, WALL_H),
+      { tex:REFL_WALL, color:0xa9cde6, alpha:0.40 });
+    fwall.position.set(0, WALL_H/2, PLAT_Z0 + 0.4);       // pane's face looks +z, into the hall
+    fwall.userData.every = lowPerf ? 3 : 2;
+    fwall.renderOrder = 2;
+    scene.add(fwall);
+    const frontRail = new THREE.Mesh(
+      new RoundedBoxGeometry(WALL_X * 2 + 0.12, 0.12, 0.12, 3, RAIL_R), RAIL_MAT);
+    frontRail.position.set(0, WALL_H, PLAT_Z0 + 0.4);
+    scene.add(frontRail);
+  }
   dontNestReflections();
 
   // glass legs dropping the platform down to the grass.
@@ -1179,18 +1227,10 @@ function buildGallery(font){
   // plane floating off each panel read as a milky rectangle washing out the
   // screenshot. The device slab is bare so every screen stays crisp.
 
-  CONFIG.projects.forEach((project, i) => {
+  // one frame group = device slab + name plaque + visit? text — shared by the
+  // corridor sides and the end walls; placeFrame positions it and registers it
+  function makeFrame(project, loadTrigger, autoDelay, loadDuration){
     const group = new THREE.Group();
-    // Orientation breadcrumb (layout is correct as-is — this only documents it):
-    // even i → side -1 → x = -FRAME_X; odd i → side +1 → x = +FRAME_X. You spawn
-    // facing +z, and for a +z-facing viewer "right" is -x (right = forward × up =
-    // +z × +y = -x). So EVEN indices (0,2,4,…) sit on your RIGHT wall at spawn and
-    // ODD indices on your LEFT. (The plaque side-notes in config.js follow this.)
-    const side        = (i % 2 === 0) ? -1 : 1;      // -1 = player's RIGHT wall, +1 = LEFT
-    const row         = Math.floor(i / 2);
-    const isGazeFrame = row >= GAZE_ROW_START;  // last N rows are gaze-only
-    group.position.set(side * FRAME_X, FRAME_Y, START_Z + row * DZ);  // pressed to the glass wall
-    group.rotation.y = side < 0 ? Math.PI/2 : -Math.PI/2;   // face the walkway
 
     // the screen: a flat rounded-rectangle showing the full screenshot stretched to
     // fill, smooth corners, no dark edge wrap. Per-frame canvas textures — managed
@@ -1237,17 +1277,49 @@ function buildGallery(font){
       project, visit, label, labelBaseY, scale:0, worldPos:new THREE.Vector3(),
       // ── loading state ──
       loadState:    'pending',               // 'pending' | 'loading' | 'done'
-      loadTrigger:  isGazeFrame ? 'gaze' : 'auto',
-      autoDelay:    isGazeFrame ? Infinity : autoDelayForRow(row, i%2),
-      loadDuration: isGazeFrame ? GAZE_LOAD_DUR : LOAD_DUR,
+      loadTrigger, autoDelay, loadDuration,
       loadProgress: 0, imageReady: false, liveTexture: null,
       screenMat, panel, whiteTex, strip: null, stripTex: null, stripCanvas: null,
       labelBloop: -1,
     };
+    return group;
+  }
+  function placeFrame(group, x, z, rotY){
+    group.position.set(x, FRAME_Y, z);
+    group.rotation.y = rotY;
     group.getWorldPosition(group.userData.worldPos);
     scene.add(group);
     frames.push(group);
+  }
+
+  sideProjects.forEach((project, i) => {
+    // Orientation breadcrumb (layout is correct as-is — this only documents it):
+    // even i → side -1 → x = -FRAME_X; odd i → side +1 → x = +FRAME_X. You spawn
+    // facing +z, and for a +z-facing viewer "right" is -x (right = forward × up =
+    // +z × +y = -x). So EVEN indices (0,2,4,…) sit on your RIGHT wall at spawn and
+    // ODD indices on your LEFT. (The plaque side-notes in config.js follow this.)
+    const side        = (i % 2 === 0) ? -1 : 1;      // -1 = player's RIGHT wall, +1 = LEFT
+    const row         = Math.floor(i / 2);
+    const isGazeFrame = row >= GAZE_ROW_START;  // last N rows are gaze-only
+    const f = makeFrame(project,
+      isGazeFrame ? 'gaze'      : 'auto',
+      isGazeFrame ? Infinity    : autoDelayForRow(row, i % 2),
+      isGazeFrame ? GAZE_LOAD_DUR : LOAD_DUR);
+    // pressed to the glass wall, facing the walkway
+    placeFrame(f, side * FRAME_X, START_Z + row * DZ, side < 0 ? Math.PI/2 : -Math.PI/2);
   });
+
+  // end-wall worlds (see planWalls): the EAST panel (000) hangs centred on
+  // the entrance wall facing into the hall and loads on the front row's beat
+  // — it lands with world 0. The WEST panel (00, console-off halls only)
+  // hangs on the far wall and reveals by gaze, like the hall's last row.
+  // Both sit 0.12 off their pane, the same standoff as the side frames.
+  if (wallProjects.east)
+    placeFrame(makeFrame(wallProjects.east, 'auto', autoDelayForRow(0, 0), LOAD_DUR),
+               0, PLAT_Z0 + 0.4 + 0.12, 0);
+  if (wallProjects.west)
+    placeFrame(makeFrame(wallProjects.west, 'gaze', Infinity, GAZE_LOAD_DUR),
+               0, PLAT_Z1 - 0.4 - 0.12, Math.PI);
 }
 
 /* ════════════════════════════════════════════════════════════════
@@ -1284,10 +1356,13 @@ function seedDraft(){
     shuffleOrder: CONFIG.shuffleOrder !== false,
     openInNewTab: !!CONFIG.openInNewTab,
     projects: CONFIG.projects.map(p => ({ name: p.name, url: p.url })),
+    // end-wall worlds: west = the far wall (00, free only while the console
+    // is off), east = the sun-lit entrance wall (000) — see planWalls
+    walls: { east: CONFIG.walls?.east === true, west: CONFIG.walls?.west === true },
     // always seeds OFF regardless of this deployment: the console is scaffolding —
     // a committed design hides it on the fork unless the owner opts back in
     consoleOn: false,
-    customName: false, repoName: (CONFIG.console?.sourceRepo || 'you/frutiger-gallery').split('/')[1],
+    repoName: (CONFIG.console?.sourceRepo || 'you/frutiger-gallery').split('/')[1],
   };
 }
 let draft = seedDraft(), draftEdited = false;
@@ -1315,6 +1390,7 @@ function buildOwnerJson(){
     volume: +d.volume.toFixed(2),
     shuffleOrder: d.shuffleOrder, openInNewTab: d.openInNewTab,
     console: { enabled: !!d.consoleOn },   // deep-merges over CONFIG.console — sourceRepo survives
+    walls: { east: !!d.walls?.east, west: !!d.walls?.west },
     projects: d.projects.filter(p => p.url.trim()).map(p => ({ name: p.name.trim() || 'World', url: p.url.trim() })),
   };
 }
@@ -1365,27 +1441,22 @@ function buildConsole(){
   consoleGroup.rotation.y = Math.PI;                    // face back down the hall
 
   // the glass backwall: closes the far end of the corridor like the side panes,
-  // spanning exactly between them
-  const backGlass = new THREE.Mesh(
-    new THREE.PlaneGeometry(WALL_X * 2, WALL_H),
-    new THREE.MeshPhysicalMaterial({
-      color: 0xa9cde6, roughness: 0.15, metalness: 0,
-      transparent: true, opacity: 0.4, envMapIntensity: 1.1, side: THREE.DoubleSide,
-    })
-  );
+  // spanning exactly between them — the SAME live-reflection glass as the
+  // sides (a physical-material pane here read frosted next to real mirrors)
+  const backGlass = glassReflector(new THREE.PlaneGeometry(WALL_X * 2, WALL_H),
+    { tex:512, color:0xa9cde6, alpha:0.40 });
   backGlass.position.set(0, WALL_H/2, 0);
+  backGlass.userData.every = lowPerf ? 3 : 2;   // same refresh cadence as the side panes
+  backGlass.renderOrder = 2;
   consoleGroup.add(backGlass);
   // back rail caps across the corner: its ends sit flush with the side rails'
-  // outer faces, and the (shortened) side rails butt into its hall-side face
+  // outer faces, and the side rails tuck their rounded tips inside its
+  // hall-side face (see RAIL_BACK) — the corner welds at full cross-section
   const backRail = new THREE.Mesh(
-    new RoundedBoxGeometry(WALL_X * 2 + 0.12, 0.12, 0.12, 3, 0.05),
-    new THREE.MeshPhysicalMaterial({
-      color: 0xffffff, roughness: 0.08, clearcoat: 1, envMapIntensity: 1.4,
-      iridescence: lowPerf ? 0 : 0.4, iridescenceIOR: 1.3,
-    })
-  );
+    new RoundedBoxGeometry(WALL_X * 2 + 0.12, 0.12, 0.12, 3, RAIL_R), RAIL_MAT);
   backRail.position.set(0, WALL_H, 0);
   consoleGroup.add(backRail);
+  dontNestReflections();                        // wire the new pane into the mirror nesting guard
 
   if (!CON_ENABLED){ scene.add(consoleGroup); return; }   // glass wall only, no app
 
@@ -1495,7 +1566,10 @@ function cAeroPill(cc, x, y, w, h, style, hot){
   gl.addColorStop(0,'rgba(255,255,255,.85)'); gl.addColorStop(1,'rgba(255,255,255,.06)');
   cc.save(); roundRect(cc, x+3, y+3, w-6, h*0.5, h/2 - 3); cc.clip();
   cc.fillStyle = gl; cc.fillRect(x, y, w, h*0.6); cc.restore();
-  cc.strokeStyle = hot ? '#ffffff' : 'rgba(255,255,255,.65)'; cc.lineWidth = hot ? 4 : 2;
+  // ghost pills live on white glass, where a white hover ring vanishes — they
+  // light up with the same aqua ring the inset fields use; solid pills keep white
+  cc.strokeStyle = hot ? (style === 'ghost' ? AERO.aqua : '#ffffff') : 'rgba(255,255,255,.65)';
+  cc.lineWidth = hot ? 4 : 2;
   roundRect(cc, x, y, w, h, h/2); cc.stroke();
 }
 // widget emitters — each draws AND registers its hit-rect + action
@@ -1655,15 +1729,47 @@ function drawIdentity(cc, top){
 function drawWorlds(cc, top){
   const d = draft, PER = 6, pages = Math.max(1, Math.ceil(d.projects.length / PER));
   ui.page = clamp(ui.page, 0, pages - 1);
+  // where each world lands, on the DRAFT's own console/wall settings — the
+  // same planner the hall layout uses, so the badges never lie
+  const plan = planWalls(d.projects.length, !!d.walls?.east, !!d.walls?.west, d.consoleOn);
+  const sideCount = d.projects.length - (plan.east >= 0 ? 1 : 0) - (plan.west >= 0 ? 1 : 0);
+  // (00/000 are the code's slot breadcrumbs — the visitor just reads "west wall")
+  const hint = plan.forced === 'west' ? '  ·  the odd world rides the west wall'
+             : plan.forced === 'east' ? '  ·  the odd world rides the east wall'
+             : sideCount % 2          ? '  ·  add one more to balance both walls'
+             :                          '  ·  walls balanced ✓';
   cc.fillStyle = AERO.inkSoft; cFont(cc, 26); cc.textAlign = 'left'; cc.textBaseline = 'alphabetic';
-  cc.fillText(`your worlds — ${d.projects.length} panels` +
-              (d.projects.length % 2 ? '  ·  add one more to balance both walls' : '  ·  walls balanced ✓'),
-              64, top + 6);
+  cc.fillText(`your worlds — ${d.projects.length} panels` + hint, 64, top + 6);
+  // end-wall toggles: 00/000 hold the TOP of this list — toggling one ON
+  // inserts a fresh empty slot there (nothing existing gets eaten), toggling
+  // OFF tidies the slot away only while it's still blank. West is the far
+  // wall the console occupies while it's on; east the sun-lit entrance.
+  if (!d.walls) d.walls = { east: false, west: false };   // drafts saved before walls existed
+  wToggle(cc, 'w:west', 'west wall', 1210, top - 26, !!d.walls.west && !d.consoleOn,
+    d.consoleOn ? () => toast('the console owns the west wall — hide it in atmosphere first')
+                : v => {
+                    d.walls.west = v;
+                    if (v) d.projects.splice(0, 0, { name: '', url: '' });
+                    else if (d.projects[0] && !d.projects[0].name.trim() && !d.projects[0].url.trim())
+                      d.projects.splice(0, 1);
+                    saveDraft(); ui.dirty = true;
+                  });
+  wToggle(cc, 'w:east', 'east wall', 1620, top - 26, !!d.walls.east,
+    v => {
+      const slot = (d.walls.west && !d.consoleOn) ? 1 : 0;   // 000 sits just after 00
+      d.walls.east = v;
+      if (v) d.projects.splice(slot, 0, { name: '', url: '' });
+      else if (d.projects[slot] && !d.projects[slot].name.trim() && !d.projects[slot].url.trim())
+        d.projects.splice(slot, 1);
+      saveDraft(); ui.dirty = true;
+    });
   let y = top + 70;
   const start = ui.page * PER;
   d.projects.slice(start, start + PER).forEach((p, k) => {
     const i = start + k;
-    wField(cc, `w:name:${i}`, k === 0 ? 'plaque' : '', 64, y, 430, () => p.name, v => { p.name = v; }, 30);
+    const badge = i === plan.west ? `west wall${plan.forced === 'west' ? ' — the odd one' : ''}`
+                : i === plan.east ? `east wall${plan.forced === 'east' ? ' — the odd one' : ''}` : '';
+    wField(cc, `w:name:${i}`, badge || (k === 0 ? 'plaque' : ''), 64, y, 430, () => p.name, v => { p.name = v; }, 30);
     wField(cc, `w:url:${i}`, k === 0 ? 'url' : '', 540, y, 1280, () => p.url, v => { p.url = v; }, 200);
     wButton(cc, `w:del:${i}`, '✕', 1860, y, 62, 62, () => {
       d.projects.splice(i, 1); ui.focus = null; saveDraft(); ui.dirty = true;
@@ -1721,15 +1827,13 @@ function drawPublish(cc, top){
     cc.fillText(label, x1 + 60, y - 10);
   };
   let y = top + 40;
-  // 1 · name
+  // 1 · name — a plain console field like every other: type straight into it.
+  // Keystrokes are sanitised to GitHub-safe repo characters as they land.
   step(1, 'name it', true, y);
-  const shownName = d.customName ? d.repoName : (CONFIG.console?.sourceRepo || 'x/your-frutiger-gallery').split('/')[1];
-  cGlassInset(cc, x1 + 60, y + 20, 620, 62, 16, false);
-  cc.fillStyle = AERO.ink; cFont(cc, 30, 600); cc.textAlign = 'left'; cc.textBaseline = 'middle';
-  cc.fillText(shownName, x1 + 78, y + 52);
-  wToggle(cc, 'p:custom', 'custom name', x1 + 720, y + 27, d.customName, v => {
-    if (v) openRepoModal(); else { d.customName = false; saveDraft(); ui.dirty = true; }
-  });
+  wField(cc, 'p:name', '', x1 + 60, y + 20, 620, () => d.repoName,
+    v => { d.repoName = v.replace(/[^a-zA-Z0-9._-]+/g, '-'); }, 60);
+  cc.fillStyle = AERO.inkFaint; cFont(cc, 21); cc.textAlign = 'left'; cc.textBaseline = 'alphabetic';
+  cc.fillText('your GitHub repository name', x1 + 700, y + 58);
   // 2 · github
   y += 170;
   step(2, 'get your copy on GitHub', gh.doneFork, y);
@@ -1816,7 +1920,10 @@ async function doCreateGallery(){
   if (gh.busy) return;
   gh.err = null; gh.busy = 'fork'; ui.dirty = true; drawConsole();
   try {
-    const body = draft.customName && draft.repoName ? { name: draft.repoName.trim() } : {};
+    // the name-it field seeds with the template's own name; whatever it says
+    // (sans stray edge dashes) is the fork's name — empty falls back to GitHub's default
+    const name = (draft.repoName || '').trim().replace(/^-+|-+$/g, '');
+    const body = name ? { name } : {};
     const fr = await fetch('/api/gh/fork', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(body) });
     const fj = await fr.json().catch(() => ({}));
     if (!fr.ok) throw new Error(fj.error || `fork failed (${fr.status})`);
@@ -1834,30 +1941,6 @@ async function doCreateGallery(){
   }
   gh.busy = null; ui.dirty = true;
 }
-
-/* ── the custom repo-name modal (DOM, pointer-lock aware) ── */
-let modalOpen = false, relockAfterModal = false;
-function openRepoModal(){
-  const m = $('repoModal'); if (!m) return;
-  modalOpen = true;
-  relockAfterModal = !isTouch && controls.isLocked;
-  if (relockAfterModal) controls.unlock();             // unlock handler skips pause via modalOpen
-  const inp = $('repoNameInput');
-  inp.value = draft.customName ? draft.repoName : '';
-  m.classList.remove('hidden');
-  setTimeout(() => inp.focus(), 40);
-}
-function closeRepoModal(save){
-  const m = $('repoModal'); if (!m) return;
-  const v = $('repoNameInput').value.trim().replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
-  if (save && v){ draft.customName = true; draft.repoName = v; saveDraft(); }
-  else if (save && !v){ draft.customName = false; saveDraft(); }
-  if (!save) draft.customName = false;
-  m.classList.add('hidden');
-  modalOpen = false; ui.dirty = true;
-  if (relockAfterModal){ relockAfterModal = false; controls.lock(); }
-}
-$('repoModalOk')?.addEventListener('click', () => closeRepoModal(true));
 
 /* ── per-frame: aim, hover, repaint ── */
 const _conRay = new THREE.Raycaster();
@@ -1912,11 +1995,6 @@ function consolePress(){
   return true;
 }
 function consoleTypeKey(e){
-  if (modalOpen){                                        // modal owns the keyboard
-    if (e.key === 'Enter'){ closeRepoModal(true); e.preventDefault(); }
-    else if (e.key === 'Escape'){ closeRepoModal(false); e.preventDefault(); }
-    return true;
-  }
   if (!ui.focus) return false;
   const w = ui.widgets.find(x => x.id === ui.focus && x.type === 'field');
   if (!w){ ui.focus = null; return false; }
@@ -1977,7 +2055,7 @@ function setInputMode(mode){
 /* ── keyboard ── */
 const keys = {};
 addEventListener('keydown', e => {
-  if (consoleTypeKey(e)) return;      // a console field (or its modal) owns the keyboard
+  if (consoleTypeKey(e)) return;      // a lit console field owns the keyboard
   keys[e.code] = true;
   if (e.code === 'KeyE') tryLaunch();
   if (e.code !== 'Escape') setInputMode('keyboard');
@@ -2474,7 +2552,7 @@ controls.addEventListener('lock', () => {
   crosshairEl?.classList.remove('show');     // clear the menu cursor while in-game
   if (!started) beginPlay(); else resumeGame();
 });
-controls.addEventListener('unlock', () => { if (state === 'launching' || modalOpen) return; pauseGame(); });
+controls.addEventListener('unlock', () => { if (state === 'launching') return; pauseGame(); });
 
 $('enterBtn').addEventListener('click', startExperience);
 $('resumeBtn').addEventListener('click', () => {

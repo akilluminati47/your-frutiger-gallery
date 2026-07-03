@@ -13,11 +13,14 @@
   "loadingNote": "Loading the world…",
   "readyNote": "{n} worlds ready",
 
-  "_projects":      "Your works. Add or remove rows freely (keep it an even number so the walls stay balanced). name = the plaque, url = where visit? takes you. The gallery lengthens automatically.",
+  "_projects":      "Your works. Add or remove rows freely — odd counts are fine: the spare world hangs on an end wall automatically. name = the plaque, url = where visit? takes you. The gallery lengthens automatically.",
   "projects": [
     { "name": "My Site",    "url": "https://example.com/" },
     { "name": "My YouTube", "url": "https://www.youtube.com/" },
     { "name": "My Twitch",  "url": "https://www.twitch.tv/" },
     { "name": "My GitHub",  "url": "https://github.com/" }
-  ]
+  ],
+
+  "_walls":         "Optional end-wall worlds, taken from the FIRST entries of projects: west = the far wall at the end of the hall (slot 00, only with the console off), east = the sun-lit entrance wall (slot 000).",
+  "walls": { "east": false, "west": false }
 }
