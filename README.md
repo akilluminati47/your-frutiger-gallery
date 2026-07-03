@@ -32,7 +32,7 @@ gallery, forks this repository, and deploys it, all without leaving the world.
 |---|---|
 | No build step | Plain `index.html` + `styles.css` + `gallery.js` + `config.js`. Serve the folder statically and it runs. |
 | Live panels | Each work is captured at the visitor's own viewport aspect, so phones see phone layouts and desktops see desktop layouts. |
-| Self-scaling hall | Add or remove works freely: frames auto-arrange two per row and the glass floor, walls, and legs lengthen to fit. The end walls are independent slots that can hang a world each (00 west, 000 east) or stand as bare glass, and an odd count is always caught by a free end wall — no lonely half-rows. |
+| Self-scaling hall | Add or remove works freely: frames auto-arrange two per row and the glass floor, walls, and legs lengthen to fit. The end walls are independent slots that can hang a world each (00 west, 000 east) or stand as bare glass, and an odd count is always caught by a free end wall; no lonely half-rows. |
 | In-world sign-ups | The back-wall console designs, forks, and hands off deployment: a complete registration pipeline inside the 3D scene. |
 | Fork-safe template | The repository ships anonymous. An owner's real branding lives in a Cloudflare secret or a committed `owner.config.json`, never in the template. |
 | Full input support | Keyboard + mouse, gamepad, and touch are auto-detected, with an adaptive on-screen hint. |
@@ -57,7 +57,7 @@ while you type.
 
 | Step | Default | Notes |
 |---|---|---|
-| 1. Name it | Forks as the template's name | A plain console field — type the repository name straight into it. |
+| 1. Name it | Forks as the template's name | A plain console field: type the repository name straight into it. |
 | 2. GitHub | Connect, then one click | *Create my gallery* forks this repo under your account (custom name honored) and commits your whole design into the fork as `owner.config.json`. |
 | 3. Cloudflare | Guided hand-off | Opens the Pages new-project flow; connect the fork, accept the defaults, deploy. |
 | 4. Privacy (optional) | Copy buttons | The same design as a paste-ready `OWNER_CONFIG` secret, for owners who want their links out of the repo entirely. |
@@ -203,6 +203,6 @@ to its screen pixels, so the barber-pole bar stays sharp at a fixed upload cost.
 
 Frutiger Aero gallery. Built with [three.js](https://threejs.org).
 Screenshots by [thum.io](https://www.thum.io), [mShots](https://developer.wordpress.com/docs/site-previews/), and [microlink](https://microlink.io).
-Sound effects from Microsoft Windows 7 (© Microsoft Corporation) — the logon,
+Sound effects from Microsoft Windows 7 (© Microsoft Corporation): the logon,
 balloon, notify, print-complete, pop-up-blocked, UAC, and information-bar sounds
 in `sfx/`.
