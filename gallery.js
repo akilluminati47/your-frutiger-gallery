@@ -1210,14 +1210,16 @@ function buildGallery(font){
   stripGeo = new THREE.PlaneGeometry(stripW, stripW * (STRIP_H / STRIP_W));
   stripZ   = DEV_Z + DEV_DEPTH / 2 + 0.012;
 
-  // Matte "visit?" — the CLICK's emissive flare (see the animate loop) is the
-  // text's highlight now. No clearcoat/gloss means the sun can't strike a
-  // blinding glint when you face a panel head-on with the sun at your back
-  // (it also removes the razor-sharp clearcoat spikes the NaN-scrub pass
-  // guards bloom against). Low envMapIntensity keeps soft sky shading.
+  // Fully matte "visit?" — the CLICK's emissive flare (see the animate loop) is
+  // the text's ONLY highlight. The bevel below is 3 discrete facet rings, so any
+  // view-dependent specular — the sun's lobe or the env-map's HDR sun disk —
+  // snapped on facet by facet as you strafed: a hard-edged glare band sweeping
+  // the glyphs, on with one step, gone with the next. Diffuse-only shading
+  // (roughness 1, no env) is view-independent, so the text holds still while
+  // you walk; hemi + sun + the resting emissive tint carry its shape instead.
   const visitMat = new THREE.MeshStandardMaterial({
-    color:0xffffff, roughness:0.85, metalness:0,
-    emissive:0x2aa9ff, emissiveIntensity:0.22, envMapIntensity:0.3,
+    color:0xffffff, roughness:1, metalness:0,
+    emissive:0x2aa9ff, emissiveIntensity:0.22, envMapIntensity:0,
   });
 
   // "visit?" geometry — built glyph-by-glyph instead of one TextGeometry call.
