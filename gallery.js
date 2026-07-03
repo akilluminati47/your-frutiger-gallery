@@ -2489,17 +2489,18 @@ function pollPad(dt){
 }
 
 /* ════════════════════════════════════════════════════════════════
-   7 · SFX — Microsoft Windows 7 sounds in sfx/ (© Microsoft
-       Corporation), plus two synth accents (menu bubble pops + the
-       face-a-panel droplet stay synthesised)
+   7 · SFX — Microsoft Windows 7 sounds in sfx/, © Microsoft
+       Corporation, drawn from the default and Garden sound schemes.
+       Every sound is a real sample now; nothing is synthesised.
    ════════════════════════════════════════════════════════════════ */
 const audio = (() => {
   let ctx, master;
   const SFX = {
     press:    'sfx/Windows User Account Control.wav',  // console widget clicked
     hover:    'sfx/Windows Information Bar.wav',       // console field/button highlight
-    ping:     'sfx/Windows Balloon.wav',               // slab screenshot lands (pair clock)
-    gazePing: 'sfx/Windows Balloon.flac',              // gaze-triggered slab lands
+    ping:     'sfx/Windows Balloon.wav',               // slab screenshot lands (all slabs + console boot)
+    droplet:  'sfx/Windows Balloon.flac',              // facing a fresh panel
+    pop:      'sfx/Speech Disambiguation.wav',         // menu bubble popped
     intro:    'sfx/Windows Logon Sound.flac',          // Enter → the glide in
     launch:   'sfx/Windows Print complete.flac',       // slab clicked → launch swoop
     resume:   'sfx/Windows Pop-up Blocked.flac',       // pause menu closes
@@ -2540,37 +2541,7 @@ const audio = (() => {
     return { pan, gain };
   }
 
-  // env(): build an attack/decay gain. Pass a {pan, gain} (from place()) to drop
-  // the source into the stereo field and attenuate it by distance.
-  function env(node, t0, a, d, peak, sp){
-    const g = ctx.createGain(); node.connect(g);
-    let tail = g;
-    if (sp){
-      peak *= sp.gain;
-      if (ctx.createStereoPanner){
-        const p = ctx.createStereoPanner(); p.pan.value = sp.pan;
-        g.connect(p); tail = p;
-      }
-    }
-    tail.connect(master);
-    g.gain.setValueAtTime(0, t0);
-    g.gain.linearRampToValueAtTime(peak, t0 + a);
-    g.gain.exponentialRampToValueAtTime(0.0001, t0 + a + d);
-    return g;
-  }
-  function droplet(pos){
-    if (!ctx) return; const t = ctx.currentTime, sp = place(pos);
-    const o = ctx.createOscillator(); o.type = 'sine';
-    o.frequency.setValueAtTime(900, t); o.frequency.exponentialRampToValueAtTime(420, t+0.12);
-    env(o, t, 0.005, 0.22, 0.5, sp); o.start(t); o.stop(t+0.3);
-  }
-  function pop(pos){
-    if (!ctx) return; const t = ctx.currentTime, sp = place(pos);
-    const o = ctx.createOscillator(); o.type = 'triangle';
-    o.frequency.setValueAtTime(520, t); o.frequency.exponentialRampToValueAtTime(1100, t+0.06);
-    env(o, t, 0.004, 0.1, 0.4, sp); o.start(t); o.stop(t+0.16);
-  }
-  // ── sample player: drop a decoded file into the same stereo field ──
+  // ── sample player: drop a decoded file into the stereo field ──
   function start(buf, pos, peak){
     const src = ctx.createBufferSource(); src.buffer = buf;
     const sp = pos ? place(pos) : null;
@@ -2593,11 +2564,12 @@ const audio = (() => {
   // console volume slider drives the master gain live
   function setVolume(v){ if (master) master.gain.value = clamp(v, 0, 1); }
   return {
-    init, droplet, pop, setVolume,
+    init, setVolume,
     press:       ()  => playBuf('press', null, 0.9),
     hover:       ()  => playBuf('hover', null, 0.65),
     ping:        pos => playBuf('ping', pos),
-    gazePing:    pos => playBuf('gazePing', pos),
+    droplet:     pos => playBuf('droplet', pos, 0.8),
+    pop:         pos => playBuf('pop', pos, 0.7),
     intro:       ()  => playBuf('intro'),
     launch:      ()  => playBuf('launch'),
     pauseOpen:   ()  => playBuf('pause', null, 0.9),
@@ -2735,10 +2707,9 @@ function revealWorld(f){
   u.stripTex?.dispose?.(); u.stripTex = null; u.stripCanvas = null;
   u.whiteTex?.dispose?.(); u.whiteTex = null;
   // Trigger name-plaque bloop — the balloon ping rings from the panel's spot
-  // on its wall; gaze-fired slabs (west wall + last row) get their own flavour
+  // on its wall, one sound for every slab
   u.labelBloop = 0;
-  if (u.loadTrigger === 'gaze') audio.gazePing(u.worldPos);
-  else audio.ping(u.worldPos);
+  audio.ping(u.worldPos);
 }
 
 function updateLoadingSystem(dt, t){
