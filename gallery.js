@@ -1265,6 +1265,10 @@ const CON_CW = 8.4, CON_CH = CON_CW * (CON.H / CON.W);   // slab size in world u
 const CON_PX = CON_CW / 2048;                            // one layout px on the slab
 let consoleMesh = null, consoleTex = null, consoleCtx = null, consoleGroup = null;
 let conCursor = null;                                    // the aero pointer: its own tiny quad
+// boot cutscene: the console loads WITH the hall — blank glass until slab 0
+// starts its bar, then the same 1.8 s beat before the UI pops in
+const CON_BOOT_MS = LOAD_DUR * 1000;
+const conBoot = { s: 'pending', t0: 0 };                 // 'pending' | 'loading' | 'done'
 
 // ── the draft: the visitor's design-in-progress. Seeds from the live CONFIG,
 // survives the OAuth round-trip (and reloads) via localStorage.
@@ -1280,6 +1284,9 @@ function seedDraft(){
     shuffleOrder: CONFIG.shuffleOrder !== false,
     openInNewTab: !!CONFIG.openInNewTab,
     projects: CONFIG.projects.map(p => ({ name: p.name, url: p.url })),
+    // always seeds OFF regardless of this deployment: the console is scaffolding —
+    // a committed design hides it on the fork unless the owner opts back in
+    consoleOn: false,
     customName: false, repoName: (CONFIG.console?.sourceRepo || 'you/frutiger-gallery').split('/')[1],
   };
 }
@@ -1307,6 +1314,7 @@ function buildOwnerJson(){
     clouds:  { cover: +d.clouds.cover.toFixed(2), cirrus: +d.clouds.cirrus.toFixed(2) },
     volume: +d.volume.toFixed(2),
     shuffleOrder: d.shuffleOrder, openInNewTab: d.openInNewTab,
+    console: { enabled: !!d.consoleOn },   // deep-merges over CONFIG.console — sourceRepo survives
     projects: d.projects.filter(p => p.url.trim()).map(p => ({ name: p.name.trim() || 'World', url: p.url.trim() })),
   };
 }
@@ -1347,8 +1355,9 @@ const ui = {
 function toast(msg){ ui.note = msg; ui.noteT = performance.now(); ui.dirty = true; }
 
 // ── geometry: glass backwall pane + rail + the XXL console slab ──
+// The pane + rail are hall architecture and ALWAYS build (the third glass
+// wall); CON_ENABLED only gates the console app skinned onto it.
 function buildConsole(){
-  if (!CON_ENABLED) return;
   consoleGroup = new THREE.Group();
   // sits exactly where the side panes end (PLAT_Z1 - 0.4), so the back pane's
   // edges land ON the side panes at x = ±WALL_X — a clean glass corner
@@ -1377,6 +1386,8 @@ function buildConsole(){
   );
   backRail.position.set(0, WALL_H, 0);
   consoleGroup.add(backRail);
+
+  if (!CON_ENABLED){ scene.add(consoleGroup); return; }   // glass wall only, no app
 
   // the world-rounded-canvas XXL slab the console UI is skinned onto
   const CW = CON_CW, CH = CON_CH;
@@ -1431,6 +1442,8 @@ function buildConsole(){
   // mouse interaction — used for development and as an escape hatch anywhere
   // pointer lock is unavailable. Same widgets, same actions.
   if (new URLSearchParams(location.search).has('console')){
+    conBoot.s = 'done';                                   // desk mode skips the cutscene
+    drawConsole();                                        // repaint NOW — widgets exist pre-click
     Object.assign(cnv.style, {
       position:'fixed', inset:'auto 2vw 2vh 2vw', width:'96vw', zIndex: 200,
       borderRadius:'18px', boxShadow:'0 30px 80px rgba(10,60,120,.45)',
@@ -1558,6 +1571,25 @@ function drawConsole(){
   const sheen = cc.createLinearGradient(0, 0, 0, LH*0.4);
   sheen.addColorStop(0, 'rgba(255,255,255,.85)'); sheen.addColorStop(1, 'rgba(255,255,255,0)');
   cc.fillStyle = sheen; cc.fillRect(0, 0, LW, LH*0.4);
+  // boot cutscene: pending = clean glass (like the panels' white), loading =
+  // the same aero bar beat the panels get — no widgets until it lands
+  if (conBoot.s !== 'done'){
+    cc.fillStyle = 'rgba(20,80,126,.35)'; cFont(cc, 58, 700);
+    cc.textAlign = 'center'; cc.textBaseline = 'alphabetic';
+    cc.fillText('GALLERY CONSOLE', LW/2, LH/2 - 54);
+    if (conBoot.s === 'loading'){
+      const p = clamp((performance.now() - conBoot.t0) / CON_BOOT_MS, 0, 1);
+      const bw = 720, bh = 26, bx = (LW - bw)/2, by = LH/2;
+      cc.fillStyle = 'rgba(150,200,235,.45)'; roundRect(cc, bx, by, bw, bh, bh/2); cc.fill();
+      const g = cc.createLinearGradient(bx, 0, bx + bw, 0);
+      g.addColorStop(0, AERO.green); g.addColorStop(1, AERO.aqua);
+      cc.fillStyle = g; roundRect(cc, bx, by, Math.max(bh, bw*p), bh, bh/2); cc.fill();
+    }
+    cc.restore();
+    consoleTex.needsUpdate = true;
+    ui.dirty = false; ui.lastPaint = performance.now();
+    return;
+  }
   // header
   cc.fillStyle = AERO.deep; cFont(cc, 58, 700); cc.textAlign = 'left'; cc.textBaseline = 'alphabetic';
   cc.fillText('GALLERY CONSOLE', 64, 96);
@@ -1673,6 +1705,8 @@ function drawVibe(cc, top){
     v => { d.shuffleOrder = v; saveDraft(); ui.dirty = true; });
   wToggle(cc, 'v:newtab', 'open worlds in a new tab', x2, y += 110, d.openInNewTab,
     v => { d.openInNewTab = v; saveDraft(); ui.dirty = true; });
+  wToggle(cc, 'v:console', 'show the build-a-gallery console', x2, y += 110, d.consoleOn,
+    v => { d.consoleOn = v; saveDraft(); ui.dirty = true; }, 'applies on your deployed gallery');
 }
 function vibeLive(){ saveDraft(); applyDraftLive(); ui.dirty = true; }
 
@@ -1830,6 +1864,16 @@ const _conRay = new THREE.Raycaster();
 function updateConsole(){
   if (!consoleMesh) return;
   const now = performance.now();
+  // boot: kick off with slab 0's bar, run the same beat, land with a bloop
+  if (conBoot.s === 'pending'){
+    if (frames[0] && frames[0].userData.loadState !== 'pending'){
+      conBoot.s = 'loading'; conBoot.t0 = now; drawConsole();
+    }
+  } else if (conBoot.s === 'loading'){
+    if (now - conBoot.t0 >= CON_BOOT_MS){
+      conBoot.s = 'done'; ui.dirty = true; audio.bloop(consoleGroup?.position);
+    } else if (now - ui.lastPaint > 33) drawConsole();
+  }
   let on = false, cx = -1, cy = -1;
   if ((state === 'play' || state === 'intro') && player.position.z > PLAT_Z1 - 9.5){
     camera.getWorldDirection(_gazeDir);
@@ -1841,7 +1885,7 @@ function updateConsole(){
   }
   ui.cursor = { x: cx, y: cy, on };
   if (conCursor){                                        // pointer quad: free per-frame motion
-    conCursor.visible = on;
+    conCursor.visible = on && conBoot.s === 'done';
     if (on) conCursor.position.set((cx / CON.W - 0.5) * CON_CW + 17 * CON_PX,
                                    (0.5 - cy / CON.H) * CON_CH - 25 * CON_PX, 0.15);
   }
@@ -1856,7 +1900,7 @@ function updateConsole(){
 
 /* ── pressing & typing ── */
 function consolePress(){
-  if (!consoleMesh || !ui.cursor.on) return false;
+  if (!consoleMesh || conBoot.s !== 'done' || !ui.cursor.on) return false;
   const S = CON.W / 2048;
   const w = widgetAt(ui.cursor.x / S, ui.cursor.y / S);
   if (ui.focus && (!w || w.id !== ui.focus)) ui.focus = null;   // click elsewhere blurs

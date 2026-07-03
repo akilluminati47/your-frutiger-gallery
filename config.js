@@ -68,12 +68,15 @@ export const CONFIG = {
 
   // ── CREATE-YOUR-OWN CONSOLE ────────────────────────────────────────
   // The glass config console on the hall's back wall: an interactive
-  // builder where visitors design their own gallery live, then fork this
-  // repo and deploy it — the whole sign-up pipeline in-world.
-  //   enabled    → false removes the back-wall console entirely
+  // builder where visitors design their own gallery live, then fork the
+  // template and deploy it — the whole sign-up pipeline in-world.
+  //   enabled    → false hides the console APP (the glass back wall itself
+  //                always builds). The console is scaffolding: designs it
+  //                commits default this off on the fork, and the owner can
+  //                opt back in with the atmosphere-tab toggle.
   //   sourceRepo → the GitHub template repo the console forks for new owners
   console: {
-    enabled: true,
+    enabled: false,
     sourceRepo: "akilluminati47/your-frutiger-gallery",
   },
 
