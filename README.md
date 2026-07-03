@@ -8,23 +8,42 @@
 A walk-through, first-person 3D gallery in the Frutiger Aero style. Every panel is a
 live screenshot of a site, hung on glass walls over a grassy Bliss landscape, with
 drifting bubbles, a volumetric sky, and a dynamic sun flare. At the end of the hall
-stands the **Aero Sign-Ups wall**: a glass console where any visitor designs their own
-gallery, forks this repository, and deploys it, all without leaving the world.
+stands a glass console where you design your own gallery, fork this repository, and
+deploy it, all without leaving the world.
 
 **Walk it now: [frutiger-gallery.pages.dev](https://frutiger-gallery.pages.dev)**
 
 ## Contents
 
+- [Your gallery in three steps](#your-gallery-in-three-steps)
 - [Features](#features)
-- [The Aero Sign-Ups wall](#the-aero-sign-ups-wall)
-- [Get your own gallery](#get-your-own-gallery)
+- [The gallery console](#the-gallery-console)
 - [Configuration](#configuration)
-- [Deployment](#deployment)
-- [Sign-up API](#sign-up-api)
 - [Controls](#controls)
 - [Local development](#local-development)
+- [Host sign-ups from your own gallery](#host-sign-ups-from-your-own-gallery)
 - [Rendering notes](#rendering-notes)
 - [Credits](#credits)
+
+## Your gallery in three steps
+
+No tooling, no build step, nothing to install. You need a GitHub account and a free
+Cloudflare account; the console handles the rest.
+
+1. **Walk in.** Open the [live gallery](https://frutiger-gallery.pages.dev) and head
+   down the hall to the glass console on the back wall.
+2. **Design.** Set your handle, title, and splash lines; hang your worlds; tune
+   bubbles, clouds, and sound. Changes preview live, and every draft survives in
+   `localStorage`.
+3. **Publish.** *Create my gallery* forks this repository under your account with
+   your whole design committed inside, then hands you off to Cloudflare Pages:
+   connect the fork, accept the defaults, deploy. Every push to `main` redeploys.
+
+Prefer files over the console?
+[Use this template](https://github.com/akilluminati47/your-frutiger-gallery/generate)
+or [fork the repo](https://github.com/akilluminati47/your-frutiger-gallery/fork),
+edit [`config.js`](config.js) or commit an `owner.config.json`, and connect the repo
+to a Pages project (no build command, no output directory).
 
 ## Features
 
@@ -37,7 +56,7 @@ gallery, forks this repository, and deploys it, all without leaving the world.
 | Fork-safe template | The repository ships anonymous. An owner's real branding lives in a Cloudflare secret or a committed `owner.config.json`, never in the template. |
 | Full input support | Keyboard + mouse, gamepad, and touch are auto-detected, with an adaptive on-screen hint. |
 
-## The Aero Sign-Ups wall
+## The gallery console
 
 The corridor ends at a glass backwall carrying the **GALLERY CONSOLE**, painted on an
 extra-large rounded canvas slab. Aim with your view (an Aero cursor rides the slab),
@@ -51,9 +70,10 @@ while you type.
 | identity | Handle, gallery title, browser-tab title, splash and pause lines | Live, on the real splash |
 | worlds | Static west/east end-wall slots (own strings, toggled on/off without losing them) above a paged plaque + URL editor with add/remove, and a wall-balance hint | On your deployed gallery |
 | atmosphere | Bubble count/size/speed, cloud sliders, volume, shuffle and new-tab toggles | Bubbles and volume live |
-| publish | The sign-up pipeline, described below | |
+| publish | The three-step pipeline above, plus an optional privacy step | |
 
-### The pipeline
+<details>
+<summary><strong>The publish pipeline, step by step</strong></summary>
 
 | Step | Default | Notes |
 |---|---|---|
@@ -62,23 +82,11 @@ while you type.
 | 3. Cloudflare | Guided hand-off | Opens the Pages new-project flow; connect the fork, accept the defaults, deploy. |
 | 4. Privacy (optional) | Copy buttons | The same design as a paste-ready `OWNER_CONFIG` secret, for owners who want their links out of the repo entirely. |
 
-Every draft persists in `localStorage`, so the OAuth round-trip never loses a design.
-If the deployment has no OAuth configured, the publish tab degrades gracefully to
-fork-page deep links plus the copy buttons: the pipeline still works with zero setup.
+Every draft persists in `localStorage`, so the sign-in round-trip never loses a
+design. On a deployment with no sign-in configured, the publish tab offers fork-page
+deep links plus the copy buttons instead: the pipeline still works with zero setup.
 
-Appending `?console` to the URL renders the identical console as a flat overlay with
-direct mouse input, for machines without pointer lock and for debugging.
-
-## Get your own gallery
-
-| Route | How | Best for |
-|---|---|---|
-| In-world | Walk to the back wall of the [live gallery](https://frutiger-gallery.pages.dev), design, publish | Everyone |
-| Template | [Use this template](https://github.com/akilluminati47/your-frutiger-gallery/generate), pick a name, then edit `config.js` or commit an `owner.config.json` | Developers |
-| Fork | [Fork the repo](https://github.com/akilluminati47/your-frutiger-gallery/fork), same editing options | Developers |
-
-Then deploy on Cloudflare Pages: create a Pages project, connect the repo, accept the
-defaults (no build command, no output directory). Every push to `main` redeploys.
+</details>
 
 ## Configuration
 
@@ -109,7 +117,8 @@ an owner's real settings arrive through the handshake below.
 
 </details>
 
-### The owner handshake
+<details>
+<summary><strong>The owner handshake</strong></summary>
 
 The template never wears an owner's face. On load the gallery tries, in order:
 
@@ -124,39 +133,7 @@ writes only the keys that differ. [`owner.config.txt`](owner.config.txt) is a
 fill-in-the-blanks worksheet whose `_` lines are ignored notes; the whole file pastes
 directly into an `OWNER_CONFIG` secret.
 
-## Deployment
-
-The static gallery needs nothing beyond a Pages project. The connected sign-up flow
-needs one GitHub OAuth App and two environment variables on the Pages project.
-
-| Variable | Type | Purpose |
-|---|---|---|
-| `GH_CLIENT_ID` | Plain text | OAuth App client id |
-| `GH_CLIENT_SECRET` | Secret | OAuth App client secret |
-| `TEMPLATE_REPO` | Plain text, optional | `owner/repo` to fork; defaults to this repository |
-| `OWNER_CONFIG` | Secret, optional | This deployment's own branding JSON |
-
-Setup, once:
-
-1. Create the OAuth App at [github.com/settings/developers](https://github.com/settings/developers):
-   homepage `https://your-domain.pages.dev`, callback
-   `https://your-domain.pages.dev/api/gh/callback`. Leave device flow off.
-2. Add the variables above in the Pages project settings, then retry the deployment
-   (environment variables apply to new builds only).
-3. The console's publish tab switches from deep links to the connected flow on its own.
-
-## Sign-up API
-
-Pages Functions under [`functions/api/`](functions/api/):
-
-| Endpoint | Method | Role |
-|---|---|---|
-| `/api/gh/login` | GET | Starts the OAuth dance, `public_repo` scope, CSRF state cookie |
-| `/api/gh/callback` | GET | Exchanges the code; the token lands in an `HttpOnly` cookie (8 h), never in page JS |
-| `/api/gh/me` | GET | `200 {login}` connected, `401` not signed in, `501` OAuth unconfigured |
-| `/api/gh/fork` | POST | Forks the template, optional `{name}` for the custom-name toggle, waits for the fork to materialize |
-| `/api/gh/commit` | POST | Writes `owner.config.json` into the fork; refuses any repo the connected account does not own |
-| `/api/owner-config` | GET | Serves the `OWNER_CONFIG` secret to the handshake above |
+</details>
 
 ## Controls
 
@@ -180,8 +157,52 @@ npx wrangler pages dev .
 ```
 
 A local `owner.config.json` next to `index.html` (gitignored) previews an owner
-configuration during development. `http://localhost:4173/?console` gives the flat
-console overlay for quick UI work.
+configuration during development. Appending `?console` to any URL renders the
+identical console as a flat overlay with direct mouse input, for machines without
+pointer lock and for quick UI work.
+
+## Host sign-ups from your own gallery
+
+Your deployed gallery carries the same console this one does, and its publish tab
+works out of the box: fork-page deep links plus copy buttons, zero setup. This
+section is only for owners who want their console to offer visitors the fully
+connected one-click flow (sign in with GitHub, fork with the design committed
+inside). One GitHub OAuth App and two variables on your Pages project unlock it.
+
+<details>
+<summary><strong>Setup, once</strong></summary>
+
+| Variable | Type | Purpose |
+|---|---|---|
+| `GH_CLIENT_ID` | Plain text | OAuth App client id |
+| `GH_CLIENT_SECRET` | Secret | OAuth App client secret |
+| `TEMPLATE_REPO` | Plain text, optional | `owner/repo` to fork; defaults to this repository |
+| `OWNER_CONFIG` | Secret, optional | This deployment's own branding JSON |
+
+1. Create the OAuth App at [github.com/settings/developers](https://github.com/settings/developers):
+   homepage `https://your-domain.pages.dev`, callback
+   `https://your-domain.pages.dev/api/gh/callback`. Leave device flow off.
+2. Add the variables above in the Pages project settings, then retry the deployment
+   (environment variables apply to new builds only).
+3. The console's publish tab switches from deep links to the connected flow on its own.
+
+</details>
+
+<details>
+<summary><strong>Sign-up API</strong></summary>
+
+Pages Functions under [`functions/api/`](functions/api/):
+
+| Endpoint | Method | Role |
+|---|---|---|
+| `/api/gh/login` | GET | Starts the OAuth dance, `public_repo` scope, CSRF state cookie |
+| `/api/gh/callback` | GET | Exchanges the code; the token lands in an `HttpOnly` cookie (8 h), never in page JS |
+| `/api/gh/me` | GET | `200 {login}` connected, `401` not signed in, `501` OAuth unconfigured |
+| `/api/gh/fork` | POST | Forks the template, optional `{name}` for the custom-name toggle, waits for the fork to materialize |
+| `/api/gh/commit` | POST | Writes `owner.config.json` into the fork; refuses any repo the connected account does not own |
+| `/api/owner-config` | GET | Serves the `OWNER_CONFIG` secret to the handshake above |
+
+</details>
 
 ## Rendering notes
 
