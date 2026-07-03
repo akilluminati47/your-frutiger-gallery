@@ -3,7 +3,7 @@ import { PointerLockControls } from 'three/addons/controls/PointerLockControls.j
 import { Reflector } from 'three/addons/objects/Reflector.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { FontLoader } from 'three/addons/loaders/FontLoader.js';
-import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { mergeGeometries, toCreasedNormals } from 'three/addons/utils/BufferGeometryUtils.js';
 import { Lensflare, LensflareElement } from 'three/addons/objects/Lensflare.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
@@ -1212,16 +1212,18 @@ function buildGallery(font){
   stripGeo = new THREE.PlaneGeometry(stripW, stripW * (STRIP_H / STRIP_W));
   stripZ   = DEV_Z + DEV_DEPTH / 2 + 0.012;
 
-  // UNLIT "visit?" — the text steps out of the lighting equation entirely.
-  // Even the matte MeshStandard pass kept a residual sheen: roughness 1
-  // spreads the specular lobe rather than removing it, and Fresnel still
-  // lifts it toward grazing, so the beveled facets could catch the sun
-  // faintly. MeshBasic answers to no light at all — one constant colour, a
-  // glint impossible by construction. The animate loop drives brightness
-  // through material.color (the plaque's trick, since basic has no emissive):
-  // resting pale blue-white, and the CLICK flare multiplies it past the
-  // bloom threshold — the text's one deliberate highlight.
-  const visitMat = new THREE.MeshBasicMaterial({ color:0xd8ecff });
+  // Lit "visit?" — the beveled 3D look is back (the unlit detour read as a
+  // flat sticker). The glare hunt in short: clearcoat spikes → removed; matte
+  // → the band still snapped; unlit → glint-proof but shapeless. The real
+  // culprit was the GEOMETRY all along — flat facet normals quantising the
+  // highlight into hard bands — so visitGeo now ships crease-smoothed normals
+  // (see its builder) and the sweep glides instead of cutting. The flat front
+  // face still catches broad light head-on; that's a face being a face, and
+  // it reads natural. Matte-standard values otherwise, same as before.
+  const visitMat = new THREE.MeshStandardMaterial({
+    color:0xffffff, roughness:0.85, metalness:0,
+    emissive:0x2aa9ff, emissiveIntensity:0.22, envMapIntensity:0.3,
+  });
 
   // "visit?" geometry — built glyph-by-glyph instead of one TextGeometry call.
   // The bevel fattens every outline by ~0.022 a side, which fused the i and ?
@@ -1258,7 +1260,15 @@ function buildGallery(font){
     g.computeBoundingBox();
     const bb = g.boundingBox;
     g.translate(-(bb.min.x + bb.max.x)/2, -(bb.min.y + bb.max.y)/2, 0);
-    return g;
+    // soften the glare sweep: extrusion leaves the 3-segment bevel with flat
+    // per-facet normals, so a highlight used to cut across it facet by facet
+    // in hard bands. Crease-smoothing welds the normals over every seam
+    // shallower than 60° (cap→bevel→wall steps are ~22° apart), so the sun
+    // now glides around the profile as on a truly rounded edge, while real
+    // corners — glyph outline angles sharper than that — keep their crease.
+    const smooth = toCreasedNormals(g, Math.PI / 3);
+    g.dispose();
+    return smooth;
   })();
 
   // NOTE: no glass cover sheet over the screens — a near-transparent reflective
@@ -1309,7 +1319,6 @@ function buildGallery(font){
     visit.position.set(0, -0.15, 0.9);
     visit.scale.setScalar(0.001);
     visit.userData.baseY = -0.15;
-    visit.userData.baseCol = visit.material.color.clone();   // rest tint — the click flare multiplies off this
     group.add(visit);
 
     group.userData = {
@@ -3073,13 +3082,12 @@ function animate(){
     // Choosing a world starts the launch swoop and visit? shrinks away; the
     // halo tapers on as easeIO of that very shrink, so the flare and the
     // shrink are locked to one motion — the visitor activates the glow by
-    // choosing. UNLIT colour (basic material — no emissive), so it reads the
-    // same from any angle; the peak (~3.1× rest) sits over the bloom
-    // threshold (1.2) on purpose. Walking away (no click) shrinks the text
-    // with the colour held at its rest tint.
+    // choosing. EMISSIVE, so it reads from any angle; the peak (2.32) sits
+    // over the bloom threshold (1.2) on purpose. Walking away (no click)
+    // shrinks the text with the glow held at the 0.22 resting tint.
     const chosen = launch && launch.frame === f;
-    u.visit.material.color.copy(u.visit.userData.baseCol)
-      .multiplyScalar(1 + (FX ? 2.1 : 0.65) * (chosen ? easeIO(1 - u.scale) : 0));
+    u.visit.material.emissiveIntensity =
+      0.22 + (FX ? 2.1 : 0.65) * (chosen ? easeIO(1 - u.scale) : 0);
 
     // name plaque "hover": swell + lift ride the same breath as the glow.
     // Brightness alone stays steady while active (clamped under bloom, 1.2) —
