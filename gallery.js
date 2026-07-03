@@ -1210,17 +1210,16 @@ function buildGallery(font){
   stripGeo = new THREE.PlaneGeometry(stripW, stripW * (STRIP_H / STRIP_W));
   stripZ   = DEV_Z + DEV_DEPTH / 2 + 0.012;
 
-  // Fully matte "visit?" — the CLICK's emissive flare (see the animate loop) is
-  // the text's ONLY highlight. The bevel below is 3 discrete facet rings, so any
-  // view-dependent specular — the sun's lobe or the env-map's HDR sun disk —
-  // snapped on facet by facet as you strafed: a hard-edged glare band sweeping
-  // the glyphs, on with one step, gone with the next. Diffuse-only shading
-  // (roughness 1, no env) is view-independent, so the text holds still while
-  // you walk; hemi + sun + the resting emissive tint carry its shape instead.
-  const visitMat = new THREE.MeshStandardMaterial({
-    color:0xffffff, roughness:1, metalness:0,
-    emissive:0x2aa9ff, emissiveIntensity:0.22, envMapIntensity:0,
-  });
+  // UNLIT "visit?" — the text steps out of the lighting equation entirely.
+  // Even the matte MeshStandard pass kept a residual sheen: roughness 1
+  // spreads the specular lobe rather than removing it, and Fresnel still
+  // lifts it toward grazing, so the beveled facets could catch the sun
+  // faintly. MeshBasic answers to no light at all — one constant colour, a
+  // glint impossible by construction. The animate loop drives brightness
+  // through material.color (the plaque's trick, since basic has no emissive):
+  // resting pale blue-white, and the CLICK flare multiplies it past the
+  // bloom threshold — the text's one deliberate highlight.
+  const visitMat = new THREE.MeshBasicMaterial({ color:0xd8ecff });
 
   // "visit?" geometry — built glyph-by-glyph instead of one TextGeometry call.
   // The bevel fattens every outline by ~0.022 a side, which fused the i and ?
@@ -1308,6 +1307,7 @@ function buildGallery(font){
     visit.position.set(0, -0.15, 0.9);
     visit.scale.setScalar(0.001);
     visit.userData.baseY = -0.15;
+    visit.userData.baseCol = visit.material.color.clone();   // rest tint — the click flare multiplies off this
     group.add(visit);
 
     group.userData = {
@@ -3065,12 +3065,13 @@ function animate(){
     // Choosing a world starts the launch swoop and visit? shrinks away; the
     // halo tapers on as easeIO of that very shrink, so the flare and the
     // shrink are locked to one motion — the visitor activates the glow by
-    // choosing. EMISSIVE, so it reads from any angle; the peak (2.32) sits
-    // over the bloom threshold (1.2) on purpose. Walking away (no click)
-    // shrinks the text with the glow held at the 0.22 resting tint.
+    // choosing. UNLIT colour (basic material — no emissive), so it reads the
+    // same from any angle; the peak (~3.1× rest) sits over the bloom
+    // threshold (1.2) on purpose. Walking away (no click) shrinks the text
+    // with the colour held at its rest tint.
     const chosen = launch && launch.frame === f;
-    u.visit.material.emissiveIntensity =
-      0.22 + (FX ? 2.1 : 0.65) * (chosen ? easeIO(1 - u.scale) : 0);
+    u.visit.material.color.copy(u.visit.userData.baseCol)
+      .multiplyScalar(1 + (FX ? 2.1 : 0.65) * (chosen ? easeIO(1 - u.scale) : 0));
 
     // name plaque "hover": swell + lift ride the same breath as the glow.
     // Brightness alone stays steady while active (clamped under bloom, 1.2) —
