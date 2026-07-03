@@ -2034,6 +2034,7 @@ function drawPublish(cc, top){
   } else if (gh.mode === 'anon'){
     wButton(cc, 'p:connect', 'connect GitHub ↗', x1 + 60, y + 40, 480, 84, () => {
       saveDraft();
+      pauseHushUntil = performance.now() + 2000;
       window.open('/api/gh/login', '_blank');
       toast('sign in on the new tab · this one notices by itself');
     });
@@ -2042,6 +2043,7 @@ function drawPublish(cc, top){
   } else {
     wButton(cc, 'p:forklink', 'fork on GitHub ↗', x1 + 60, y + 40, 480, 84, () => {
       saveDraft();
+      pauseHushUntil = performance.now() + 2000;
       window.open(`https://github.com/${CONFIG.console?.sourceRepo || ''}/fork`, '_blank');
       toast('fork page opened — pick your name there');
     });
@@ -2054,6 +2056,7 @@ function drawPublish(cc, top){
   y += 250;
   step(3, 'deploy on Cloudflare Pages', false, y);
   wButton(cc, 'p:deploy', 'open Cloudflare ↗', x1 + 60, y + 40, 480, 84, () => {
+    pauseHushUntil = performance.now() + 2000;
     window.open('https://dash.cloudflare.com/?to=/:account/pages/new/provider/github', '_blank');
     toast('pick your new repo · accept the defaults · deploy');
   });
@@ -2670,12 +2673,15 @@ function startExperience(){
   else controls.lock();              // desktop / gamepad: pointer lock → 'lock' begins play
 }
 let pausedFrom = 'play';
+// publish buttons that open a second tab drop pointer lock, which auto-pauses
+// the page — that pause should arrive silently, not chime over the new tab
+let pauseHushUntil = 0;
 function pauseGame(){
   // pausable during the entry glide too (Esc during the whoosh used to no-op and
   // leave you stranded with the cursor showing and no menu)
   if (state !== 'play' && state !== 'intro') return;
   pausedFrom = state;
-  audio.pauseOpen();
+  if (performance.now() > pauseHushUntil) audio.pauseOpen();
   state = 'paused';                         // freezes movement (loop skips intro/play)
   padCursor.ready = false;                  // gamepad cursor re-centres each time the menu opens
   $('pause').classList.remove('hidden');
