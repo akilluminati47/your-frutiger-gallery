@@ -68,8 +68,8 @@ export const CONFIG = {
     { name: "Google",        url: "https://www.google.com/" },     // row2 · left
     { name: "Twitch",        url: "https://www.twitch.tv/" },      // row3 · right
     { name: "Facebook",      url: "https://www.facebook.com/" },   // row3 · left
-    { name: "Donate", url: "https://streamelements.com/akilluminati47/" },               // back · right (gaze — designer donation portal)
-    { name: "Fork Me", url: "https://github.com/akilluminati47/your-frutiger-gallery" }, // back · left  (gaze — this template, Aero Wall Console included)
+    { name: "GitHub Repo", url: "https://github.com/akilluminati47/your-frutiger-gallery" }, // back · right (gaze — this template, Aero Wall Console included)
+    { name: "Donate", url: "https://streamelements.com/akilluminati47/" },                   // back · left  (gaze — designer donation portal)
   ],
 
   // ── END-WALL WORLDS (00 / 000) ─────────────────────────────────────
