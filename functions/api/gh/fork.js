@@ -9,6 +9,19 @@ export async function onRequestPost({ request, env }){
   const tok = token(request);
   if (!tok) return json({ error: "connect GitHub first" }, 401);
   const src = env.TEMPLATE_REPO || DEFAULT_TEMPLATE;
+
+  // the template's own maintainer, testing the console on their own live
+  // gallery, is signed in under the account that already owns `src`.
+  // GitHub's fork endpoint doesn't error on "fork a repo you own" — it hands
+  // back the SOURCE repo itself as an already-satisfied fork, no new repo
+  // created. Trusting that full_name let commit.js's ownership-only check
+  // (repo.startsWith(me.login + '/')) pass for the template's own name,
+  // writing the visitor's design straight onto the template's main branch.
+  // Refuse explicitly instead of depending on GitHub's undocumented reply.
+  const me = await (await gh(tok, "/user")).json().catch(() => ({}));
+  if (me.login && me.login.toLowerCase() === src.split('/')[0].toLowerCase())
+    return json({ error: "you already own the template — sign in with a different account to test the fork" }, 409);
+
   let body = {};
   try { body = await request.json(); } catch {}
   const payload = { default_branch_only: true };
