@@ -1099,7 +1099,7 @@ function drawLoadingStrip(canvas, progress, animTime){
 // already pinging as you glide in, and the row cadence keeps each pair
 // landing before the player walks up to it.
 function autoDelayForRow(row){
-  const walkTime = (START_Z + row * DZ) / CONFIG.movement.maxSpeed;
+  const walkTime = (START_Z + row * DZ) / (CONFIG.movement.maxSpeed * (CONFIG.movement.speed ?? 1));
   return Math.max(0, walkTime - 1.5) + row * 0.3;
 }
 
@@ -1390,6 +1390,7 @@ function seedDraft(){
     bubbles: { ...(CONFIG.bubbles || { count:44, size:1, speed:1 }) },
     clouds:  { ...(CONFIG.clouds  || { cover:1, cirrus:0.35 }) },
     volume: CONFIG.volume ?? 0.6,
+    moveSpeed: CONFIG.movement?.speed ?? 1,
     shuffleOrder: CONFIG.shuffleOrder !== false,
     openInNewTab: !!CONFIG.openInNewTab,
     projects: CONFIG.projects.map(p => ({ name: p.name, url: p.url })),
@@ -1427,6 +1428,7 @@ function buildOwnerJson(){
     bubbles: { count: Math.round(d.bubbles.count), size: +d.bubbles.size.toFixed(2), speed: +d.bubbles.speed.toFixed(2) },
     clouds:  { cover: +d.clouds.cover.toFixed(2), cirrus: +d.clouds.cirrus.toFixed(2) },
     volume: +d.volume.toFixed(2),
+    movement: { speed: +d.moveSpeed.toFixed(2) },   // deep-merges over CONFIG.movement — accel/friction survive
     shuffleOrder: d.shuffleOrder, openInNewTab: d.openInNewTab,
     console: { enabled: !!d.consoleOn },   // deep-merges over CONFIG.console — sourceRepo survives
     // wall slots persist their strings even while toggled off — that's the point
@@ -1445,6 +1447,7 @@ function applyDraftLive(){
   CONFIG.creator = draft.creator; CONFIG.title = draft.title; CONFIG.tabTitle = draft.tabTitle;
   CONFIG.subtitle = draft.subtitle; CONFIG.loadingNote = draft.loadingNote; CONFIG.readyNote = draft.readyNote;
   CONFIG.pause = { ...draft.pause }; CONFIG.volume = draft.volume;
+  CONFIG.movement.speed = draft.moveSpeed;   // M aliases this object — the walk retunes mid-stride
   setLine('title', draft.title);
   setLine('subtitle', draft.subtitle);
   setLine('pauseTitle', draft.pause.title);
@@ -1985,6 +1988,9 @@ function drawVibe(cc, top){
     v => { d.bubbles.speed = v; vibeLive(); }, v => `${v.toFixed(2)}×`);
   wSlider(cc, 'v:vol', 'sound volume', x1, y += 130, colW, d.volume, 0, 1,
     v => { d.volume = v; vibeLive(); }, v => `${Math.round(v*100)}%`);
+  wSlider(cc, 'v:mspeed', 'movement speed', x1, y += 130, colW, d.moveSpeed, 0.5, 1.5,
+    v => { d.moveSpeed = v; vibeLive(); }, v => `${Math.round(v*100)}%`,
+    'tired of hints? stare into the sun and you won\'t see them anymore');
   y = top + 50;
   wSlider(cc, 'v:cover', 'cloud cover', x2, y, colW, d.clouds.cover, 0, 1,
     v => { d.clouds.cover = v; saveDraft(); }, v => v.toFixed(2), 'applies on your deployed gallery');
@@ -2601,7 +2607,8 @@ const audio = (() => {
   }
 
   // ── sample player: drop a decoded file into the stereo field ──
-  function start(buf, pos, peak){
+  const live = {};   // last-started source per sample, so a new sound can cut an old one
+  function start(buf, pos, peak, name){
     const src = ctx.createBufferSource(); src.buffer = buf;
     const sp = pos ? place(pos) : null;
     const g = ctx.createGain(); g.gain.value = peak * (sp ? sp.gain : 1);
@@ -2611,14 +2618,19 @@ const audio = (() => {
       g.connect(p); tail = p;
     }
     tail.connect(master); src.start();
+    live[name] = src;
+  }
+  function stopBuf(name){
+    try { live[name]?.stop(); } catch { /* already ended */ }
+    live[name] = null;
   }
   function playBuf(name, pos, peak = 1){
     if (!ctx) return;
-    if (bufs[name]) { start(bufs[name], pos, peak); return; }
+    if (bufs[name]) { start(bufs[name], pos, peak, name); return; }
     // the very first plays can race the decode — let a just-late sample still
     // fire, but never an ancient one
     const t0 = performance.now();
-    decoded[name]?.then(b => { if (b && performance.now() - t0 < 1200) start(b, pos, peak); });
+    decoded[name]?.then(b => { if (b && performance.now() - t0 < 1200) start(b, pos, peak, name); });
   }
   // console volume slider drives the master gain live
   function setVolume(v){ if (master) master.gain.value = clamp(v, 0, 1); }
@@ -2632,8 +2644,10 @@ const audio = (() => {
     pop:         pos => playBuf('pop', pos, 0.875),
     intro:       ()  => playBuf('intro'),
     launch:      ()  => playBuf('launch'),
-    pauseOpen:   ()  => playBuf('pause', null, 0.9),
-    resumeClick: ()  => playBuf('resume', null, 0.9),
+    // pause and resume interrupt each other — a quick close cuts the open
+    // chime instead of stacking on top of it, and vice versa
+    pauseOpen:   ()  => { stopBuf('resume'); playBuf('pause', null, 0.9); },
+    resumeClick: ()  => { stopBuf('pause'); playBuf('resume', null, 0.9); },
   };
 })();
 // unlock the AudioContext on the first user gesture so menu bubble-pops have sound
@@ -3052,15 +3066,18 @@ function moveAndInteract(dt, t, autoFwd = 0){
   );
   if (_moveDir.lengthSq() > 1) _moveDir.normalize();   // keep analog magnitudes < 1, cap diagonals
 
-  // damped acceleration → smooth, never jittery
+  // damped acceleration → smooth, never jittery. The console's movement-speed
+  // multiplier scales accel and top speed together, so time-to-max (the feel)
+  // stays the same while the pace changes
+  const spMul = M.speed ?? 1, vMax = M.maxSpeed * spMul;
   velocity.x -= velocity.x * M.friction * dt;
   velocity.z -= velocity.z * M.friction * dt;
   if (_moveDir.lengthSq() > 0){
-    velocity.x += _moveDir.x * M.accel * dt;
-    velocity.z += _moveDir.z * M.accel * dt;
+    velocity.x += _moveDir.x * M.accel * spMul * dt;
+    velocity.z += _moveDir.z * M.accel * spMul * dt;
   }
   const sp = Math.hypot(velocity.x, velocity.z);
-  if (sp > M.maxSpeed){ velocity.x *= M.maxSpeed/sp; velocity.z *= M.maxSpeed/sp; }
+  if (sp > vMax){ velocity.x *= vMax/sp; velocity.z *= vMax/sp; }
 
   controls.moveRight(velocity.x * dt);
   controls.moveForward(velocity.z * dt);
@@ -3069,7 +3086,7 @@ function moveAndInteract(dt, t, autoFwd = 0){
   o.position.x = clamp(o.position.x, -(WALL_X-0.7), WALL_X-0.7);
   o.position.z = clamp(o.position.z, PLAT_Z0+1, PLAT_Z1-1);
   // gentle, speed-scaled head-bob (smoothed so it never snaps)
-  smoothSpeed = lerp(smoothSpeed, Math.min(sp/M.maxSpeed, 1), 1 - Math.pow(0.0001, dt));
+  smoothSpeed = lerp(smoothSpeed, Math.min(sp/vMax, 1), 1 - Math.pow(0.0001, dt));
   bobPhase += dt * 6.2 * smoothSpeed;
   o.position.y = eyeHeight + Math.sin(bobPhase) * 0.012 * smoothSpeed;
 
