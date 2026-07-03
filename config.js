@@ -90,7 +90,7 @@ export const CONFIG = {
   // With shuffleOrder on, whichever worlds land in those head slots ride
   // the walls that visit. Odd counts are always covered even with both
   // toggles off — see the note above the projects list.
-  walls: { east: false, west: false },
+  walls: { east: true, west: true },
 
   // ── CREATE-YOUR-OWN CONSOLE ────────────────────────────────────────
   // The glass config console on the hall's back wall: an interactive
@@ -102,7 +102,7 @@ export const CONFIG = {
   //                opt back in with the atmosphere-tab toggle.
   //   sourceRepo → the GitHub template repo the console forks for new owners
   console: {
-    enabled: false,
+    enabled: true,
     sourceRepo: "akilluminati47/your-frutiger-gallery",
   },
 
@@ -111,7 +111,7 @@ export const CONFIG = {
   shuffleOrder: false,
 
   // Open the chosen domain in a new tab instead of swooping the same tab.
-  openInNewTab: false,
+  openInNewTab: true,
 
   // Live-screenshot provider used to paint each frame.
   //   "thumio"    – image.thum.io  (fast, honours width/height, good CORS)
@@ -125,12 +125,12 @@ export const CONFIG = {
 
   // Feel of the first-person walk.
   movement: {
-    accel: 43, friction: 8, maxSpeed: 6.4, mouseSensitivity: 1.0,
-    padLook: 2.6, touchLook: 0.0045,
+    accel: 47, friction: 8, maxSpeed: 9, mouseSensitivity: 0.8,
+    padLook: 3.6, touchLook: 0.0045,
   },
 
   // Master volume for the synthesised SFX / ambient pad (0–1).
-  volume: 0.6,
+  volume: 0.3,
 };
 
 // ════════════════════════════════════════════════════════════════════
