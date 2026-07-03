@@ -105,7 +105,7 @@ an owner's real settings arrive through the handshake below.
 | `screenshotProvider` | string | `thumio`, `mshots`, or `microlink`; failures fall through the whole list |
 | `postFX` | bool | HDR bloom, filmic grade, dynamic resolution; `false` is the low-end kill switch |
 | `movement` | object | Walk feel: `accel`, `friction`, `maxSpeed`, look sensitivities |
-| `volume` | number | Master volume for the synthesized SFX, 0..1 |
+| `volume` | number | Master volume for the SFX, 0..1 |
 
 </details>
 
@@ -203,3 +203,6 @@ to its screen pixels, so the barber-pole bar stays sharp at a fixed upload cost.
 
 Frutiger Aero gallery. Built with [three.js](https://threejs.org).
 Screenshots by [thum.io](https://www.thum.io), [mShots](https://developer.wordpress.com/docs/site-previews/), and [microlink](https://microlink.io).
+Sound effects from Microsoft Windows 7 (© Microsoft Corporation) — the logon,
+balloon, notify, print-complete, pop-up-blocked, UAC, and information-bar sounds
+in `sfx/`.

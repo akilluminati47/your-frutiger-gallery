@@ -2091,7 +2091,7 @@ async function doCreateGallery(){
     const cj = await cr.json().catch(() => ({}));
     if (!cr.ok) throw new Error(cj.error || `config commit failed (${cr.status})`);
     gh.doneConfig = true;
-    audio.bloop(consoleGroup?.position);
+    audio.ping(consoleGroup?.position);
     toast('your gallery exists ✦ now deploy it on Cloudflare');
   } catch (e){
     gh.err = String(e.message || e).slice(0, 90);
@@ -2111,7 +2111,7 @@ function updateConsole(){
     }
   } else if (conBoot.s === 'loading'){
     if (now - conBoot.t0 >= CON_BOOT_MS){
-      conBoot.s = 'done'; ui.dirty = true; audio.bloop(consoleGroup?.position);
+      conBoot.s = 'done'; ui.dirty = true; audio.ping(consoleGroup?.position);
     } else if (now - ui.lastPaint > 33) drawConsole();
   }
   let on = false, cx = -1, cy = -1;
@@ -2131,7 +2131,7 @@ function updateConsole(){
   }
   if (on){
     const h = widgetAt(cx / (CON.W/2048), cy / (CON.W/2048));
-    if (h?.id !== ui.hover?.id){ ui.hover = h; ui.dirty = true; }
+    if (h?.id !== ui.hover?.id){ ui.hover = h; ui.dirty = true; if (h) audio.hover(); }
   } else if (ui.hover){ ui.hover = null; ui.dirty = true; }
   consoleSelDrag();                                      // held button + moving view = drag-select
 
@@ -2147,7 +2147,7 @@ function consolePress(){
   const w = widgetAt(ui.cursor.x / S, ui.cursor.y / S);
   if (ui.focus && (!w || w.id !== ui.focus)) ui.focus = null;   // click elsewhere blurs
   if (!w){ ui.dirty = true; return true; }                      // on-slab click still consumed
-  audio.init(); audio.tick();
+  audio.init(); audio.press();
   if (w.type === 'slider') w.act(ui.cursor.x / S);
   else w.act?.(ui.cursor.x / S);
   ui.dirty = true;
@@ -2489,15 +2489,35 @@ function pollPad(dt){
 }
 
 /* ════════════════════════════════════════════════════════════════
-   7 · SFX / ambient — synthesised, no audio files needed
+   7 · SFX — Microsoft Windows 7 sounds in sfx/ (© Microsoft
+       Corporation), plus two synth accents (menu bubble pops + the
+       face-a-panel droplet stay synthesised)
    ════════════════════════════════════════════════════════════════ */
 const audio = (() => {
   let ctx, master;
+  const SFX = {
+    press:    'sfx/Windows User Account Control.wav',  // console widget clicked
+    hover:    'sfx/Windows Information Bar.wav',       // console field/button highlight
+    ping:     'sfx/Windows Balloon.wav',               // slab screenshot lands (pair clock)
+    gazePing: 'sfx/Windows Balloon.flac',              // gaze-triggered slab lands
+    intro:    'sfx/Windows Logon Sound.flac',          // Enter → the glide in
+    launch:   'sfx/Windows Print complete.flac',       // slab clicked → launch swoop
+    resume:   'sfx/Windows Pop-up Blocked.flac',       // pause menu closes
+    pause:    'sfx/Windows Notify.flac',               // pause menu opens
+  };
+  // fetch the bytes immediately (network needs no gesture); decode waits for
+  // the first init(), when the gesture-unlocked AudioContext exists
+  const raw = {}, decoded = {}, bufs = {};
+  for (const [k, url] of Object.entries(SFX))
+    raw[k] = fetch(url).then(r => r.ok ? r.arrayBuffer() : null).catch(() => null);
   function init(){
     if (ctx) { ctx.resume(); return; }
     ctx = new (window.AudioContext || window.webkitAudioContext)();
     master = ctx.createGain(); master.gain.value = CONFIG.volume ?? 0.6;
     master.connect(ctx.destination);
+    for (const k of Object.keys(raw))
+      decoded[k] = raw[k].then(ab => ab ? ctx.decodeAudioData(ab) : null)
+                         .then(b => (bufs[k] = b)).catch(() => null);
   }
 
   // ── 3D placement: turn a world position into a {pan, gain} for that source ──
@@ -2550,42 +2570,39 @@ const audio = (() => {
     o.frequency.setValueAtTime(520, t); o.frequency.exponentialRampToValueAtTime(1100, t+0.06);
     env(o, t, 0.004, 0.1, 0.4, sp); o.start(t); o.stop(t+0.16);
   }
-  function whoosh(){
-    if (!ctx) return; const t = ctx.currentTime;
-    const buf = ctx.createBuffer(1, ctx.sampleRate*1.2, ctx.sampleRate);
-    const d = buf.getChannelData(0);
-    for (let i=0;i<d.length;i++) d[i] = (Math.random()*2-1);
+  // ── sample player: drop a decoded file into the same stereo field ──
+  function start(buf, pos, peak){
     const src = ctx.createBufferSource(); src.buffer = buf;
-    const bp = ctx.createBiquadFilter(); bp.type='bandpass'; bp.Q.value=1.2;
-    bp.frequency.setValueAtTime(300, t); bp.frequency.exponentialRampToValueAtTime(4000, t+1.0);
-    src.connect(bp); env(bp, t, 0.25, 0.95, 0.5); src.start(t); src.stop(t+1.2);
-    const o = ctx.createOscillator(); o.type='sine';
-    o.frequency.setValueAtTime(220, t); o.frequency.exponentialRampToValueAtTime(880, t+1.0);
-    env(o, t, 0.3, 0.9, 0.18); o.start(t); o.stop(t+1.2);
+    const sp = pos ? place(pos) : null;
+    const g = ctx.createGain(); g.gain.value = peak * (sp ? sp.gain : 1);
+    src.connect(g); let tail = g;
+    if (sp && ctx.createStereoPanner){
+      const p = ctx.createStereoPanner(); p.pan.value = sp.pan;
+      g.connect(p); tail = p;
+    }
+    tail.connect(master); src.start();
   }
-  // Frutiger Aero rising major chime — C5→C6, E5→E6, G5→G6 arpeggio
-  function bloop(pos){
-    if (!ctx) return; const t = ctx.currentTime, sp = place(pos);   // one placement for the whole chime
-    const o1=ctx.createOscillator(); o1.type='sine';
-    o1.frequency.setValueAtTime(523.25,t); o1.frequency.exponentialRampToValueAtTime(1046.5,t+0.18);
-    const o2=ctx.createOscillator(); o2.type='sine';
-    o2.frequency.setValueAtTime(659.25,t+0.06); o2.frequency.exponentialRampToValueAtTime(1318.5,t+0.22);
-    const o3=ctx.createOscillator(); o3.type='triangle';
-    o3.frequency.setValueAtTime(783.99,t+0.1); o3.frequency.exponentialRampToValueAtTime(1567.98,t+0.25);
-    env(o1,t,      0.008,0.55,0.38,sp); o1.start(t);      o1.stop(t+0.7);
-    env(o2,t+0.06, 0.008,0.50,0.28,sp); o2.start(t+0.06); o2.stop(t+0.7);
-    env(o3,t+0.10, 0.008,0.45,0.18,sp); o3.start(t+0.10); o3.stop(t+0.7);
-  }
-  // short glassy tick for console-widget presses — quieter than a bubble pop
-  function tick(){
-    if (!ctx) return; const t = ctx.currentTime;
-    const o = ctx.createOscillator(); o.type = 'sine';
-    o.frequency.setValueAtTime(1320, t); o.frequency.exponentialRampToValueAtTime(880, t+0.05);
-    env(o, t, 0.003, 0.07, 0.22); o.start(t); o.stop(t+0.12);
+  function playBuf(name, pos, peak = 1){
+    if (!ctx) return;
+    if (bufs[name]) { start(bufs[name], pos, peak); return; }
+    // the very first plays can race the decode — let a just-late sample still
+    // fire, but never an ancient one
+    const t0 = performance.now();
+    decoded[name]?.then(b => { if (b && performance.now() - t0 < 1200) start(b, pos, peak); });
   }
   // console volume slider drives the master gain live
   function setVolume(v){ if (master) master.gain.value = clamp(v, 0, 1); }
-  return { init, droplet, pop, whoosh, bloop, tick, setVolume };
+  return {
+    init, droplet, pop, setVolume,
+    press:       ()  => playBuf('press', null, 0.9),
+    hover:       ()  => playBuf('hover', null, 0.65),
+    ping:        pos => playBuf('ping', pos),
+    gazePing:    pos => playBuf('gazePing', pos),
+    intro:       ()  => playBuf('intro'),
+    launch:      ()  => playBuf('launch'),
+    pauseOpen:   ()  => playBuf('pause', null, 0.9),
+    resumeClick: ()  => playBuf('resume', null, 0.9),
+  };
 })();
 // unlock the AudioContext on the first user gesture so menu bubble-pops have sound
 // before the visitor ever clicks Enter (browsers gate audio behind a real gesture)
@@ -2610,7 +2627,7 @@ function beginPlay(){
   $('hud').classList.remove('hidden');
   $('fade').style.opacity = '1';
   requestAnimationFrame(() => { $('fade').style.opacity = '0'; });
-  audio.whoosh();
+  audio.intro();
   // start elevated + at the entrance; the intro glides forward + descends while
   // letting you look and steer freely (no hard-scripted hold)
   player.position.set(0, INTRO_START_Y, -6);
@@ -2629,6 +2646,7 @@ function pauseGame(){
   // leave you stranded with the cursor showing and no menu)
   if (state !== 'play' && state !== 'intro') return;
   pausedFrom = state;
+  audio.pauseOpen();
   state = 'paused';                         // freezes movement (loop skips intro/play)
   padCursor.ready = false;                  // gamepad cursor re-centres each time the menu opens
   $('pause').classList.remove('hidden');
@@ -2637,6 +2655,7 @@ function pauseGame(){
 }
 function resumeGame(){
   if (!started) return;
+  if (state === 'paused') audio.resumeClick();   // only when the menu is actually up
   state = pausedFrom;                        // continue the glide, or back to play
   setUiHover(null);                          // clear any button hover left by the cursor
   crosshairEl?.classList.remove('show');     // drop the menu cursor (gamepad path has no pointer-lock event)
@@ -2715,9 +2734,11 @@ function revealWorld(f){
   }
   u.stripTex?.dispose?.(); u.stripTex = null; u.stripCanvas = null;
   u.whiteTex?.dispose?.(); u.whiteTex = null;
-  // Trigger name-plaque bloop — chimes from the panel's spot on its wall
+  // Trigger name-plaque bloop — the balloon ping rings from the panel's spot
+  // on its wall; gaze-fired slabs (west wall + last row) get their own flavour
   u.labelBloop = 0;
-  audio.bloop(u.worldPos);
+  if (u.loadTrigger === 'gaze') audio.gazePing(u.worldPos);
+  else audio.ping(u.worldPos);
 }
 
 function updateLoadingSystem(dt, t){
@@ -2803,7 +2824,7 @@ function tryLaunch(){
   if (activeFrame.userData.loadState !== 'done') return;   // world still loading
   const f = activeFrame;
   state = 'launching';
-  audio.whoosh();
+  audio.launch();
   $('prompt').classList.remove('show');
 
   const dir = new THREE.Vector3(Math.sin(f.rotation.y), 0, Math.cos(f.rotation.y));
