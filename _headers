@@ -1,0 +1,5 @@
+# The owner config is per-deployment branding — a shared cache must never
+# pin it. pages.dev's default s-maxage once held a stale copy for a week,
+# surviving the deploy that removed the file.
+/owner.config.json
+  Cache-Control: no-store
