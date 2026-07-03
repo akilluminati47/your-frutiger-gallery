@@ -151,6 +151,7 @@ function preFetchScreenshots(){
         tex.generateMipmaps = true;
         tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
         tex.needsUpdate = true;           // no crop — the panel snaps to this image's aspect on reveal
+        renderer.initTexture(tex);        // upload to the GPU NOW (menu idle) — a reveal is a zero-hitch map swap
         prefetchMap.set(url, tex);
       },
       () => prefetchMap.set(url, null)
@@ -422,8 +423,8 @@ const GAZE_ROWS      = 1;                    // last N rows are gaze-only (not a
 const GAZE_ROW_START = ROWS - GAZE_ROWS;    // first gaze row index
 const INTRO_DUR      = 2.6;                 // intro glide duration (seconds)
 const INTRO_START_Y  = 3.3;                 // camera height at the start of the glide-in (~1 m over the raised eye)
-const LOAD_DUR       = 1.8;                 // bar fill time for auto frames
-const GAZE_LOAD_DUR  = 2.0;                 // bar fill for gaze-triggered frames
+const LOAD_DUR       = 1.8;                 // bar pace while a fetch is still in flight (auto frames)
+const GAZE_LOAD_DUR  = 2.0;                 // same, for gaze-triggered frames — ready screenshots skip the bar entirely
 
 const WALL_X  = HALF + 2.0;             // glass side walls
 const FRAME_X = WALL_X - 0.12;          // frames hang pressed flat against the glass walls
@@ -1092,14 +1093,14 @@ function drawLoadingStrip(canvas, progress, animTime){
   c2.fillText(`${Math.min(100,Math.round(progress*100))}%`, W/2, barY+barH+14);
 }
 
-// Auto-load delay: bar fires before the player walks up to that row.
-// The clock starts WITH the intro whoosh (not after it), so the front row's
-// bars are already filling as you glide in and the hall lands alive.
-// Sequential ping: left (sideIdx=0) always fires first, then right (sideIdx=1) 0.45 s later,
-// so each row visibly pings left → right before moving to the next pair.
-function autoDelayForRow(row, sideIdx){
+// Auto-load delay: pings fire in PAIRS — both sides of a row land together
+// (no left/right stagger), the east wall riding with the first pair. The
+// clock starts WITH the intro whoosh (not after it), so the front pair is
+// already pinging as you glide in, and the row cadence keeps each pair
+// landing before the player walks up to it.
+function autoDelayForRow(row){
   const walkTime = (START_Z + row * DZ) / CONFIG.movement.maxSpeed;
-  return Math.max(0, walkTime - 1.5) + row * 0.12 + sideIdx * 0.45;
+  return Math.max(0, walkTime - 1.5) + row * 0.3;
 }
 
 // Planar UVs from each vertex's local x,y so the full screenshot maps 1:1 across the
@@ -1337,7 +1338,7 @@ function buildGallery(font){
     const isGazeFrame = row >= GAZE_ROW_START;  // last N rows are gaze-only
     const f = makeFrame(project,
       isGazeFrame ? 'gaze'      : 'auto',
-      isGazeFrame ? Infinity    : autoDelayForRow(row, i % 2),
+      isGazeFrame ? Infinity    : autoDelayForRow(row),
       isGazeFrame ? GAZE_LOAD_DUR : LOAD_DUR);
     // pressed to the glass wall, facing the walkway
     placeFrame(f, side * FRAME_X, START_Z + row * DZ, side < 0 ? Math.PI/2 : -Math.PI/2);
@@ -1351,7 +1352,7 @@ function buildGallery(font){
   // their pane, the same standoff as the side frames. A toggled-on wall
   // with an empty slot hangs nothing — the pane stands bare.
   if (wallProjects.east)
-    placeFrame(makeFrame(wallProjects.east, 'auto', autoDelayForRow(0, 0), LOAD_DUR),
+    placeFrame(makeFrame(wallProjects.east, 'auto', autoDelayForRow(0), LOAD_DUR),
                0, PLAT_Z0 + 0.4 + 0.12, 0);
   if (wallProjects.west)
     placeFrame(makeFrame(wallProjects.west, 'gaze', Infinity, GAZE_LOAD_DUR),
@@ -2655,6 +2656,18 @@ function startFrameLoading(f){
   const u = f.userData;
   if (u.loadState !== 'pending') return;
   u.loadState = 'loading';
+  // pre-fetch cache first: the screenshots render the moment the PAGE loads
+  // (see preFetchScreenshots — GPU-uploaded during the menu), so by ping time
+  // they're usually done — reveal NOW, no bar, no fixed-duration theater. The
+  // bar below only exists for a fetch genuinely still in flight.
+  const ready = prefetchMap.get(u.project.url);
+  if (ready !== 'pending'){
+    u.liveTexture = (ready instanceof THREE.Texture) ? ready : null;
+    u.imageReady = true;
+    if (!u.liveTexture){ u.screenMat.map = loadBackdropTex; u.screenMat.needsUpdate = true; }  // failed fetch → clean backdrop
+    revealWorld(f);
+    return;
+  }
   // lazy-alloc the strip (canvas + texture + plane): only panels actually
   // mid-cutscene hold one — revealWorld frees it again
   if (!u.strip){
@@ -2679,13 +2692,7 @@ function startFrameLoading(f){
   u.screenMat.map = loadBackdropTex;
   u.screenMat.needsUpdate = true;
   drawLoadingStrip(u.stripCanvas, 0, 0); u.stripTex.needsUpdate = true;
-  // Check pre-fetch cache — image may already be ready before we even entered
-  const cached = prefetchMap.get(u.project.url);
-  if (cached !== 'pending'){
-    u.liveTexture = (cached instanceof THREE.Texture) ? cached : null;
-    u.imageReady = true;
-  }
-  // else still fetching — updateLoadingSystem polls every frame
+  // still fetching — updateLoadingSystem polls every frame and reveals on arrival
 }
 
 function revealWorld(f){
@@ -2720,31 +2727,33 @@ function updateLoadingSystem(dt, t){
     const u = f.userData;
     if (u.loadState === 'done') continue;
     if (u.loadState === 'pending'){
-      // Auto-fire when enough time has passed OR player gazes at screen (any trigger)
-      if ((u.loadTrigger === 'auto' && elapsed >= u.autoDelay) || f === activeFrame){
+      // gaze frames (the west wall + the last row) fire ONLY from the
+      // player's look; auto frames ONLY from the pair clock — looking at a
+      // panel never hurries its ping
+      if (u.loadTrigger === 'gaze' ? f === activeFrame : elapsed >= u.autoDelay){
         startFrameLoading(f); continue;
       }
       // pending state = solid white, nothing to animate
     }
     if (u.loadState === 'loading'){
-      // Poll pre-fetch cache each frame in case image arrived since bar started
-      if (!u.imageReady){
-        const cached = prefetchMap.get(u.project.url);
-        if (cached !== 'pending'){
-          u.liveTexture = (cached instanceof THREE.Texture) ? cached : null;
-          u.imageReady = true;
-        }
+      // a bar here means the fetch is genuinely still in flight (the ready
+      // path revealed inside startFrameLoading) — poll the cache and reveal
+      // the MOMENT it settles, no artificial wait, no watch-me speedup
+      const cached = prefetchMap.get(u.project.url);
+      if (cached !== 'pending'){
+        u.liveTexture = (cached instanceof THREE.Texture) ? cached : null;
+        u.imageReady = true;
+        revealWorld(f); continue;
       }
-      // Accelerate bar when the player is actively watching
-      const speed = (f === activeFrame) ? 1.65 : 1.0;
-      u.loadProgress = Math.min(1, u.loadProgress + (dt / u.loadDuration) * speed);
+      // ease toward — but hold just short of — full, so the bar never claims
+      // 100% while the network hasn't delivered
+      u.loadProgress = Math.min(0.95, u.loadProgress + dt / u.loadDuration);
       // repaint at ~30 Hz — the pole drifts slowly enough that half-rate reads
       // as smooth, and it halves the strip's repaint + GPU upload cost
       if (t - u.lastBarPaint >= 1/32){
         u.lastBarPaint = t;
         drawLoadingStrip(u.stripCanvas, u.loadProgress, t); u.stripTex.needsUpdate = true;
       }
-      if (u.loadProgress >= 1 && u.imageReady) revealWorld(f);
     }
   }
 }
