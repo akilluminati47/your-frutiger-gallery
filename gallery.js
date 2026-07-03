@@ -159,7 +159,10 @@ preFetchScreenshots();
    2 · renderer / scene / camera
    ════════════════════════════════════════════════════════════════ */
 let renderer, scene, camera, controls;
-const eyeHeight = 1.66;          // standing eye height of a ~5'10" visitor
+// stylised-tall visitor: the slabs hang dead-centred on THIS eye line, so the
+// raised eye rides them up the (taller) glass — the wall's largest padding
+// lands UNDER the slabs instead of them skimming the floor (see FH / WALL_H)
+const eyeHeight = 2.3;
 
 // FX = the full HDR post pipeline (bloom + filmic grade). Kill-switch in config
 // for very weak GPUs — when off we fall back to plain forward rendering with
@@ -349,7 +352,7 @@ let galleryStartTime = null;   // seconds-from-load when the visitor entered (se
 // gallery + corridor footprint (everything below is derived from this)
 const GROUND_Y = -8;                    // grassy world far beneath the glass
 const HALF = 4.7, DZ = 7.2, START_Z = 9;
-const FH = 2.4, FW = FH * ASPECT, FRAME_Y = eyeHeight;   // frames float at eye level
+const FH = 2.64, FW = FH * ASPECT, FRAME_Y = eyeHeight;  // slab faces +10%, still dead-centred on the eye line
 
 /* ── end-wall worlds (00 / 000) + the odd-panel guarantee ──────────────────
    The corridor hangs worlds in PAIRS, but the hall's END walls can each hold
@@ -392,15 +395,17 @@ const END_Z = START_Z + (Math.max(ROWS, 1) - 1) * DZ;   // a walls-only hall kee
 const GAZE_ROWS      = 1;                    // last N rows are gaze-only (not auto)
 const GAZE_ROW_START = ROWS - GAZE_ROWS;    // first gaze row index
 const INTRO_DUR      = 2.6;                 // intro glide duration (seconds)
-const INTRO_START_Y  = 2.7;                 // camera height at the start of the glide-in
+const INTRO_START_Y  = 3.3;                 // camera height at the start of the glide-in (~1 m over the raised eye)
 const LOAD_DUR       = 1.8;                 // bar fill time for auto frames
 const GAZE_LOAD_DUR  = 2.0;                 // bar fill for gaze-triggered frames
 
 const WALL_X  = HALF + 2.0;             // glass side walls
 const FRAME_X = WALL_X - 0.12;          // frames hang pressed flat against the glass walls
-// 4.98 = console slab height (4.725) + equal 0.1275 glass margins above and
-// below — the slab floats centred on the backwall pane, same reveal top + bottom
-const WALL_H  = 4.98;
+// tall glass — no longer derived from the console slab: the pane clears the
+// (10%-larger) slab by ~0.6 of reveal so the console stopped sitting tight
+// against the rail, and the raised eye line shifts every slab's breathing
+// room downward — the largest padding sits under the slabs
+const WALL_H  = 5.8;
 // every pane-top rail (sides + both end walls) shares one glossy material and
 // one corner radius — the corridor's weld math (RAIL_BACK / RAIL_FRONT) and
 // the end rails in buildConsole / the front wall all read these
@@ -1161,8 +1166,8 @@ function buildGallery(font){
   // Phones are slimmer than desktop monitors: a thinner slab + tighter rim radius so
   // mobile reads as a modern phone, while the screenshot still skins the front AND
   // wraps the curved edge (planarUV) exactly like desktop — no separate bezel.
-  const DEV_DEPTH  = isTouch ? 0.11  : 0.22;
-  const DEV_RADIUS = isTouch ? 0.035 : 0.11;
+  const DEV_DEPTH  = isTouch ? 0.121  : 0.242;   // +10% with the faces (FH/FW) — true uniform scale
+  const DEV_RADIUS = isTouch ? 0.0385 : 0.121;
   const DEV_Z = 0.06;                              // lifts the slab off the glass wall
   const deviceGeo = new RoundedBoxGeometry(FW, FH, DEV_DEPTH, 6, DEV_RADIUS);
   planarUV(deviceGeo, FW, FH);
@@ -1333,7 +1338,7 @@ function buildGallery(font){
         type to fill fields.
    ════════════════════════════════════════════════════════════════ */
 const CON = { W: lowPerf ? 1536 : 2048, H: lowPerf ? 864 : 1152 };   // 16:9 canvas
-const CON_CW = 8.4, CON_CH = CON_CW * (CON.H / CON.W);   // slab size in world units
+const CON_CW = 9.24, CON_CH = CON_CW * (CON.H / CON.W);  // slab size in world units (+10%)
 const CON_PX = CON_CW / 2048;                            // one layout px on the slab
 let consoleMesh = null, consoleTex = null, consoleCtx = null, consoleGroup = null;
 let conCursor = null;                                    // the aero pointer: its own tiny quad
@@ -1462,7 +1467,7 @@ function buildConsole(){
 
   // the world-rounded-canvas XXL slab the console UI is skinned onto
   const CW = CON_CW, CH = CON_CH;
-  const slabGeo = new RoundedBoxGeometry(CW, CH, 0.26, 6, 0.12);
+  const slabGeo = new RoundedBoxGeometry(CW, CH, 0.286, 6, 0.132);   // +10% with the face
   planarUV(slabGeo, CW, CH);
   const cnv = document.createElement('canvas'); cnv.width = CON.W; cnv.height = CON.H;
   consoleCtx = cnv.getContext('2d', { alpha: false });  // opaque face → cheaper GPU uploads
@@ -1474,8 +1479,9 @@ function buildConsole(){
   const slabMat = new THREE.MeshBasicMaterial({ map: consoleTex, toneMapped: false });
   if (FX) slabMat.color.setScalar(1.12);                // same ACES lift as the screens
   consoleMesh = new THREE.Mesh(slabGeo, slabMat);
-  // centred on the pane → identical glass reveal above and below the slab
-  consoleMesh.position.set(0, WALL_H/2, 0.3);
+  // the pane's reveal splits 60/40 around the slab — the largest padding sits
+  // UNDER it, the same rule the device slabs follow on the raised eye line
+  consoleMesh.position.set(0, (WALL_H - CON_CH) * 0.6 + CON_CH / 2, 0.3);
   consoleMesh.castShadow = true;
   consoleGroup.add(consoleMesh);
 
