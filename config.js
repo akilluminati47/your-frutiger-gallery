@@ -155,11 +155,15 @@ function mergeDeep(dst, src){
     else dst[k] = v;
   }
 }
+const bust = Date.now().toString(36); // cache:"no-store" only bypasses the
+// browser's cache — Cloudflare's edge once pinned a stale owner.config.json
+// for a week (s-maxage=604800), so the fetch key must be one no shared
+// cache has ever seen
 for (const url of OWNER.settings){
   try {
     // top-level await: gallery.js imports CONFIG, so the module graph waits
     // for the merge — the world never boots half-templated
-    const res = await fetch(url, { cache: "no-store" });
+    const res = await fetch(`${url}?t=${bust}`, { cache: "no-store" });
     if (res.ok){ mergeDeep(CONFIG, await res.json()); break; }
   } catch { /* offline / no secret / file missing → try next, else template stands */ }
 }
