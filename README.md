@@ -32,7 +32,7 @@ gallery, forks this repository, and deploys it, all without leaving the world.
 |---|---|
 | No build step | Plain `index.html` + `styles.css` + `gallery.js` + `config.js`. Serve the folder statically and it runs. |
 | Live panels | Each work is captured at the visitor's own viewport aspect, so phones see phone layouts and desktops see desktop layouts. |
-| Self-scaling hall | Add or remove works freely: frames auto-arrange two per row and the glass floor, walls, and legs lengthen to fit. The end walls can hang a world each (00 west, 000 east), and an odd count is always caught by a free end wall — no lonely half-rows. |
+| Self-scaling hall | Add or remove works freely: frames auto-arrange two per row and the glass floor, walls, and legs lengthen to fit. The end walls are independent slots that can hang a world each (00 west, 000 east) or stand as bare glass, and an odd count is always caught by a free end wall — no lonely half-rows. |
 | In-world sign-ups | The back-wall console designs, forks, and hands off deployment: a complete registration pipeline inside the 3D scene. |
 | Fork-safe template | The repository ships anonymous. An owner's real branding lives in a Cloudflare secret or a committed `owner.config.json`, never in the template. |
 | Full input support | Keyboard + mouse, gamepad, and touch are auto-detected, with an adaptive on-screen hint. |
@@ -41,13 +41,15 @@ gallery, forks this repository, and deploys it, all without leaving the world.
 
 The corridor ends at a glass backwall carrying the **GALLERY CONSOLE**, painted on an
 extra-large rounded canvas slab. Aim with your view (an Aero cursor rides the slab),
-press with click or `E`, and type directly into the highlighted field. Movement keys
-pause while you type.
+press with click or `E`, and type directly into the highlighted field. Fields are real
+text editors: click places the caret, drag or double-click selects, and `Ctrl+C` /
+`Ctrl+X` / `Ctrl+V` / `Ctrl+A` copy, cut, paste, and select. Movement keys pause
+while you type.
 
 | Tab | What it does | Preview |
 |---|---|---|
 | identity | Handle, gallery title, browser-tab title, splash and pause lines | Live, on the real splash |
-| worlds | Paged plaque + URL editor with add/remove, west/east end-wall toggles (00/000 badges, inserting fresh slots), and a wall-balance hint | On your deployed gallery |
+| worlds | Static west/east end-wall slots (own strings, toggled on/off without losing them) above a paged plaque + URL editor with add/remove, and a wall-balance hint | On your deployed gallery |
 | atmosphere | Bubble count/size/speed, cloud sliders, volume, shuffle and new-tab toggles | Bubbles and volume live |
 | publish | The sign-up pipeline, described below | |
 
@@ -95,8 +97,8 @@ an owner's real settings arrive through the handshake below.
 | `pause` | object | Pause-card texts: `title`, `note`, `resume` |
 | `bubbles` | object | `count` (0 disables, phones run about two-thirds), `size`, `speed` multipliers |
 | `clouds` | object | `cover` 0..1 puffy coverage, `cirrus` 0..1 streak amount |
-| `projects` | array | `{ name, url }` per panel; pairs fill the hall front to back, and an odd spare is forced onto a free end wall (console off → far wall, console on → entrance) |
-| `walls` | object | End-wall worlds from the head of `projects`: `west` hangs world 00 on the far wall (console off only), `east` hangs world 000 on the sun-lit entrance wall (builds its glass pane + rail) |
+| `projects` | array | `{ name, url }` per panel; pairs fill the hall front to back, and an odd LAST entry rides a free end wall automatically (far wall first while the console is off, else the entrance) |
+| `walls` | object | Independent end-wall slots, `west`/`east` each `{ on, name, url }`: west hangs world 00 on the far wall (console off only), east world 000 on the sun-lit entrance. `on: true` builds that glass pane + rail even with an empty slot; `on: false` keeps the strings but builds nothing |
 | `console` | object | `enabled: false` removes the sign-ups wall; `sourceRepo` is the template it forks |
 | `shuffleOrder` | bool | Shuffle the hall on every load |
 | `openInNewTab` | bool | Open chosen worlds in a new tab instead of the same-tab swoop |

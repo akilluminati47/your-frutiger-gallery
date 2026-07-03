@@ -13,7 +13,7 @@
   "loadingNote": "Loading the world…",
   "readyNote": "{n} worlds ready",
 
-  "_projects":      "Your works. Add or remove rows freely — odd counts are fine: the spare world hangs on an end wall automatically. name = the plaque, url = where visit? takes you. The gallery lengthens automatically.",
+  "_projects":      "Your works. Add or remove rows freely — odd counts are fine: the spare LAST world hangs on a free end wall automatically. name = the plaque, url = where visit? takes you. The gallery lengthens automatically.",
   "projects": [
     { "name": "My Site",    "url": "https://example.com/" },
     { "name": "My YouTube", "url": "https://www.youtube.com/" },
@@ -21,6 +21,9 @@
     { "name": "My GitHub",  "url": "https://github.com/" }
   ],
 
-  "_walls":         "Optional end-wall worlds, taken from the FIRST entries of projects: west = the far wall at the end of the hall (slot 00, only with the console off), east = the sun-lit entrance wall (slot 000).",
-  "walls": { "east": false, "west": false }
+  "_walls":         "Optional end-wall worlds with their OWN name/url — independent of projects: west = the far wall at the end of the hall (slot 00, hangs only with the console off), east = the sun-lit entrance wall (slot 000). on: true builds that glass wall even with an empty slot; on: false keeps your strings but builds nothing.",
+  "walls": {
+    "west": { "on": false, "name": "", "url": "" },
+    "east": { "on": false, "name": "", "url": "" }
+  }
 }

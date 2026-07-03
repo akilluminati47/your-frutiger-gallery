@@ -56,41 +56,40 @@ export const CONFIG = {
   // With shuffleOrder off, the LAST row is gaze-triggered (walk to the end and look
   // to reveal it); the rest auto-load as you approach.
   //
-  // END WALLS: the `walls` toggles below can hang one more world on each end of
-  // the hall — those take the FIRST entries of this list (00 = west first, then
-  // 000 = east), which is why the wall slots sit at the head. An ODD count never
-  // leaves a lonely half-row either way: the spare world is forced onto a free
-  // end wall automatically (console off → the far wall, console on → the
-  // entrance), so both side walls always stay in balanced pairs.
+  // END WALLS: the `walls` slots below can hang one more world on each end of
+  // the hall — INDEPENDENT strings, never drawn from this list. An ODD count
+  // here never leaves a lonely half-row either way: the LAST entry becomes a
+  // wildcard and rides a free end wall automatically (west first while the
+  // console is off, else the entrance), so the side walls stay in pairs.
   projects: [
-    // the odd 9th at the head: with the console on (it holds the far 00 wall)
-    // the spare world is forced onto the sun-lit entrance wall as 000 — the
-    // template designer's own gallery greets you on the way in
-    { name: "Designer",      url: "https://akilluminati47.pages.dev/" },   // east wall · 000 (forced odd)
     { name: "Wikipedia",     url: "https://www.wikipedia.org/" },  // front · right
     { name: "YouTube",       url: "https://www.youtube.com/" },    // front · left
     { name: "Reddit",        url: "https://www.reddit.com/" },     // row2 · right
     { name: "Google",        url: "https://www.google.com/" },     // row2 · left
     { name: "Twitch",        url: "https://www.twitch.tv/" },      // row3 · right
     { name: "Facebook",      url: "https://www.facebook.com/" },   // row3 · left
-    { name: "akilluminati47", url: "https://akilluminati47.pages.dev/" },                      // back · right (gaze — an inception)
-    { name: "Fork Me",        url: "https://github.com/akilluminati47/your-frutiger-gallery" }, // back · left  (gaze — this template, Aero Wall Console included)
+    { name: "Donate", url: "https://streamelements.com/akilluminati47/" },               // back · right (gaze — designer donation portal)
+    { name: "Fork Me", url: "https://github.com/akilluminati47/your-frutiger-gallery" }, // back · left  (gaze — this template, Aero Wall Console included)
   ],
 
   // ── END-WALL WORLDS (00 / 000) ─────────────────────────────────────
-  // The hall's end walls can hold a world each, drawn from the FRONT of the
-  // projects list above:
+  // The hall's end walls are INDEPENDENT slots with their own strings —
+  // they never take from the projects list above:
   //   west → the FAR wall at the end of the hall, slot 00, revealed by
-  //          gaze like the last row. The console lives on this wall, so
-  //          west only applies while console.enabled is false.
+  //          gaze like the last row. The console lives on this wall, so a
+  //          west world only hangs while console.enabled is false (the
+  //          strings keep, untouched, meanwhile).
   //   east → the sun-lit ENTRANCE wall (the sun rises behind spawn), slot
-  //          000, loading on the front row's beat. Turning it on also
-  //          builds the entrance glass pane + rail.
-  // Both on (console off) → list entry 0 goes west, entry 1 goes east.
-  // With shuffleOrder on, whichever worlds land in those head slots ride
-  // the walls that visit. Odd counts are always covered even with both
-  // toggles off — see the note above the projects list.
-  walls: { east: false, west: false },
+  //          000, loading on the front row's beat.
+  // on: true builds that wall's glass pane + rail even with an empty slot
+  // (an empty toggled wall is just glass); on: false keeps the strings but
+  // builds nothing — unless the odd-count wildcard needs the wall: an ODD
+  // projects count sends its LAST entry to a free end wall automatically
+  // (west first, console off; else east), building that pane if it must.
+  walls: {
+    west: { on: true, name: "", url: "" },
+    east: { on: true, name: "Designer", url: "https://akilluminati47.pages.dev/" },
+  },
 
   // ── CREATE-YOUR-OWN CONSOLE ────────────────────────────────────────
   // The glass config console on the hall's back wall: an interactive
@@ -125,12 +124,12 @@ export const CONFIG = {
 
   // Feel of the first-person walk.
   movement: {
-    accel: 43, friction: 8, maxSpeed: 6.4, mouseSensitivity: 1.0,
-    padLook: 2.6, touchLook: 0.0045,
+    accel: 69, friction: 10, maxSpeed: 13, mouseSensitivity: 0.75,
+    padLook: 4.2, touchLook: 0.0047,
   },
 
   // Master volume for the synthesised SFX / ambient pad (0–1).
-  volume: 0.6,
+  volume: 0.3,
 };
 
 // ════════════════════════════════════════════════════════════════════

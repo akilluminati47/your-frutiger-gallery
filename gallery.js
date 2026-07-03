@@ -132,8 +132,14 @@ function fetchScreenshot(url, onImg, onFail){
 const prefetchMap = new Map();
 
 function preFetchScreenshots(){
-  for (const project of CONFIG.projects){
-    const url = project.url;
+  // corridor worlds + the end-wall slots — the slots are independent strings
+  // that live OUTSIDE projects (see planWalls), so they queue here too. The
+  // frames key the cache by their (trimmed) slot url, hence the trim.
+  const walls = normWalls(CONFIG.walls);
+  const urls = new Set(CONFIG.projects.map(p => p.url));
+  for (const s of ['west', 'east'])
+    if (walls[s].on && walls[s].url.trim()) urls.add(walls[s].url.trim());
+  for (const url of urls){
     prefetchMap.set(url, 'pending');
     fetchScreenshot(url,
       (img) => {
@@ -159,7 +165,10 @@ preFetchScreenshots();
    2 · renderer / scene / camera
    ════════════════════════════════════════════════════════════════ */
 let renderer, scene, camera, controls;
-const eyeHeight = 1.66;          // standing eye height of a ~5'10" visitor
+// stylised-tall visitor: the slabs hang dead-centred on THIS eye line, so the
+// raised eye rides them up the (taller) glass — the wall's largest padding
+// lands UNDER the slabs instead of them skimming the floor (see FH / WALL_H)
+const eyeHeight = 2.3;
 
 // FX = the full HDR post pipeline (bloom + filmic grade). Kill-switch in config
 // for very weak GPUs — when off we fall back to plain forward rendering with
@@ -349,42 +358,62 @@ let galleryStartTime = null;   // seconds-from-load when the visitor entered (se
 // gallery + corridor footprint (everything below is derived from this)
 const GROUND_Y = -8;                    // grassy world far beneath the glass
 const HALF = 4.7, DZ = 7.2, START_Z = 9;
-const FH = 2.4, FW = FH * ASPECT, FRAME_Y = eyeHeight;   // frames float at eye level
+const FH = 2.64, FW = FH * ASPECT, FRAME_Y = eyeHeight;  // slab faces +10%, still dead-centred on the eye line
 
-/* ── end-wall worlds (00 / 000) + the odd-panel guarantee ──────────────────
-   The corridor hangs worlds in PAIRS, but the hall's END walls can each hold
-   one more: WEST is the far wall at the end of the hall — slot 00, the wall
-   the console occupies while it's enabled — and EAST the sun-lit entrance
-   wall (the sun sits up & behind spawn) — slot 000. CONFIG.walls toggles eat
-   the HEAD of the (already shuffled) projects list — 00 = west first, then
-   000 = east — which is why those labels sort before world 0. West only
-   applies on console-off builds (the console IS the 00 occupant otherwise).
-   And whenever the leftover corridor count is ODD, one wall is forced no
-   matter what: console off → the far wall takes the deepest world (00),
-   console on → the console holds 00, so the sun side takes the head link
-   (000, forcing the entrance wall to build). Either way the paired side
-   walls stay balanced in every configuration. */
+/* ── end-wall worlds (00 / 000) + the odd-panel wildcard (0000) ────────────
+   The corridor hangs worlds in PAIRS from CONFIG.projects (world 0…N). The
+   END walls are INDEPENDENT slots with their own strings — they never take
+   from that list: WEST is the far wall at the end of the hall — slot 00,
+   the wall the console occupies while it's enabled — and EAST the sun-lit
+   entrance wall (the sun sits up & behind spawn) — slot 000. A wall's glass
+   pane builds when its toggle is ON, world or no world (an empty toggled
+   slot is just glass), and a toggled-OFF slot keeps its strings — it simply
+   doesn't build. The west pane also always arrives with the console (the
+   console needs its backwall); a west world only hangs while the console is
+   off. The one forcing rule: an ODD corridor count. Its LAST entry becomes
+   the unannounced 0000 wildcard and rides a free end wall — west first
+   (priority: console off and no west world), else east — building that
+   wall's pane even when its toggle is off. Both walls already holding
+   worlds → the lone world rides the last row. */
 const CON_ENABLED = CONFIG.console?.enabled !== false;   // section 5c's app gate — the layout needs it up here
-function planWalls(count, eastTog, westTog, consoleOn){
-  const plan = { east: -1, west: -1, forced: null };     // indices into the projects list
-  let head = 0;
-  if (westTog && !consoleOn && count > head) plan.west = head++;   // 00 eats the head…
-  if (eastTog && count > head) plan.east = head++;                 // …then 000
-  if ((count - head) % 2 === 1){
-    if (!consoleOn && plan.west < 0){ plan.west = count - 1; plan.forced = 'west'; }  // deepest world → far wall (00)
-    else if (plan.east < 0){ plan.east = head; plan.forced = 'east'; }                // head link → sun side (000)
-    // both walls already taken → the lone world rides the last row like before
-  }
-  return plan;
+function normWalls(w){
+  // one wall slot = { on, name, url }. Legacy boolean toggles (old owner
+  // configs / saved drafts) normalise to a toggled empty slot.
+  const one = v => (v && typeof v === 'object')
+    ? { on: v.on === true, name: String(v.name ?? ''), url: String(v.url ?? '') }
+    : { on: v === true, name: '', url: '' };
+  return { west: one(w?.west), east: one(w?.east) };
 }
-const WALL_PLAN = planWalls(CONFIG.projects.length,
-  CONFIG.walls?.east === true, CONFIG.walls?.west === true, CON_ENABLED);
+function planWalls(count, walls, consoleOn){
+  const westWorld = !consoleOn && walls.west.on && !!walls.west.url.trim();
+  const eastWorld = walls.east.on && !!walls.east.url.trim();
+  let wild = null;                                       // where the odd 0000 wildcard lands
+  if (count % 2 === 1){
+    if (!consoleOn && !westWorld) wild = 'west';         // far wall first — use it or build it
+    else if (!eastWorld)          wild = 'east';         // else the sun-lit entrance
+  }                                                      // both taken → lone last row
+  return {
+    west: westWorld ? 'slot' : wild === 'west' ? 'wild' : null,
+    east: eastWorld ? 'slot' : wild === 'east' ? 'wild' : null,
+    wild,
+    // the glass panes follow the TOGGLES (empty glass is fine), plus the
+    // console's own backwall and whichever wall the wildcard forces
+    westPane: consoleOn || walls.west.on || wild === 'west',
+    eastPane: walls.east.on || wild === 'east',
+  };
+}
+const WALLS = normWalls(CONFIG.walls);
+const WALL_PLAN = planWalls(CONFIG.projects.length, WALLS, CON_ENABLED);
+const wallSlot  = s => ({ name: WALLS[s].name.trim() || 'World', url: WALLS[s].url.trim() });
+const wildWorld = WALL_PLAN.wild ? CONFIG.projects[CONFIG.projects.length - 1] : null;
 const wallProjects = {
-  east: WALL_PLAN.east >= 0 ? CONFIG.projects[WALL_PLAN.east] : null,
-  west: WALL_PLAN.west >= 0 ? CONFIG.projects[WALL_PLAN.west] : null,
+  east: WALL_PLAN.east === 'slot' ? wallSlot('east') : WALL_PLAN.east === 'wild' ? wildWorld : null,
+  west: WALL_PLAN.west === 'slot' ? wallSlot('west') : WALL_PLAN.west === 'wild' ? wildWorld : null,
 };
-const sideProjects = CONFIG.projects.filter((_, i) => i !== WALL_PLAN.east && i !== WALL_PLAN.west);
-const EAST_ON = !!wallProjects.east;    // an east world brings the front glass wall + rail with it
+const sideProjects = WALL_PLAN.wild ? CONFIG.projects.slice(0, -1) : CONFIG.projects.slice();
+const EAST_ON = WALL_PLAN.eastPane;     // entrance glass pane + rail
+const WEST_ON = WALL_PLAN.westPane;     // far/back glass pane + rail (always with the console)
+const PANEL_COUNT = sideProjects.length + (wallProjects.east ? 1 : 0) + (wallProjects.west ? 1 : 0);
 
 const ROWS  = Math.ceil(sideProjects.length / 2);
 const END_Z = START_Z + (Math.max(ROWS, 1) - 1) * DZ;   // a walls-only hall keeps one row of floor
@@ -392,15 +421,17 @@ const END_Z = START_Z + (Math.max(ROWS, 1) - 1) * DZ;   // a walls-only hall kee
 const GAZE_ROWS      = 1;                    // last N rows are gaze-only (not auto)
 const GAZE_ROW_START = ROWS - GAZE_ROWS;    // first gaze row index
 const INTRO_DUR      = 2.6;                 // intro glide duration (seconds)
-const INTRO_START_Y  = 2.7;                 // camera height at the start of the glide-in
+const INTRO_START_Y  = 3.3;                 // camera height at the start of the glide-in (~1 m over the raised eye)
 const LOAD_DUR       = 1.8;                 // bar fill time for auto frames
 const GAZE_LOAD_DUR  = 2.0;                 // bar fill for gaze-triggered frames
 
 const WALL_X  = HALF + 2.0;             // glass side walls
 const FRAME_X = WALL_X - 0.12;          // frames hang pressed flat against the glass walls
-// 4.98 = console slab height (4.725) + equal 0.1275 glass margins above and
-// below — the slab floats centred on the backwall pane, same reveal top + bottom
-const WALL_H  = 4.98;
+// tall glass — no longer derived from the console slab: the pane clears the
+// (10%-larger) slab by ~0.6 of reveal so the console stopped sitting tight
+// against the rail, and the raised eye line shifts every slab's breathing
+// room downward — the largest padding sits under the slabs
+const WALL_H  = 5.8;
 // every pane-top rail (sides + both end walls) shares one glossy material and
 // one corner radius — the corridor's weld math (RAIL_BACK / RAIL_FRONT) and
 // the end rails in buildConsole / the front wall all read these
@@ -752,14 +783,16 @@ function dontNestReflections(){
   scene.add(floor);
 
   // glass side walls — same reflective look as the floor, carried up the sides.
-  // Rail corner math: the back rail always exists (the backwall pane is hall
-  // architecture, see buildConsole) and a front rail arrives with an east
-  // wall world. The side rails run between them, overshooting each end
-  // rail's hall-side face by the shared corner radius so their rounded tips
-  // hide INSIDE the end rail's volume — the joint meets at a full square
-  // cross-section: a perfectly welded corner, no overhang, no notch. With no
-  // front rail they instead stop flush with the pane's front edge.
-  const RAIL_BACK  = PLAT_Z1 - 0.46 + RAIL_R;             // back rail's hall face sits at -0.46
+  // Rail corner math: a back rail arrives with the west pane (the console's
+  // wall — console on, west toggle, or the odd wildcard; see buildConsole)
+  // and a front rail with the east pane. The side rails run between them,
+  // overshooting each end rail's hall-side face by the shared corner radius
+  // so their rounded tips hide INSIDE the end rail's volume — the joint
+  // meets at a full square cross-section: a perfectly welded corner, no
+  // overhang, no notch. With no end rail on a side they instead stop flush
+  // with where that pane's edge would sit — an open end.
+  const RAIL_BACK  = WEST_ON ? PLAT_Z1 - 0.46 + RAIL_R    // tucked into the back rail
+                             : PLAT_Z1 - 0.4;             // open far end → flush with the pane edge
   const RAIL_FRONT = EAST_ON ? PLAT_Z0 + 0.46 - RAIL_R    // tucked into the front rail
                              : PLAT_Z0 + 0.4;             // open entrance → flush with the pane edge
   const RAIL_L  = RAIL_BACK - RAIL_FRONT;
@@ -785,9 +818,10 @@ function dontNestReflections(){
   }
   buildWall(-1); buildWall(1);
 
-  // the front (east) glass wall — arrives with an east wall world: the same
-  // live-reflection pane as the sides, plus the capping rail the side rails
-  // weld into. Without it the entrance stays open, exactly as before.
+  // the front (east) glass wall — arrives with the east toggle (or the odd
+  // wildcard), world or no world: the same live-reflection pane as the
+  // sides, plus the capping rail the side rails weld into. Toggle off and
+  // no wildcard → the entrance stays open, exactly as before.
   if (EAST_ON){
     const fwall = glassReflector(new THREE.PlaneGeometry(WALL_X * 2, WALL_H),
       { tex:REFL_WALL, color:0xa9cde6, alpha:0.40 });
@@ -1161,8 +1195,8 @@ function buildGallery(font){
   // Phones are slimmer than desktop monitors: a thinner slab + tighter rim radius so
   // mobile reads as a modern phone, while the screenshot still skins the front AND
   // wraps the curved edge (planarUV) exactly like desktop — no separate bezel.
-  const DEV_DEPTH  = isTouch ? 0.11  : 0.22;
-  const DEV_RADIUS = isTouch ? 0.035 : 0.11;
+  const DEV_DEPTH  = isTouch ? 0.121  : 0.242;   // +10% with the faces (FH/FW) — true uniform scale
+  const DEV_RADIUS = isTouch ? 0.0385 : 0.121;
   const DEV_Z = 0.06;                              // lifts the slab off the glass wall
   const deviceGeo = new RoundedBoxGeometry(FW, FH, DEV_DEPTH, 6, DEV_RADIUS);
   planarUV(deviceGeo, FW, FH);
@@ -1309,11 +1343,13 @@ function buildGallery(font){
     placeFrame(f, side * FRAME_X, START_Z + row * DZ, side < 0 ? Math.PI/2 : -Math.PI/2);
   });
 
-  // end-wall worlds (see planWalls): the EAST panel (000) hangs centred on
-  // the entrance wall facing into the hall and loads on the front row's beat
-  // — it lands with world 0. The WEST panel (00, console-off halls only)
-  // hangs on the far wall and reveals by gaze, like the hall's last row.
-  // Both sit 0.12 off their pane, the same standoff as the side frames.
+  // end-wall worlds (see planWalls): the EAST panel (000 — the slot's own
+  // string, or the odd 0000 wildcard) hangs centred on the entrance wall
+  // facing into the hall and loads on the front row's beat — it lands with
+  // world 0. The WEST panel (00, console-off halls only) hangs on the far
+  // wall and reveals by gaze, like the hall's last row. Both sit 0.12 off
+  // their pane, the same standoff as the side frames. A toggled-on wall
+  // with an empty slot hangs nothing — the pane stands bare.
   if (wallProjects.east)
     placeFrame(makeFrame(wallProjects.east, 'auto', autoDelayForRow(0, 0), LOAD_DUR),
                0, PLAT_Z0 + 0.4 + 0.12, 0);
@@ -1333,7 +1369,7 @@ function buildGallery(font){
         type to fill fields.
    ════════════════════════════════════════════════════════════════ */
 const CON = { W: lowPerf ? 1536 : 2048, H: lowPerf ? 864 : 1152 };   // 16:9 canvas
-const CON_CW = 8.4, CON_CH = CON_CW * (CON.H / CON.W);   // slab size in world units
+const CON_CW = 9.24, CON_CH = CON_CW * (CON.H / CON.W);  // slab size in world units (+10%)
 const CON_PX = CON_CW / 2048;                            // one layout px on the slab
 let consoleMesh = null, consoleTex = null, consoleCtx = null, consoleGroup = null;
 let conCursor = null;                                    // the aero pointer: its own tiny quad
@@ -1356,9 +1392,10 @@ function seedDraft(){
     shuffleOrder: CONFIG.shuffleOrder !== false,
     openInNewTab: !!CONFIG.openInNewTab,
     projects: CONFIG.projects.map(p => ({ name: p.name, url: p.url })),
-    // end-wall worlds: west = the far wall (00, free only while the console
-    // is off), east = the sun-lit entrance wall (000) — see planWalls
-    walls: { east: CONFIG.walls?.east === true, west: CONFIG.walls?.west === true },
+    // end-wall slots: independent { on, name, url } strings — west = the far
+    // wall (00, hangs only while the console is off), east = the sun-lit
+    // entrance wall (000) — see planWalls
+    walls: normWalls(CONFIG.walls),
     // always seeds OFF regardless of this deployment: the console is scaffolding —
     // a committed design hides it on the fork unless the owner opts back in
     consoleOn: false,
@@ -1370,6 +1407,7 @@ try {
   const saved = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null');
   if (saved && typeof saved === 'object'){ draft = { ...draft, ...saved }; draftEdited = true; }
 } catch { /* corrupt draft → fresh seed */ }
+draft.walls = normWalls(draft.walls);   // heal pre-walls / legacy-boolean drafts
 let _saveT = null;
 function saveDraft(){
   draftEdited = true;
@@ -1390,7 +1428,11 @@ function buildOwnerJson(){
     volume: +d.volume.toFixed(2),
     shuffleOrder: d.shuffleOrder, openInNewTab: d.openInNewTab,
     console: { enabled: !!d.consoleOn },   // deep-merges over CONFIG.console — sourceRepo survives
-    walls: { east: !!d.walls?.east, west: !!d.walls?.west },
+    // wall slots persist their strings even while toggled off — that's the point
+    walls: {
+      west: { on: !!d.walls.west.on, name: d.walls.west.name.trim(), url: d.walls.west.url.trim() },
+      east: { on: !!d.walls.east.on, name: d.walls.east.name.trim(), url: d.walls.east.url.trim() },
+    },
     projects: d.projects.filter(p => p.url.trim()).map(p => ({ name: p.name.trim() || 'World', url: p.url.trim() })),
   };
 }
@@ -1421,6 +1463,9 @@ const ui = {
   tab: 'identity',                 // 'identity' | 'worlds' | 'vibe' | 'publish'
   widgets: [],                     // rebuilt every paint: {id,x,y,w,h,label,act,get,set,...}
   hover: null, focus: null,
+  // text editing on the lit field: caret index, selection anchor/end (equal =
+  // no selection) and the first visible char of the field's scroll window
+  caret: 0, selA: 0, selB: 0, fieldOff: 0,
   cursor: { x: -1, y: -1, on: false },
   page: 0,                         // worlds-list pager
   dirty: true, lastPaint: 0,
@@ -1431,9 +1476,11 @@ const ui = {
 function toast(msg){ ui.note = msg; ui.noteT = performance.now(); ui.dirty = true; }
 
 // ── geometry: glass backwall pane + rail + the XXL console slab ──
-// The pane + rail are hall architecture and ALWAYS build (the third glass
-// wall); CON_ENABLED only gates the console app skinned onto it.
+// The pane + rail build with WEST_ON (the console needs its backwall, the
+// west toggle asks for it, or the odd wildcard forces it) — with all three
+// off the far end stays open. CON_ENABLED gates the console app on top.
 function buildConsole(){
+  if (!WEST_ON) return;                                 // open far end — no pane, no app
   consoleGroup = new THREE.Group();
   // sits exactly where the side panes end (PLAT_Z1 - 0.4), so the back pane's
   // edges land ON the side panes at x = ±WALL_X — a clean glass corner
@@ -1462,7 +1509,7 @@ function buildConsole(){
 
   // the world-rounded-canvas XXL slab the console UI is skinned onto
   const CW = CON_CW, CH = CON_CH;
-  const slabGeo = new RoundedBoxGeometry(CW, CH, 0.26, 6, 0.12);
+  const slabGeo = new RoundedBoxGeometry(CW, CH, 0.286, 6, 0.132);   // +10% with the face
   planarUV(slabGeo, CW, CH);
   const cnv = document.createElement('canvas'); cnv.width = CON.W; cnv.height = CON.H;
   consoleCtx = cnv.getContext('2d', { alpha: false });  // opaque face → cheaper GPU uploads
@@ -1474,8 +1521,9 @@ function buildConsole(){
   const slabMat = new THREE.MeshBasicMaterial({ map: consoleTex, toneMapped: false });
   if (FX) slabMat.color.setScalar(1.12);                // same ACES lift as the screens
   consoleMesh = new THREE.Mesh(slabGeo, slabMat);
-  // centred on the pane → identical glass reveal above and below the slab
-  consoleMesh.position.set(0, WALL_H/2, 0.3);
+  // the pane's reveal splits 60/40 around the slab — the largest padding sits
+  // UNDER it, the same rule the device slabs follow on the raised eye line
+  consoleMesh.position.set(0, (WALL_H - CON_CH) * 0.6 + CON_CH / 2, 0.3);
   consoleMesh.castShadow = true;
   consoleGroup.add(consoleMesh);
 
@@ -1529,8 +1577,11 @@ function buildConsole(){
       ui.cursor = { x: p.x, y: p.y, on: true };            // the OS pointer is the cursor here
       const h = widgetAt(p.x / S, p.y / S);
       if (h?.id !== ui.hover?.id){ ui.hover = h; ui.dirty = true; drawConsole(); }
+      if (conSel.drag){ consoleSelDrag(); if (ui.dirty) drawConsole(); }   // desk-mode drag-select
     });
+    cnv.addEventListener('mousedown', e => { const p = toCanvas(e); ui.cursor = { x:p.x, y:p.y, on:true }; consoleSelStart(); drawConsole(); });
     cnv.addEventListener('click', e => { const p = toCanvas(e); ui.cursor = { x:p.x, y:p.y, on:true }; consolePress(); drawConsole(); });
+    cnv.addEventListener('dblclick', e => { const p = toCanvas(e); ui.cursor = { x:p.x, y:p.y, on:true }; consoleSelectAll(); drawConsole(); });
   }
 }
 
@@ -1585,19 +1636,120 @@ function wButton(cc, id, label, x, y, w, h, act, style = 'aqua', sub){
   if (sub){ cc.fillStyle = AERO.inkSoft; cFont(cc, 22); cc.fillText(sub, x + w/2, y + h + 24); }
   ui.widgets.push({ id, x, y, w, h, label, act });
 }
-function wField(cc, id, label, x, y, w, get, set, max = 60){
-  const h = 62, focused = ui.focus === id, hot = ui.hover?.id === id;
-  cc.fillStyle = AERO.inkSoft; cFont(cc, 24, 600); cc.textAlign = 'left'; cc.textBaseline = 'alphabetic';
-  cc.fillText(label, x + 6, y - 10);
+function wField(cc, id, label, x, y, w, get, set, max = 60, dim = false){
+  // dim = a disabled slot: still shows its (kept) strings, greyed, no hit-rect
+  const h = 62, focused = !dim && ui.focus === id, hot = !dim && ui.hover?.id === id;
+  if (label){
+    cc.fillStyle = dim ? AERO.inkFaint : AERO.inkSoft; cFont(cc, 24, 600);
+    cc.textAlign = 'left'; cc.textBaseline = 'alphabetic';
+    cc.fillText(label, x + 6, y - 10);
+  }
   cGlassInset(cc, x, y, w, h, 16, hot || focused);
-  cc.fillStyle = AERO.ink; cFont(cc, 30); cc.textAlign = 'left'; cc.textBaseline = 'middle';
-  const v = get();
+  cFont(cc, 30); cc.textAlign = 'left'; cc.textBaseline = 'middle';
+  const v = get(), tx = x + 18, fit = w - 36, ty = y + h/2 + 1;
+  if (focused){
+    // caret-anchored scroll window: slide just enough to keep the caret visible
+    ui.caret = clamp(ui.caret, 0, v.length);
+    ui.selA = clamp(ui.selA, 0, v.length); ui.selB = clamp(ui.selB, 0, v.length);
+    let off = Math.min(ui.fieldOff, ui.caret);
+    while (cc.measureText(v.slice(off, ui.caret)).width > fit) off++;
+    ui.fieldOff = off;
+    let shown = v.slice(off);
+    while (shown.length && cc.measureText(shown).width > fit) shown = shown.slice(0, -1);
+    const end = off + shown.length, sA = Math.min(ui.selA, ui.selB), sB = Math.max(ui.selA, ui.selB);
+    if (sB > sA && sB > off && sA < end){               // selection wash behind the text
+      const p0 = tx + cc.measureText(v.slice(off, Math.max(sA, off))).width;
+      const p1 = tx + cc.measureText(v.slice(off, Math.min(sB, end))).width;
+      cc.fillStyle = 'rgba(26,150,255,.28)';
+      cc.fillRect(p0, y + 9, p1 - p0, h - 18);
+    }
+    cc.fillStyle = AERO.ink; cc.fillText(shown, tx, ty);
+    const cx = tx + cc.measureText(v.slice(off, ui.caret)).width;
+    cc.fillStyle = AERO.aqua; cc.fillRect(cx, y + 10, 3, h - 20);   // the caret
+  } else {
+    let shown = v;                                      // unfocused → tail-anchored
+    while (shown.length && cc.measureText(shown).width > fit) shown = shown.slice(1);
+    cc.fillStyle = dim ? AERO.inkFaint : AERO.ink;
+    cc.fillText(shown, tx, ty);
+    if (!v){ cc.fillStyle = AERO.inkFaint; cc.fillText('· empty ·', tx, ty); }
+  }
+  if (dim) return;                                      // no hit-rect — can't focus a dim slot
+  const wid = { id, x, y, w, h, label, type:'field', get, set, max };
+  wid.act = cx => fieldPress(wid, cx);
+  ui.widgets.push(wid);
+}
+/* ── field text editing: caret placement, drag/double-click selection ── */
+const conSel = { drag:false, dragged:false, id:null, anchor:0 };
+function fieldTextOff(w){
+  // the first visible char of a field, mirroring wField's two windows:
+  // focused = caret-anchored (already stored), unfocused = tail-anchored
+  const cc = consoleCtx, v = w.get();
+  if (ui.focus === w.id) return Math.min(ui.fieldOff, v.length);
+  cc.save(); cFont(cc, 30);
   let shown = v;
-  while (shown.length && cc.measureText(shown + '▎').width > w - 36) shown = shown.slice(1);
-  cc.fillText(shown + (focused ? '▎' : ''), x + 18, y + h/2 + 1);
-  if (!v && !focused){ cc.fillStyle = AERO.inkFaint; cc.fillText('· empty ·', x + 18, y + h/2 + 1); }
-  ui.widgets.push({ id, x, y, w, h, label, type:'field', get, set, max,
-                    act(){ ui.focus = id; ui.dirty = true; } });
+  while (shown.length && cc.measureText(shown).width > w.w - 36) shown = shown.slice(1);
+  cc.restore();
+  return v.length - shown.length;
+}
+function fieldCharAt(w, cx){
+  // cursor x (layout px) → caret index, on the window the visitor sees
+  const cc = consoleCtx, v = w.get(), off = fieldTextOff(w);
+  const rel = cx - (w.x + 18);
+  cc.save(); cFont(cc, 30);
+  let i = off;
+  for (; i < v.length; i++){
+    const before = cc.measureText(v.slice(off, i)).width;
+    const after  = cc.measureText(v.slice(off, i + 1)).width;
+    if (rel < (before + after) / 2) break;
+  }
+  cc.restore();
+  return i;
+}
+function fieldPress(w, cx){
+  // click / E / tap on a field: focus it and drop the caret under the pointer.
+  // A click that lands right after a drag-selection keeps the selection —
+  // the release must not eat what the drag just painted.
+  if (ui.focus !== w.id){
+    const off = fieldTextOff(w);          // keep the window the visitor was looking at
+    ui.focus = w.id; ui.fieldOff = off;
+  }
+  if (conSel.dragged && conSel.id === w.id){ conSel.dragged = false; ui.dirty = true; return; }
+  ui.caret = ui.selA = ui.selB = fieldCharAt(w, cx);
+  ui.dirty = true;
+}
+function consoleSelStart(){
+  // mousedown on a field: place the caret and arm a drag-selection from it
+  if (!consoleMesh || conBoot.s !== 'done' || !ui.cursor.on) return false;
+  const S = CON.W / 2048;
+  const w = widgetAt(ui.cursor.x / S, ui.cursor.y / S);
+  if (!w || w.type !== 'field') return false;
+  conSel.drag = false; conSel.dragged = false;
+  fieldPress(w, ui.cursor.x / S);
+  conSel.drag = true; conSel.id = w.id; conSel.anchor = ui.caret;
+  return true;
+}
+function consoleSelDrag(){
+  // while the button stays down the moving cursor extends the selection
+  if (!conSel.drag || !ui.cursor.on) return;
+  const w = ui.widgets.find(k => k.id === conSel.id && k.type === 'field');
+  if (!w) return;
+  const i = fieldCharAt(w, ui.cursor.x / (CON.W / 2048));
+  if (i !== ui.selB){
+    ui.selB = ui.caret = i;
+    if (i !== conSel.anchor) conSel.dragged = true;
+    ui.dirty = true;
+  }
+}
+function consoleSelectAll(){
+  // double-click on a field: highlight the whole value
+  if (!consoleMesh || conBoot.s !== 'done' || !ui.cursor.on) return false;
+  const S = CON.W / 2048;
+  const w = widgetAt(ui.cursor.x / S, ui.cursor.y / S);
+  if (!w || w.type !== 'field') return false;
+  ui.focus = w.id; ui.selA = 0; ui.selB = ui.caret = w.get().length;
+  conSel.dragged = false;
+  ui.dirty = true;
+  return true;
 }
 function wSlider(cc, id, label, x, y, w, val, min, max, set, fmt, note){
   const hot = ui.hover?.id === id;
@@ -1692,7 +1844,7 @@ function drawConsole(){
   // footer hint
   cc.fillStyle = AERO.inkFaint; cFont(cc, 24); cc.textAlign = 'center'; cc.textBaseline = 'alphabetic';
   cc.fillText(isTouch ? 'aim by dragging · tap to press fields & buttons'
-                      : 'aim with your view · click / E to press · type to fill the lit field',
+                      : 'aim with your view · click / E to press · type to fill the lit field · drag / double-click selects · ctrl+C / V',
               LW/2, LH - 28);
   // toast
   if (ui.note && performance.now() - ui.noteT < 2600){
@@ -1727,48 +1879,50 @@ function drawIdentity(cc, top){
 }
 
 function drawWorlds(cc, top){
-  const d = draft, PER = 6, pages = Math.max(1, Math.ceil(d.projects.length / PER));
+  const d = draft, PER = 4, pages = Math.max(1, Math.ceil(d.projects.length / PER));
   ui.page = clamp(ui.page, 0, pages - 1);
-  // where each world lands, on the DRAFT's own console/wall settings — the
+  d.walls = normWalls(d.walls);        // heal drafts that predate the wall slots
+  // where everything lands, on the DRAFT's own console/wall settings — the
   // same planner the hall layout uses, so the badges never lie
-  const plan = planWalls(d.projects.length, !!d.walls?.east, !!d.walls?.west, d.consoleOn);
-  const sideCount = d.projects.length - (plan.east >= 0 ? 1 : 0) - (plan.west >= 0 ? 1 : 0);
-  // (00/000 are the code's slot breadcrumbs — the visitor just reads "west wall")
-  const hint = plan.forced === 'west' ? '  ·  the odd world rides the west wall'
-             : plan.forced === 'east' ? '  ·  the odd world rides the east wall'
-             : sideCount % 2          ? '  ·  add one more to balance both walls'
-             :                          '  ·  walls balanced ✓';
+  const plan = planWalls(d.projects.length, d.walls, d.consoleOn);
+  const panels = d.projects.length + (plan.west === 'slot' ? 1 : 0) + (plan.east === 'slot' ? 1 : 0);
+  // (00/000/0000 are the code's slot breadcrumbs — the visitor reads "west wall")
+  const hint = plan.wild === 'west'  ? '  ·  the odd world rides the west wall'
+             : plan.wild === 'east'  ? '  ·  the odd world rides the east wall'
+             : d.projects.length % 2 ? '  ·  both walls hold worlds — the odd one rides the last row'
+             :                         '  ·  walls balanced ✓';
   cc.fillStyle = AERO.inkSoft; cFont(cc, 26); cc.textAlign = 'left'; cc.textBaseline = 'alphabetic';
-  cc.fillText(`your worlds — ${d.projects.length} panels` + hint, 64, top + 6);
-  // end-wall toggles: 00/000 hold the TOP of this list — toggling one ON
-  // inserts a fresh empty slot there (nothing existing gets eaten), toggling
-  // OFF tidies the slot away only while it's still blank. West is the far
-  // wall the console occupies while it's on; east the sun-lit entrance.
-  if (!d.walls) d.walls = { east: false, west: false };   // drafts saved before walls existed
-  wToggle(cc, 'w:west', 'west wall', 1210, top - 26, !!d.walls.west && !d.consoleOn,
-    d.consoleOn ? () => toast('the console owns the west wall — hide it in atmosphere first')
-                : v => {
-                    d.walls.west = v;
-                    if (v) d.projects.splice(0, 0, { name: '', url: '' });
-                    else if (d.projects[0] && !d.projects[0].name.trim() && !d.projects[0].url.trim())
-                      d.projects.splice(0, 1);
-                    saveDraft(); ui.dirty = true;
-                  });
-  wToggle(cc, 'w:east', 'east wall', 1620, top - 26, !!d.walls.east,
-    v => {
-      const slot = (d.walls.west && !d.consoleOn) ? 1 : 0;   // 000 sits just after 00
-      d.walls.east = v;
-      if (v) d.projects.splice(slot, 0, { name: '', url: '' });
-      else if (d.projects[slot] && !d.projects[slot].name.trim() && !d.projects[slot].url.trim())
-        d.projects.splice(slot, 1);
-      saveDraft(); ui.dirty = true;
-    });
+  cc.fillText(`your worlds — ${panels} panels` + hint, 64, top + 6);
+  // end-wall slots: STATIC rows above the numbered list, each with its OWN
+  // strings — the corridor worlds below never fill them. A toggle only greys
+  // its slot on and off: the strings survive off states untouched, and an
+  // on + empty slot simply builds its glass wall bare. West is the far wall
+  // the console occupies while it's on; east the sun-lit entrance.
   let y = top + 70;
+  const wallRow = (slot, label, dimmed, tOn, tSet) => {
+    const s = d.walls[slot];
+    wField(cc, `w:${slot}:name`, label, 64, y, 430, () => s.name, v => { s.name = v; }, 30, dimmed);
+    wField(cc, `w:${slot}:url`,  '',   540, y, 1280, () => s.url,  v => { s.url  = v; }, 200, dimmed);
+    wToggle(cc, `w:${slot}`, '', 1860, y + 7, tOn, tSet);
+    y += 108;
+  };
+  wallRow('west',
+    d.consoleOn ? 'west wall — the console lives here'
+                : d.walls.west.on ? 'west wall' : 'west wall — off',
+    d.consoleOn || !d.walls.west.on,
+    d.walls.west.on && !d.consoleOn,
+    d.consoleOn ? () => toast('the console owns the west wall — hide it in atmosphere first')
+                : v => { d.walls.west.on = v; saveDraft(); ui.dirty = true; });
+  wallRow('east',
+    d.walls.east.on ? 'east wall — the entrance' : 'east wall — off',
+    !d.walls.east.on,
+    d.walls.east.on,
+    v => { d.walls.east.on = v; saveDraft(); ui.dirty = true; });
   const start = ui.page * PER;
   d.projects.slice(start, start + PER).forEach((p, k) => {
     const i = start + k;
-    const badge = i === plan.west ? `west wall${plan.forced === 'west' ? ' — the odd one' : ''}`
-                : i === plan.east ? `east wall${plan.forced === 'east' ? ' — the odd one' : ''}` : '';
+    const badge = (plan.wild && i === d.projects.length - 1)
+      ? `rides the ${plan.wild} wall — the odd one` : '';
     wField(cc, `w:name:${i}`, badge || (k === 0 ? 'plaque' : ''), 64, y, 430, () => p.name, v => { p.name = v; }, 30);
     wField(cc, `w:url:${i}`, k === 0 ? 'url' : '', 540, y, 1280, () => p.url, v => { p.url = v; }, 200);
     wButton(cc, `w:del:${i}`, '✕', 1860, y, 62, 62, () => {
@@ -1881,9 +2035,11 @@ function drawPublish(cc, top){
   cc.fillText('your design', x2 + 40, top + 70);
   cc.fillStyle = AERO.inkSoft; cFont(cc, 26);
   const oj = buildOwnerJson();
+  const ojPlan = planWalls(oj.projects.length, normWalls(oj.walls), !!d.consoleOn);
+  const ojWorlds = oj.projects.length + (ojPlan.west === 'slot' ? 1 : 0) + (ojPlan.east === 'slot' ? 1 : 0);
   [
     `“${oj.title}”  by  ${oj.creator}`,
-    `${oj.projects.length} worlds  ·  ${Math.round(oj.bubbles.count)} bubbles`,
+    `${ojWorlds} worlds  ·  ${Math.round(oj.bubbles.count)} bubbles`,
     `tab: ${oj.tabTitle || '(default)'}`,
     gh.doneConfig ? 'committed to your fork as owner.config.json ✓'
                   : 'connected sign-ups commit this automatically —',
@@ -1976,6 +2132,8 @@ function updateConsole(){
     const h = widgetAt(cx / (CON.W/2048), cy / (CON.W/2048));
     if (h?.id !== ui.hover?.id){ ui.hover = h; ui.dirty = true; }
   } else if (ui.hover){ ui.hover = null; ui.dirty = true; }
+  consoleSelDrag();                                      // held button + moving view = drag-select
+
   const caret = ui.focus && now - ui.lastPaint > 500;    // caret keep-alive
   const staleNote = ui.note && now - ui.noteT > 2600;    // one repaint clears the toast
   if ((ui.dirty || caret || staleNote) && now - ui.lastPaint > 33) drawConsole();
@@ -1998,13 +2156,72 @@ function consoleTypeKey(e){
   if (!ui.focus) return false;
   const w = ui.widgets.find(x => x.id === ui.focus && x.type === 'field');
   if (!w){ ui.focus = null; return false; }
-  if (e.key === 'Enter' || e.key === 'Escape' || e.key === 'Tab'){ ui.focus = null; }
-  else if (e.key === 'Backspace'){ w.set(w.get().slice(0, -1)); saveDraft(); applyDraftLive(); }
-  else if (e.key.length === 1 && w.get().length < w.max){ w.set(w.get() + e.key); saveDraft(); applyDraftLive(); }
-  else return true;                                      // swallow arrows etc. while typing
+  const val = () => w.get();
+  const sMin = () => Math.min(ui.selA, ui.selB), sMax = () => Math.max(ui.selA, ui.selB);
+  const hasSel = () => ui.selA !== ui.selB;
+  const commit = (nv, caret) => {        // set + re-clamp (set may sanitise, e.g. the repo name)
+    w.set(nv);
+    ui.caret = clamp(caret, 0, val().length);
+    ui.selA = ui.selB = ui.caret;
+    saveDraft(); applyDraftLive();
+  };
+  const insert = (str) => {              // replaces the selection (or splices at the caret)
+    str = String(str).replace(/[\r\n]+/g, ' ');
+    const a = hasSel() ? sMin() : ui.caret, b = hasSel() ? sMax() : ui.caret;
+    str = str.slice(0, Math.max(0, w.max - (val().length - (b - a))));
+    commit(val().slice(0, a) + str + val().slice(b), a + str.length);
+  };
+  // power-user chords: select all, copy, cut, paste. (!altKey: AltGr layouts
+  // report ctrl+alt for ordinary special characters — those must still type)
+  if ((e.ctrlKey || e.metaKey) && !e.altKey){
+    const k = (e.key || '').toLowerCase();
+    if (k === 'a'){ ui.selA = 0; ui.selB = ui.caret = val().length; }
+    else if (k === 'c' || k === 'x'){
+      const a = hasSel() ? sMin() : 0, b = hasSel() ? sMax() : val().length;   // no selection → the whole field
+      navigator.clipboard?.writeText(val().slice(a, b))
+        .then(() => toast('copied ✓')).catch(() => toast('clipboard blocked — use ?console mode'));
+      if (k === 'x') commit(val().slice(0, a) + val().slice(b), a);
+    }
+    else if (k === 'v'){
+      navigator.clipboard?.readText?.()
+        .then(t => { if (t){ insert(t); ui.dirty = true; } })
+        .catch(() => toast('clipboard blocked — use ?console mode'));
+    }
+    else return true;                    // other chords: off the game keys, browser keeps them
+  }
+  else if (e.key === 'Enter' || e.key === 'Escape' || e.key === 'Tab'){ ui.focus = null; }
+  else if (e.key === 'Backspace'){
+    if (hasSel()) commit(val().slice(0, sMin()) + val().slice(sMax()), sMin());
+    else if (ui.caret > 0) commit(val().slice(0, ui.caret - 1) + val().slice(ui.caret), ui.caret - 1);
+  }
+  else if (e.key === 'Delete'){
+    if (hasSel()) commit(val().slice(0, sMin()) + val().slice(sMax()), sMin());
+    else if (ui.caret < val().length) commit(val().slice(0, ui.caret) + val().slice(ui.caret + 1), ui.caret);
+  }
+  else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight'){
+    const step = e.key === 'ArrowLeft' ? -1 : 1;
+    if (e.shiftKey) ui.selB = ui.caret = clamp(ui.caret + step, 0, val().length);
+    else {
+      ui.caret = hasSel() ? (step < 0 ? sMin() : sMax()) : clamp(ui.caret + step, 0, val().length);
+      ui.selA = ui.selB = ui.caret;
+    }
+  }
+  else if (e.key === 'Home' || e.key === 'End'){
+    ui.caret = e.key === 'Home' ? 0 : val().length;
+    if (e.shiftKey) ui.selB = ui.caret; else ui.selA = ui.selB = ui.caret;
+  }
+  else if (e.key.length === 1){ insert(e.key); }
+  else return true;                      // swallow the rest while typing
   e.preventDefault(); ui.dirty = true;
   return true;
 }
+// drag/double-click selection on the console fields: under pointer lock the
+// VIEW is the pointer — mousedown drops the caret and arms the drag, the
+// per-frame cursor (updateConsole) extends it, mouseup ends it. dblclick
+// still fires under lock, selecting the whole field.
+addEventListener('mousedown', e => { if (e.button === 0 && controls.isLocked) consoleSelStart(); });
+addEventListener('mouseup',   () => { conSel.drag = false; });
+addEventListener('dblclick',  () => { if (controls.isLocked) consoleSelectAll(); });
 
 /* ════════════════════════════════════════════════════════════════
    6 · controls — pointer-lock mouse + gamepad + touch, all smoothed
@@ -2885,7 +3102,7 @@ new FontLoader().load(
     buildConsole();                          // back-wall config console (before the one-shot shadow bake)
     renderer.shadowMap.needsUpdate = true;   // render the static shadow map once, now that all casters exist
     setLine('loadnote', (CONFIG.readyNote ?? '{n} worlds ready')
-      .replace('{n}', CONFIG.projects.length));
+      .replace('{n}', PANEL_COUNT));   // corridor + hung end walls — what's actually in the hall
     $('enterBtn').disabled = false;
     renderer.setAnimationLoop(animate);      // renderer-managed loop (pauses cleanly with the tab)
   },
