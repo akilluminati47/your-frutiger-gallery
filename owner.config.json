@@ -9,7 +9,7 @@
   "walls": { "east": true, "west": true },
   "projects": [
     { "name": "Build Yours",   "url": "https://frutiger-gallery.pages.dev/" }, 
-    { "name": "Morty 64",      "url": "https://www.adultswim.com/etcetera/elastic-man/app.html/" },
+    { "name": "Morty 64",      "url": "https://www.adultswim.com/etcetera/elastic-man/app.html" },
     { "name": "YouTube",       "url": "https://youtube.com/@akilluminati47" },
     { "name": "Twitch",        "url": "https://twitch.tv/akilluminati47" },
     { "name": "Demon Bot",     "url": "https://demonbot.win/" },
