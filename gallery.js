@@ -424,7 +424,9 @@ const GAZE_ROW_START = ROWS - GAZE_ROWS;    // first gaze row index
 const INTRO_DUR      = 2.6;                 // intro glide duration (seconds)
 const INTRO_START_Y  = 3.3;                 // camera height at the start of the glide-in (~1 m over the raised eye)
 const LOAD_DUR       = 1.8;                 // bar pace while a fetch is still in flight (auto frames)
-const GAZE_LOAD_DUR  = 2.0;                 // same, for gaze-triggered frames — ready screenshots skip the bar entirely
+const GAZE_LOAD_DUR  = 2.0;                 // gaze-triggered frames ALWAYS play the bar this long — the
+                                            // reveal answers the player's look, so it gets its cutscene
+                                            // even when the screenshot is already sitting in the cache
 
 const WALL_X  = HALF + 2.0;             // glass side walls
 const FRAME_X = WALL_X - 0.12;          // frames hang pressed flat against the glass walls
@@ -2769,10 +2771,13 @@ function startFrameLoading(f){
   u.loadState = 'loading';
   // pre-fetch cache first: the screenshots render the moment the PAGE loads
   // (see preFetchScreenshots — GPU-uploaded during the menu), so by ping time
-  // they're usually done — reveal NOW, no bar, no fixed-duration theater. The
-  // bar below only exists for a fetch genuinely still in flight.
+  // they're usually done — AUTO frames reveal NOW, no bar, no fixed-duration
+  // theater; a bar on them only means a fetch genuinely still in flight.
+  // GAZE frames are the exception: their reveal answers the player's look,
+  // so they always play the bar (GAZE_LOAD_DUR) before popping — see
+  // updateLoadingSystem, which holds their reveal until the bar completes.
   const ready = prefetchMap.get(u.project.url);
-  if (ready !== 'pending'){
+  if (ready !== 'pending' && u.loadTrigger !== 'gaze'){
     u.liveTexture = (ready instanceof THREE.Texture) ? ready : null;
     u.imageReady = true;
     if (!u.liveTexture){ u.screenMat.map = loadBackdropTex; u.screenMat.needsUpdate = true; }  // failed fetch → clean backdrop
@@ -2848,18 +2853,21 @@ function updateLoadingSystem(dt, t){
       // pending state = solid white, nothing to animate
     }
     if (u.loadState === 'loading'){
-      // a bar here means the fetch is genuinely still in flight (the ready
-      // path revealed inside startFrameLoading) — poll the cache and reveal
-      // the MOMENT it settles, no artificial wait, no watch-me speedup
+      // auto frames: a bar here means the fetch is genuinely still in flight
+      // (the ready path revealed inside startFrameLoading) — poll the cache
+      // and reveal the MOMENT it settles, no artificial wait, no watch-me
+      // speedup. Gaze frames ride the bar to FULL first — their reveal is a
+      // played cutscene — then take whatever the cache has settled to.
       const cached = prefetchMap.get(u.project.url);
-      if (cached !== 'pending'){
+      const settled = cached !== 'pending';
+      // the bar may only claim 100% once the network has delivered; short of
+      // that it eases toward — and holds just under — full
+      u.loadProgress = Math.min(settled ? 1 : 0.95, u.loadProgress + dt / u.loadDuration);
+      if (settled && (u.loadTrigger !== 'gaze' || u.loadProgress >= 1)){
         u.liveTexture = (cached instanceof THREE.Texture) ? cached : null;
         u.imageReady = true;
         revealWorld(f); continue;
       }
-      // ease toward — but hold just short of — full, so the bar never claims
-      // 100% while the network hasn't delivered
-      u.loadProgress = Math.min(0.95, u.loadProgress + dt / u.loadDuration);
       // repaint at ~30 Hz — the pole drifts slowly enough that half-rate reads
       // as smooth, and it halves the strip's repaint + GPU upload cost
       if (t - u.lastBarPaint >= 1/32){
