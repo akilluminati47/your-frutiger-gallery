@@ -111,7 +111,7 @@ export const CONFIG = {
   shuffleOrder: false,
 
   // Open the chosen domain in a new tab instead of swooping the same tab.
-  openInNewTab: true,
+  openInNewTab: false,
 
   // Live-screenshot provider used to paint each frame.
   //   "thumio"    – image.thum.io  (fast, honours width/height, good CORS)
@@ -125,8 +125,8 @@ export const CONFIG = {
 
   // Feel of the first-person walk.
   movement: {
-    accel: 47, friction: 8, maxSpeed: 9, mouseSensitivity: 0.8,
-    padLook: 3.6, touchLook: 0.0045,
+    accel: 69, friction: 10, maxSpeed: 13, mouseSensitivity: 0.75,
+    padLook: 4.2, touchLook: 0.0047,
   },
 
   // Master volume for the synthesised SFX / ambient pad (0–1).
