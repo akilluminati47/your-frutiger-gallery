@@ -2925,8 +2925,18 @@ renderer.domElement.addEventListener('click', () => {
   if (controls.isLocked){ tryLaunch(); return; }
   if (!isTouch && state === 'play') controls.lock();
 });
+// middle-click = force a new tab, like real links: it overrides the owner's
+// openInNewTab setting for this one visit. click never fires for button 1 —
+// the wheel press arrives as auxclick — and the mousedown preventDefault
+// keeps the browser's autoscroll widget out of the hall.
+renderer.domElement.addEventListener('mousedown', e => { if (e.button === 1) e.preventDefault(); });
+renderer.domElement.addEventListener('auxclick', e => {
+  if (e.button !== 1) return;
+  e.preventDefault();
+  if (controls.isLocked) tryLaunch(true);
+});
 
-function tryLaunch(){
+function tryLaunch(forceTab = false){
   if (consolePress()) return;           // aiming at the back-wall console → press it
   if (state !== 'play' || !activeFrame || launch) return;
   if (activeFrame.userData.loadState !== 'done') return;   // world still loading
@@ -2941,7 +2951,7 @@ function tryLaunch(){
   tmp.lookAt(f.position.x, eyeHeight, f.position.z);
 
   launch = {
-    frame:f, t:0,
+    frame:f, t:0, forceTab,
     fromPos: player.position.clone(),
     toPos,
     fromQuat: camera.quaternion.clone(),
@@ -3047,8 +3057,9 @@ function animate(){
     camera.position.y = eyeHeight;
     if (launch.t >= 1){
       const url = withProtocol(launch.frame.userData.project.url);
+      const toTab = CONFIG.openInNewTab || launch.forceTab;   // wheel-click forces the tab
       launch = null;
-      if (CONFIG.openInNewTab){ window.open(url, '_blank'); $('fade').style.opacity='0'; state='play'; if(!isTouch) controls.lock(); }
+      if (toTab){ window.open(url, '_blank'); $('fade').style.opacity='0'; state='play'; if(!isTouch) controls.lock(); }
       else window.location.href = url;
     }
   }
