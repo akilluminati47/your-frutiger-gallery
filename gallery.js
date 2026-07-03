@@ -2004,8 +2004,10 @@ function drawPublish(cc, top){
       cc.fillText(`${gh.forkRepo}${gh.doneConfig ? '  ·  design committed ✓' : ''}`, x1 + 60, y + 185);
     }
   } else if (gh.mode === 'anon'){
-    wButton(cc, 'p:connect', 'connect GitHub', x1 + 60, y + 40, 480, 84, () => {
-      saveDraft(); location.href = '/api/gh/login';
+    wButton(cc, 'p:connect', 'connect GitHub ↗', x1 + 60, y + 40, 480, 84, () => {
+      saveDraft();
+      window.open('/api/gh/login', '_blank');
+      toast('sign in on the new tab · this one notices by itself');
     });
     cc.fillStyle = AERO.inkFaint; cFont(cc, 21); cc.textAlign = 'left'; cc.textBaseline = 'alphabetic';
     cc.fillText('one click — we fork the template into your account & commit your design', x1 + 60, y + 165);
@@ -2072,6 +2074,13 @@ async function refreshGhState(){
   } catch { ui.gh.mode = 'nooauth'; }
   ui.dirty = true;
 }
+// sign-in rides a separate tab now (the gallery page must never navigate away) —
+// whenever this tab comes back into view while still anonymous, re-ask who we
+// are so the console flips to connected on its own
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && ui.gh?.mode === 'anon') refreshGhState();
+});
+addEventListener('focus', () => { if (ui.gh?.mode === 'anon') refreshGhState(); });
 async function doCreateGallery(){
   const gh = ui.gh;
   if (gh.busy) return;
@@ -2141,13 +2150,17 @@ function updateConsole(){
 }
 
 /* ── pressing & typing ── */
+// the buttons that actually make someone's gallery (publish steps 2 & 3) ring
+// the notify chime instead of the standard press
+const PUBLISH_STEP_BTNS = new Set(['p:connect', 'p:fork', 'p:forklink', 'p:deploy']);
 function consolePress(){
   if (!consoleMesh || conBoot.s !== 'done' || !ui.cursor.on) return false;
   const S = CON.W / 2048;
   const w = widgetAt(ui.cursor.x / S, ui.cursor.y / S);
   if (ui.focus && (!w || w.id !== ui.focus)) ui.focus = null;   // click elsewhere blurs
   if (!w){ ui.dirty = true; return true; }                      // on-slab click still consumed
-  audio.init(); audio.press();
+  audio.init();
+  if (PUBLISH_STEP_BTNS.has(w.id)) audio.publish(); else audio.press();
   if (w.type === 'slider') w.act(ui.cursor.x / S);
   else w.act?.(ui.cursor.x / S);
   ui.dirty = true;
@@ -2503,8 +2516,9 @@ const audio = (() => {
     pop:      'sfx/Speech Disambiguation.wav',         // menu bubble popped
     intro:    'sfx/Windows Logon Sound.flac',          // Enter → the glide in
     launch:   'sfx/Windows Print complete.flac',       // slab clicked → launch swoop
+    publish:  'sfx/Windows Notify.flac',               // the make-your-gallery buttons (publish steps 2 & 3)
     resume:   'sfx/Windows Pop-up Blocked.flac',       // pause menu closes
-    pause:    'sfx/Windows Notify.flac',               // pause menu opens
+    pause:    'sfx/notify.wav',                        // pause menu opens
   };
   // fetch the bytes immediately (network needs no gesture); decode waits for
   // the first init(), when the gesture-unlocked AudioContext exists
@@ -2567,9 +2581,10 @@ const audio = (() => {
     init, setVolume,
     press:       ()  => playBuf('press', null, 0.9),
     hover:       ()  => playBuf('hover', null, 0.65),
+    publish:     ()  => playBuf('publish', null, 0.9),
     ping:        pos => playBuf('ping', pos),
     droplet:     pos => playBuf('droplet', pos, 0.8),
-    pop:         pos => playBuf('pop', pos, 0.7),
+    pop:         pos => playBuf('pop', pos, 0.875),
     intro:       ()  => playBuf('intro'),
     launch:      ()  => playBuf('launch'),
     pauseOpen:   ()  => playBuf('pause', null, 0.9),
