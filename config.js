@@ -128,7 +128,7 @@ export const CONFIG = {
     padLook: 4.2, touchLook: 0.0047,
   },
 
-  // Master volume for the synthesised SFX / ambient pad (0–1).
+  // Master volume for the SFX (0–1).
   volume: 0.3,
 };
 
