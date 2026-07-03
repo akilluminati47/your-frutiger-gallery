@@ -1579,8 +1579,9 @@ function buildConsole(){
       const h = widgetAt(p.x / S, p.y / S);
       if (h?.id !== ui.hover?.id){ ui.hover = h; ui.dirty = true; drawConsole(); }
       if (conSel.drag){ consoleSelDrag(); if (ui.dirty) drawConsole(); }   // desk-mode drag-select
+      if (conSlide.drag){ consoleSlideDrag(); if (ui.dirty) drawConsole(); }  // desk-mode slider drag
     });
-    cnv.addEventListener('mousedown', e => { const p = toCanvas(e); ui.cursor = { x:p.x, y:p.y, on:true }; consoleSelStart(); drawConsole(); });
+    cnv.addEventListener('mousedown', e => { const p = toCanvas(e); ui.cursor = { x:p.x, y:p.y, on:true }; held.mouse = true; consoleSelStart(); consoleSlideStart(); drawConsole(); });
     cnv.addEventListener('click', e => { const p = toCanvas(e); ui.cursor = { x:p.x, y:p.y, on:true }; consolePress(); drawConsole(); });
     cnv.addEventListener('dblclick', e => { const p = toCanvas(e); ui.cursor = { x:p.x, y:p.y, on:true }; consoleSelectAll(); drawConsole(); });
   }
@@ -1681,6 +1682,11 @@ function wField(cc, id, label, x, y, w, get, set, max = 60, dim = false){
 }
 /* ── field text editing: caret placement, drag/double-click selection ── */
 const conSel = { drag:false, dragged:false, id:null, anchor:0 };
+// slider press-and-hold: any input's held press (mouse button, E key, gamepad
+// A, a touch look-drag) glues the armed slider's knob to the moving cursor,
+// so values slide fluidly instead of jumping click by click
+const conSlide = { drag:false, id:null, lastX:-1 };
+const held = { mouse:false, padA:false, touchLook:false };   // keys.KeyE is read live
 function fieldTextOff(w){
   // the first visible char of a field, mirroring wField's two windows:
   // focused = caret-anchored (already stored), unfocused = tail-anchored
@@ -1740,6 +1746,28 @@ function consoleSelDrag(){
     if (i !== conSel.anchor) conSel.dragged = true;
     ui.dirty = true;
   }
+}
+function consoleSlideStart(){
+  // press lands on a slider: the knob jumps to the press point and stays
+  // glued to the cursor until the press releases
+  if (!consoleMesh || conBoot.s !== 'done' || !ui.cursor.on) return false;
+  const S = CON.W / 2048;
+  const w = widgetAt(ui.cursor.x / S, ui.cursor.y / S);
+  if (!w || w.type !== 'slider') return false;
+  conSlide.drag = true; conSlide.id = w.id; conSlide.lastX = -1;
+  consoleSlideDrag();
+  return true;
+}
+function consoleSlideDrag(){
+  // while any press stays down the moving cursor drags the knob; everything
+  // released → the drag dies here on its own, no per-input cleanup needed
+  if (!conSlide.drag) return;
+  if (!held.mouse && !held.padA && !held.touchLook && !keys.KeyE){ conSlide.drag = false; return; }
+  const w = ui.widgets.find(k => k.id === conSlide.id && k.type === 'slider');
+  if (!w){ conSlide.drag = false; return; }
+  if (!ui.cursor.on) return;                 // slid off the slab: hold the value, don't jump
+  const cx = ui.cursor.x / (CON.W / 2048);
+  if (cx !== conSlide.lastX){ conSlide.lastX = cx; w.act(cx); ui.dirty = true; }
 }
 function consoleSelectAll(){
   // double-click on a field: highlight the whole value
@@ -2143,6 +2171,7 @@ function updateConsole(){
     if (h?.id !== ui.hover?.id){ ui.hover = h; ui.dirty = true; if (h) audio.hover(); }
   } else if (ui.hover){ ui.hover = null; ui.dirty = true; }
   consoleSelDrag();                                      // held button + moving view = drag-select
+  consoleSlideDrag();                                    // held press + moving view = slider drag
 
   const caret = ui.focus && now - ui.lastPaint > 500;    // caret keep-alive
   const staleNote = ui.note && now - ui.noteT > 2600;    // one repaint clears the toast
@@ -2161,7 +2190,12 @@ function consolePress(){
   if (!w){ ui.dirty = true; return true; }                      // on-slab click still consumed
   audio.init();
   if (PUBLISH_STEP_BTNS.has(w.id)) audio.publish(); else audio.press();
-  if (w.type === 'slider') w.act(ui.cursor.x / S);
+  if (w.type === 'slider'){
+    w.act(ui.cursor.x / S);
+    // a press that stays held (E, pad A) keeps dragging the knob from here;
+    // a released click just sets it once and the arm dies on the next frame
+    conSlide.drag = true; conSlide.id = w.id; conSlide.lastX = ui.cursor.x / S;
+  }
   else w.act?.(ui.cursor.x / S);
   ui.dirty = true;
   return true;
@@ -2233,8 +2267,12 @@ function consoleTypeKey(e){
 // VIEW is the pointer — mousedown drops the caret and arms the drag, the
 // per-frame cursor (updateConsole) extends it, mouseup ends it. dblclick
 // still fires under lock, selecting the whole field.
-addEventListener('mousedown', e => { if (e.button === 0 && controls.isLocked) consoleSelStart(); });
-addEventListener('mouseup',   () => { conSel.drag = false; });
+addEventListener('mousedown', e => {
+  if (e.button !== 0) return;
+  held.mouse = true;
+  if (controls.isLocked){ consoleSelStart(); consoleSlideStart(); }
+});
+addEventListener('mouseup',   () => { held.mouse = false; conSel.drag = false; });
 addEventListener('dblclick',  () => { if (controls.isLocked) consoleSelectAll(); });
 
 /* ════════════════════════════════════════════════════════════════
@@ -2288,7 +2326,7 @@ const keys = {};
 addEventListener('keydown', e => {
   if (consoleTypeKey(e)) return;      // a lit console field owns the keyboard
   keys[e.code] = true;
-  if (e.code === 'KeyE') tryLaunch();
+  if (e.code === 'KeyE' && !e.repeat) tryLaunch();   // held E drags sliders; autorepeat must not re-press
   if (e.code !== 'Escape') setInputMode('keyboard');
 });
 addEventListener('keyup', e => { keys[e.code] = false; });
@@ -2365,12 +2403,13 @@ addEventListener('gamepaddisconnected', e => {
 function getPad(){ return (padIndex != null && navigator.getGamepads) ? navigator.getGamepads()[padIndex] : null; }
 function pollPad(dt){
   padMove.x = 0; padMove.y = 0;
-  const gp = getPad(); if (!gp) return;
+  const gp = getPad(); if (!gp){ held.padA = false; return; }
   const lx = dead(gp.axes[0]||0), ly = dead(gp.axes[1]||0);
   const rx = dead(gp.axes[2]||0), ry = dead(gp.axes[3]||0);
   const aBtn = !!gp.buttons[0]?.pressed;        // A / cross
   const bBtn = !!gp.buttons[1]?.pressed;        // B / circle
   const startBtn = !!gp.buttons[9]?.pressed;    // Start / options
+  held.padA = aBtn;                             // a held A keeps a slider drag alive
 
   // ── UI screens (entry splash + pause menu): left stick = cursor, A = click ──
   if (state === 'menu' || state === 'paused'){
@@ -2457,6 +2496,8 @@ function pollPad(dt){
       } else if (lookId === null){
         lookId = t.identifier; lookLX = t.clientX; lookLY = t.clientY;
         lookStart = performance.now(); lookMoved = 0;
+        held.touchLook = true;
+        consoleSlideStart();      // finger down while aiming a slider → drag it
       }
     }
   }, { passive:false });
@@ -2492,6 +2533,7 @@ function pollPad(dt){
         joyEl?.classList.remove('on');
         if (knobEl) knobEl.style.transform = 'translate(-50%,-50%)';
       } else if (t.identifier === lookId){
+        held.touchLook = false;
         if (performance.now() - lookStart < 250 && lookMoved < 10) tryLaunch();   // quick tap = visit
         lookId = null;
       }
