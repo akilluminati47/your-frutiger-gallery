@@ -86,9 +86,17 @@ export const CONFIG = {
   // builds nothing — unless the odd-count wildcard needs the wall: an ODD
   // projects count sends its LAST entry to a free end wall automatically
   // (west first, console off; else east), building that pane if it must.
+  //
+  // live: true → the hung world doesn't swoop the browser away: walk up,
+  // press E, and the slab WAKES as the real page — a fully interactive
+  // in-world screen (your pointer works on the slab, the site's own cursor
+  // and all; click outside it or Esc to step back into the hall). Works
+  // with any URL that allows iframe embedding, hosted in any repo — the
+  // world does NOT need to live inside this one. A west live screen waits
+  // while the console is on (the console owns that wall).
   walls: {
-    west: { on: true, name: "", url: "" },
-    east: { on: true, name: "Designer", url: "https://akilluminati47.pages.dev/" },
+    west: { on: true, name: "", url: "", live: false },
+    east: { on: true, name: "Designer", url: "https://akilluminati47.pages.dev/", live: true },
   },
 
   // ── CREATE-YOUR-OWN CONSOLE ────────────────────────────────────────

@@ -7,8 +7,8 @@
   "readyNote": "",
   "console": { "enabled": false },
   "walls": {
-    "west": { "on": true, "name": "Build Yours", "url": "https://frutiger-gallery.pages.dev/" },
-    "east": { "on": true, "name": "Adult Swim",  "url": "https://www.adultswim.com/etcetera/" }
+    "west": { "on": true, "name": "Build Yours", "url": "https://frutiger-gallery.pages.dev/", "live": true },
+    "east": { "on": true, "name": "Elastic Face", "url": "https://elastic-man-randomizer.pages.dev/", "live": true }
   },
   "projects": [
     { "name": "YouTube",       "url": "https://youtube.com/@akilluminati47" },
