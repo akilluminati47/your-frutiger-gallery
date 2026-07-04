@@ -2475,17 +2475,23 @@ function consoleTypeKey(e){
   e.preventDefault(); ui.dirty = true;
   return true;
 }
-// drag/double-click selection on the console fields: under pointer lock the
-// VIEW is the pointer — mousedown drops the caret and arms the drag, the
-// per-frame cursor (updateConsole) extends it, mouseup ends it. dblclick
-// still fires under lock, selecting the whole field.
+// drag/double-click selection on the console fields: in-world the VIEW is the
+// pointer (the crosshair raycast in updateConsole), lock or not — mousedown
+// drops the caret and arms the drag, the per-frame cursor extends it, mouseup
+// ends it, dblclick selects the whole field. These ride the same view-aimed
+// cursor as gamepad A / touch / E, so they must NOT hinge on pointer lock: a
+// dropped lock (the resume relock cooldown after Esc, a tab blur) once left the
+// mouse dead on the slab while the pad still pressed it. The ui.cursor.on guard
+// inside consoleSel*/Slide* already no-ops these off the slab or on a UI screen,
+// so ungating is safe. Desk mode (?console) owns the OS pointer through its own
+// canvas handlers (see buildConsole) — it opts out here to avoid double-firing.
 addEventListener('mousedown', e => {
   if (e.button !== 0) return;
   held.mouse = true;
-  if (controls.isLocked){ consoleSelStart(); consoleSlideStart(); }
+  if (!conDesk){ consoleSelStart(); consoleSlideStart(); }
 });
 addEventListener('mouseup',   () => { held.mouse = false; conSel.drag = false; });
-addEventListener('dblclick',  () => { if (controls.isLocked) consoleSelectAll(); });
+addEventListener('dblclick',  () => { if (!conDesk) consoleSelectAll(); });
 
 /* ════════════════════════════════════════════════════════════════
    6 · controls — pointer-lock mouse + gamepad + touch, all smoothed
@@ -3172,6 +3178,13 @@ $('pauseBtn')?.addEventListener('click', e => { e.preventDefault(); togglePause(
 // switch from pad to mouse mid-walk with no hitch.
 renderer.domElement.addEventListener('click', () => {
   if (controls.isLocked){ tryLaunch(); return; }
+  // Unlocked but still in-world — the resume relock cooldown after Esc, or a
+  // pad/touch session that never locked. The console is view-aimed, so a click
+  // still presses the slab it's on (gamepad A + touch always could); consolePress
+  // returns true only when the crosshair is actually on the slab, consuming the
+  // click. A click that MISSES the console falls through to (re)acquiring
+  // mouse-look, so switching pad→mouse in open hall still engages the look.
+  if (!conDesk && consolePress()) return;
   if (!isTouch && state === 'play') controls.lock();
 });
 // middle-click = force a new tab, like real links: it overrides the owner's
