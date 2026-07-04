@@ -2460,6 +2460,22 @@ function applyLook(dYaw, dPitch){
     const k = 0.002 * controls.pointerSpeed;                  // PLC's own delta→radians scale
     applyLook(clamp(mx, -FLICK_CAP, FLICK_CAP) * k, clamp(my, -FLICK_CAP, FLICK_CAP) * k);
   }, true);
+
+  // ── resume free-look bridge ──
+  // After Esc drops pointer lock, the browser blocks re-locking for ~1.25s.
+  // Resume is instant (state flips to play at once), but PLC can't capture the
+  // mouse during that cooldown — so the VIEW sat frozen for a beat even though
+  // WASD already flowed. Drive look straight off movementX/Y whenever we're in
+  // world but not yet locked, so the camera answers immediately; the moment the
+  // relock lands, isLocked flips true and PLC + the settle guard take back over.
+  addEventListener('mousemove', e => {
+    if (controls.isLocked || onUiScreen() || (state !== 'play' && state !== 'intro')) return;
+    const cap = 80;                                          // gentle cap — no cursor-travel punch
+    const mx = clamp(e.movementX || 0, -cap, cap), my = clamp(e.movementY || 0, -cap, cap);
+    if (!mx && !my) return;
+    const k = 0.002 * controls.pointerSpeed;
+    applyLook(mx * k, my * k);
+  });
 }
 
 /* ── adaptive hint: show whichever scheme the visitor is actually using ── */
