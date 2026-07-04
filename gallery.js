@@ -1386,6 +1386,7 @@ const CON = { W: lowPerf ? 1536 : 2048, H: lowPerf ? 864 : 1152 };   // 16:9 can
 const CON_CW = 9.24, CON_CH = CON_CW * (CON.H / CON.W);  // slab size in world units (+10%)
 const CON_PX = CON_CW / 2048;                            // one layout px on the slab
 let consoleMesh = null, consoleTex = null, consoleCtx = null, consoleGroup = null;
+let conDesk = false;   // ?console desk overlay: the OS pointer owns cursor + hover, not the raycast
 let conCursor = null;                                    // the aero pointer: its own tiny quad
 // boot cutscene: the console loads WITH the hall — blank glass until slab 0
 // starts its bar, then the same 1.8 s beat before the UI pops in
@@ -1506,7 +1507,10 @@ const ui = {
   page: 0,                         // worlds-list pager
   dirty: true, lastPaint: 0,
   note: null, noteT: 0,            // transient toast ("copied ✓")
-  resetT: 0,                       // when the reset swirl was last clicked (drives its spin)
+  resetT: 0,                       // when the reset swirl was last clicked (drives its spring-spin)
+  resetHov: false, resetHovT: 0,   // hover edge + when it flipped (drives the eased cock-back)
+  animUntil: 0,                    // keep repainting until this clock time — ui.dirty can't carry
+                                   // an animation because drawConsole clears it after every paint
   gh: { mode: 'unknown', login: null, forkRepo: null, forkUrl: null, busy: null,
         doneFork: false, doneConfig: false, err: null },
 };
@@ -1598,6 +1602,7 @@ function buildConsole(){
   // mouse interaction — used for development and as an escape hatch anywhere
   // pointer lock is unavailable. Same widgets, same actions.
   if (new URLSearchParams(location.search).has('console')){
+    conDesk = true;                                       // hover/cursor now belong to the OS pointer
     conBoot.s = 'done';                                   // desk mode skips the cutscene
     drawConsole();                                        // repaint NOW — widgets exist pre-click
     Object.assign(cnv.style, {
@@ -2113,13 +2118,22 @@ function drawPublish(cc, top){
   {
     const rw = 64, rx = x2 + 800 - rw - 40, ry = top + 24;
     const hot = ui.hover?.id === 'p:reset';
-    const el = performance.now() - ui.resetT;
-    const spin = el < 650 ? easeOut(el / 650) : 0;       // one full turn on click
-    if (el < 650) ui.dirty = true;                       // keep repainting through the spin
+    const now = performance.now();
+    // hover: the cock-back eases in AND out instead of snapping — a 180ms
+    // blend clocked from the moment the hover edge flipped, either direction
+    if (hot !== ui.resetHov){ ui.resetHov = hot; ui.resetHovT = now; }
+    const hb = Math.min(1, (now - ui.resetHovT) / 180);
+    const cock = -0.28 * easeOut(hot ? hb : 1 - hb);
+    if (hb < 1) ui.animUntil = Math.max(ui.animUntil, now + 200);   // ride out the blend
+    // click: an underdamped spring — spins up fast, overshoots the full turn,
+    // rocks back and settles. exp decay × cos = the classic solid "clunk".
+    const u = (now - ui.resetT) / 1400;
+    const spinA = u < 1 ? Math.PI * 2 * (1 - Math.exp(-6 * u) * Math.cos(10 * u)) : 0;
+    if (u < 1) ui.animUntil = Math.max(ui.animUntil, now + 60);     // ride out the spring
     const cxp = rx + rw/2, cyp = ry + rw/2;
     cc.save();
     cc.translate(cxp, cyp);
-    cc.rotate(spin * Math.PI * 2 + (hot ? -0.28 : 0));   // hover cocks it a notch
+    cc.rotate(spinA + cock);
     // the swirl: an arc whose radius grows along the sweep — a true spiral
     cc.beginPath();
     const A0 = -Math.PI * 0.5, A1 = Math.PI * 1.05, STEPS = 30;
@@ -2243,31 +2257,34 @@ function updateConsole(){
       conBoot.s = 'done'; ui.dirty = true; audio.ping(consoleGroup?.position);
     } else if (now - ui.lastPaint > 33) drawConsole();
   }
-  let on = false, cx = -1, cy = -1;
-  if ((state === 'play' || state === 'intro') && player.position.z > PLAT_Z1 - 9.5){
-    camera.getWorldDirection(_gazeDir);
-    if (_gazeDir.z > 0.25){
-      _conRay.setFromCamera({ x: 0, y: 0 }, camera);
-      const hit = _conRay.intersectObject(consoleMesh, false)[0];
-      if (hit?.uv){ on = true; cx = hit.uv.x * CON.W; cy = (1 - hit.uv.y) * CON.H; }
+  if (!conDesk){   // desk mode: the OS pointer owns cursor + hover — the raycast must not stomp them
+    let on = false, cx = -1, cy = -1;
+    if ((state === 'play' || state === 'intro') && player.position.z > PLAT_Z1 - 9.5){
+      camera.getWorldDirection(_gazeDir);
+      if (_gazeDir.z > 0.25){
+        _conRay.setFromCamera({ x: 0, y: 0 }, camera);
+        const hit = _conRay.intersectObject(consoleMesh, false)[0];
+        if (hit?.uv){ on = true; cx = hit.uv.x * CON.W; cy = (1 - hit.uv.y) * CON.H; }
+      }
     }
+    ui.cursor = { x: cx, y: cy, on };
+    if (conCursor){                                        // pointer quad: free per-frame motion
+      conCursor.visible = on && conBoot.s === 'done';
+      if (on) conCursor.position.set((cx / CON.W - 0.5) * CON_CW + 17 * CON_PX,
+                                     (0.5 - cy / CON.H) * CON_CH - 25 * CON_PX, 0.15);
+    }
+    if (on){
+      const h = widgetAt(cx / (CON.W/2048), cy / (CON.W/2048));
+      if (h?.id !== ui.hover?.id){ ui.hover = h; ui.dirty = true; if (h) audio.hover(); }
+    } else if (ui.hover){ ui.hover = null; ui.dirty = true; }
   }
-  ui.cursor = { x: cx, y: cy, on };
-  if (conCursor){                                        // pointer quad: free per-frame motion
-    conCursor.visible = on && conBoot.s === 'done';
-    if (on) conCursor.position.set((cx / CON.W - 0.5) * CON_CW + 17 * CON_PX,
-                                   (0.5 - cy / CON.H) * CON_CH - 25 * CON_PX, 0.15);
-  }
-  if (on){
-    const h = widgetAt(cx / (CON.W/2048), cy / (CON.W/2048));
-    if (h?.id !== ui.hover?.id){ ui.hover = h; ui.dirty = true; if (h) audio.hover(); }
-  } else if (ui.hover){ ui.hover = null; ui.dirty = true; }
   consoleSelDrag();                                      // held button + moving view = drag-select
   consoleSlideDrag();                                    // held press + moving view = slider drag
 
   const caret = ui.focus && now - ui.lastPaint > 500;    // caret keep-alive
   const staleNote = ui.note && now - ui.noteT > 2600;    // one repaint clears the toast
-  if ((ui.dirty || caret || staleNote) && now - ui.lastPaint > 33) drawConsole();
+  const anim = now < ui.animUntil;                       // a widget animation is mid-flight
+  if ((ui.dirty || caret || staleNote || anim) && now - ui.lastPaint > 33) drawConsole();
 }
 
 /* ── pressing & typing ── */
