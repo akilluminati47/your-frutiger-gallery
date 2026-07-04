@@ -1300,6 +1300,7 @@ function buildGallery(font){
     const panel = new THREE.Mesh(deviceGeo, screenMat);
     panel.position.z = DEV_Z;
     panel.castShadow = true;
+    panel.userData.frame = group;   // back-ref for the visit? centre-screen raycast
     group.add(panel);
     // NOTE: no immediate fetch — loading is orchestrated by updateLoadingSystem()
 
@@ -1310,6 +1311,7 @@ function buildGallery(font){
     label.position.set(0, labelBaseY, 0.02);
     label.renderOrder = 5;         // always on top of its panel — no sort flicker
     label.scale.setScalar(0.01);   // starts tiny; animates to 1.0 on reveal
+    label.userData.frame = group;  // gazing at the name badge above arms the panel too
     group.add(label);
 
     // 3D "visit?" text — hidden until you approach. Own material clone per
@@ -2408,6 +2410,9 @@ const M = CONFIG.movement;
 const _camWorld = new THREE.Vector3();
 const _moveDir  = new THREE.Vector3();
 const _lookFwd  = new THREE.Vector3();
+const _visitRay = new THREE.Raycaster();          // centre-screen "invisible cursor" for visit? targeting
+const _visitTargets = [];                          // cached panel+label meshes, rebuilt only when the hall changes
+const _screenCentre = { x: 0, y: 0 };
 const moveInput = { x:0, y:0 };       // keyboard
 const padMove   = { x:0, y:0 };       // gamepad left stick
 const touchMove = { x:0, y:0 };       // on-screen joystick
@@ -3248,19 +3253,29 @@ function moveAndInteract(dt, t, autoFwd = 0){
   bobPhase += dt * 6.2 * smoothSpeed;
   o.position.y = eyeHeight + Math.sin(bobPhase) * 0.012 * smoothSpeed;
 
-  // active frame = the nearest one you're actually LOOKING at, within range
-  // (so you can't back away and trigger a panel that's now behind you)
+  // active frame = the panel your gaze crosshair (screen centre) actually lands
+  // ON — its slab OR the name badge above it — within reach. A true centre-screen
+  // raycast, the same invisible cursor the console slab uses, replaces the old
+  // facing cone: a panel only arms when you're looking straight at it, and backing
+  // away drops it once it slides out of reach.
   camera.getWorldDirection(_lookFwd);
-  const fl = Math.hypot(_lookFwd.x, _lookFwd.z) || 1, fX = _lookFwd.x/fl, fZ = _lookFwd.z/fl;
-  activeFrame = null; let best = 7.5;
-  // looking up over the glass walls (at sky/landscape) never targets a panel
-  const overTheGlass = _lookFwd.y > 0.55;
-  if (!overTheGlass) for (const f of frames){
-    const dx = f.position.x - o.position.x, dz = f.position.z - o.position.z;
-    const d  = Math.hypot(dx, dz);
-    if (d > 7.5) continue;
-    if ((dx/d)*fX + (dz/d)*fZ < 0.6) continue;     // must be facing it (~within 53°)
-    if (d < best){ best = d; activeFrame = f; }
+  activeFrame = null;
+  // rebuild the raycast target list only when the hall's panel count changes
+  if (_visitTargets.length !== frames.length * 2){
+    _visitTargets.length = 0;
+    for (const f of frames) _visitTargets.push(f.userData.panel, f.userData.label);
+  }
+  // looking up over the glass walls (at sky/landscape) can't hit a panel anyway —
+  // a cheap early-out that skips the raycast entirely
+  if (_lookFwd.y <= 0.55){
+    _visitRay.setFromCamera(_screenCentre, camera);
+    // intersections come back nearest-first; take the first whose panel is still
+    // within the planar reach (KEEP THE DISTANCE — the old 7.5 unit cap)
+    for (const hit of _visitRay.intersectObjects(_visitTargets, false)){
+      const f = hit.object.userData.frame;
+      const dx = f.position.x - o.position.x, dz = f.position.z - o.position.z;
+      if (Math.hypot(dx, dz) <= 7.5){ activeFrame = f; break; }
+    }
   }
   const canVisit = !!(activeFrame && activeFrame.userData.loadState === 'done');
   if (activeFrame !== lastActive || canVisit !== lastCanVisit){
