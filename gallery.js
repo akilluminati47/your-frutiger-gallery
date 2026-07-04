@@ -376,16 +376,26 @@ const FH = 2.64, FW = FH * ASPECT, FRAME_Y = eyeHeight;  // slab faces +10%, sti
    the unannounced 0000 wildcard and rides a free end wall — west first
    (priority: console off and no west world), else east — building that
    wall's pane even when its toggle is off. Both walls already holding
-   worlds → the lone world rides the last row. */
+   worlds → no free wall to fill, so the odd world is BLOCKED: dropped from
+   the hall so the sides stay paired (kept in config, never wiped), and
+   greyed instead of inked in the builder so the designer sees why. */
 const CON_ENABLED = CONFIG.console?.enabled !== false;   // section 5c's app gate — the layout needs it up here
 function normWalls(w){
   // one wall slot = { on, name, url, live }. Legacy boolean toggles (old owner
   // configs / saved drafts) normalise to a toggled empty slot. live → the
   // hung world wakes as a REAL interactive page on its pane (see section 8c)
-  // instead of swooping the browser away.
-  const one = v => (v && typeof v === 'object')
-    ? { on: v.on === true, name: String(v.name ?? ''), url: String(v.url ?? ''), live: v.live === true }
-    : { on: v === true, name: '', url: '', live: false };
+  // instead of swooping the browser away. live DRAGS the wall toggle on with
+  // it — an interactive screen needs its pane, so a live slot can never boot
+  // as a floating console, whatever a hand-edited config claims. An empty url
+  // still hangs nothing: live + empty string = a bare glass wall, and the only
+  // OPEN end is console off + toggles off.
+  const one = v => {
+    if (v && typeof v === 'object'){
+      const live = v.live === true;
+      return { on: v.on === true || live, name: String(v.name ?? ''), url: String(v.url ?? ''), live };
+    }
+    return { on: v === true, name: '', url: '', live: false };
+  };
   return { west: one(w?.west), east: one(w?.east) };
 }
 function planWalls(count, walls, consoleOn){
@@ -395,11 +405,15 @@ function planWalls(count, walls, consoleOn){
   if (count % 2 === 1){
     if (!consoleOn && !westWorld) wild = 'west';         // far wall first — use it or build it
     else if (!eastWorld)          wild = 'east';         // else the sun-lit entrance
-  }                                                      // both taken → lone last row
+  }
+  // odd count, both end walls already holding worlds → no free wall for the
+  // wildcard. The odd (last) world is BLOCKED: left out of the hall so the
+  // corridor stays paired instead of stranding a lonely half-row.
+  const blocked = count % 2 === 1 && !wild;
   return {
     west: westWorld ? 'slot' : wild === 'west' ? 'wild' : null,
     east: eastWorld ? 'slot' : wild === 'east' ? 'wild' : null,
-    wild,
+    wild, blocked,
     // the glass panes follow the TOGGLES (empty glass is fine), plus the
     // console's own backwall and whichever wall the wildcard forces
     westPane: consoleOn || walls.west.on || wild === 'west',
@@ -414,7 +428,10 @@ const wallProjects = {
   east: WALL_PLAN.east === 'slot' ? wallSlot('east') : WALL_PLAN.east === 'wild' ? wildWorld : null,
   west: WALL_PLAN.west === 'slot' ? wallSlot('west') : WALL_PLAN.west === 'wild' ? wildWorld : null,
 };
-const sideProjects = WALL_PLAN.wild ? CONFIG.projects.slice(0, -1) : CONFIG.projects.slice();
+// odd count drops its last entry from the corridor either way: the wildcard
+// hangs it on a free end wall, or — both walls taken — it's blocked and left
+// out entirely (kept in config, greyed in the builder), so the sides stay paired.
+const sideProjects = (WALL_PLAN.wild || WALL_PLAN.blocked) ? CONFIG.projects.slice(0, -1) : CONFIG.projects.slice();
 const EAST_ON = WALL_PLAN.eastPane;     // entrance glass pane + rail
 const WEST_ON = WALL_PLAN.westPane;     // far/back glass pane + rail (always with the console)
 const PANEL_COUNT = sideProjects.length + (wallProjects.east ? 1 : 0) + (wallProjects.west ? 1 : 0);
@@ -1493,10 +1510,12 @@ function buildOwnerJson(){
     movement: { speed: +d.moveSpeed.toFixed(2) },   // deep-merges over CONFIG.movement — accel/friction survive
     shuffleOrder: d.shuffleOrder, openInNewTab: d.openInNewTab,
     console: { enabled: !!d.consoleOn },   // deep-merges over CONFIG.console — sourceRepo survives
-    // wall slots persist their strings even while toggled off — that's the point
+    // wall slots persist their strings even while toggled off — that's the
+    // point. live forces on: the invariant the console UI locks (a live
+    // screen needs its pane) holds in the committed file too.
     walls: {
-      west: { on: !!d.walls.west.on, name: d.walls.west.name.trim(), url: d.walls.west.url.trim(), live: !!d.walls.west.live },
-      east: { on: !!d.walls.east.on, name: d.walls.east.name.trim(), url: d.walls.east.url.trim(), live: !!d.walls.east.live },
+      west: { on: !!(d.walls.west.on || d.walls.west.live), name: d.walls.west.name.trim(), url: d.walls.west.url.trim(), live: !!d.walls.west.live },
+      east: { on: !!(d.walls.east.on || d.walls.east.live), name: d.walls.east.name.trim(), url: d.walls.east.url.trim(), live: !!d.walls.east.live },
     },
     projects: d.projects.filter(p => p.url.trim()).map(p => ({ name: p.name.trim() || 'World', url: p.url.trim() })),
   };
@@ -1993,11 +2012,11 @@ function drawWorlds(cc, top){
   // where everything lands, on the DRAFT's own console/wall settings — the
   // same planner the hall layout uses, so the badges never lie
   const plan = planWalls(d.projects.length, d.walls, d.consoleOn);
-  const panels = d.projects.length + (plan.west === 'slot' ? 1 : 0) + (plan.east === 'slot' ? 1 : 0);
+  const panels = d.projects.length - (plan.blocked ? 1 : 0) + (plan.west === 'slot' ? 1 : 0) + (plan.east === 'slot' ? 1 : 0);
   // (00/000/0000 are the code's slot breadcrumbs — the visitor reads "west wall")
   const hint = plan.wild === 'west'  ? '  ·  the odd world rides the west wall'
              : plan.wild === 'east'  ? '  ·  the odd world rides the east wall'
-             : d.projects.length % 2 ? '  ·  both walls hold worlds — the odd one rides the last row'
+             : plan.blocked          ? '  ·  both walls are full — the odd world is blocked (greyed below)'
              :                         '  ·  walls balanced ✓';
   cc.fillStyle = AERO.inkSoft; cFont(cc, 26); cc.textAlign = 'left'; cc.textBaseline = 'alphabetic';
   cc.fillText(`your worlds — ${panels} panels` + hint, 64, top + 6);
@@ -2013,47 +2032,72 @@ function drawWorlds(cc, top){
   cc.fillStyle = AERO.inkFaint; cFont(cc, 19); cc.textAlign = 'left'; cc.textBaseline = 'alphabetic';
   cc.fillText('live screen', 1642, y - 22);
   cc.fillText('wall', 1872, y - 22);
-  const wallRow = (slot, label, dimmed, tOn, tSet) => {
+  const wallRow = (slot, label, o) => {
     const s = d.walls[slot];
-    wField(cc, `w:${slot}:name`, label, 64, y, 430, () => s.name, v => { s.name = v; }, 30, dimmed);
-    wField(cc, `w:${slot}:url`,  '',   540, y, 1080, () => s.url,  v => { s.url  = v; }, 200, dimmed);
-    // the live toggle stays pressable even greyed: the choice is stored with
-    // the slot's strings and wakes with them
-    wToggle(cc, `w:${slot}:live`, '', 1660, y + 7, s.live,
-      v => { s.live = v; saveDraft(); ui.dirty = true; }, undefined, !!dimmed);
-    wToggle(cc, `w:${slot}`, '', 1860, y + 7, tOn, tSet);
+    wField(cc, `w:${slot}:name`, label, 64, y, 430, () => s.name, v => { s.name = v; }, 30, o.nameDim);
+    wField(cc, `w:${slot}:url`,  '',   540, y, 1080, () => s.url,  v => { s.url  = v; }, 200, o.urlDim);
+    wToggle(cc, `w:${slot}:live`, '', 1660, y + 7, s.live, o.liveSet, undefined, o.liveDim);
+    wToggle(cc, `w:${slot}`, '', 1860, y + 7, o.wallOn, o.wallSet, undefined, o.wallDim);
     y += 108;
   };
-  // the west slot greys while the console owns its wall — in THIS deployment's
-  // live config (CON_ENABLED: you're literally reading this on that wall) or in
-  // the draft's plan (d.consoleOn). No name badge hangs meanwhile, so the row
-  // reads parked — but 'soft' keeps the strings typeable and the live toggle
-  // pressable: write it now, it takes the wall the moment the console is hidden
+  // per-slot greying, in priority order:
+  //   console owns the wall (west: draft plan or THIS deployment's live config)
+  //     → the whole row parks: strings soft-grey but typeable, live toggle
+  //       pressable at 45%, wall toggle toasts — it takes over when the
+  //       console hides
+  //   live on → only the NAME greys (no badge hangs on an interactive slab —
+  //       the prompt still says it): the LINK stays full ink, it's the live
+  //       thing. live drags the wall on and LOCKS it (dimmed toggle, toast) —
+  //       no floating consoles. An empty url still leaves the wall bare glass.
+  //   live off, wall on → everything normal ink.
+  //   toggles off → kept strings grey out locked; flipping live back on brings
+  //       the wall with it. Console off + toggles off = the only open end.
+  const slotOpts = (slot, owned) => {
+    const s = d.walls[slot];
+    const liveSet = v => { s.live = v; if (v) s.on = true; saveDraft(); ui.dirty = true; };
+    if (owned) return {
+      nameDim: 'soft', urlDim: 'soft', liveDim: true, liveSet,
+      wallOn: false, wallDim: false,
+      wallSet: () => toast('the console owns the west wall — hide it in atmosphere first'),
+    };
+    if (s.live) return {
+      nameDim: 'soft', urlDim: false, liveDim: false, liveSet,
+      wallOn: true, wallDim: true,
+      wallSet: () => toast('a live screen needs its wall — flip live off first'),
+    };
+    return {
+      nameDim: !s.on, urlDim: !s.on, liveDim: !s.on, liveSet,
+      wallOn: s.on, wallDim: false,
+      wallSet: v => { s.on = v; saveDraft(); ui.dirty = true; },
+    };
+  };
   const conOwns = d.consoleOn || CON_ENABLED;
   wallRow('west',
-    conOwns ? 'west wall — the console lives here'
-            : d.walls.west.on ? 'west wall' : 'west wall — off',
-    conOwns ? 'soft' : !d.walls.west.on,
-    d.walls.west.on && !conOwns,
-    conOwns ? () => toast('the console owns the west wall — hide it in atmosphere first')
-            : v => { d.walls.west.on = v; saveDraft(); ui.dirty = true; });
+    conOwns            ? 'west wall — the console lives here'
+    : d.walls.west.live ? 'west wall — live screen'
+    : d.walls.west.on   ? 'west wall' : 'west wall — off',
+    slotOpts('west', conOwns));
   if (conOwns){
     cc.fillStyle = AERO.inkFaint; cFont(cc, 19); cc.textAlign = 'left'; cc.textBaseline = 'alphabetic';
     cc.fillText('parked under the console — hide it (atmosphere tab) and your west link hangs here instead: static panel, or big interactive screen with live on', 70, y - 30);
     y += 26;
   }
   wallRow('east',
-    d.walls.east.on ? 'east wall — the entrance' : 'east wall — off',
-    !d.walls.east.on,
-    d.walls.east.on,
-    v => { d.walls.east.on = v; saveDraft(); ui.dirty = true; });
+    d.walls.east.live ? 'east wall — live screen'
+    : d.walls.east.on ? 'east wall — the entrance' : 'east wall — off',
+    slotOpts('east', false));
   const start = ui.page * PER;
   d.projects.slice(start, start + PER).forEach((p, k) => {
     const i = start + k;
-    const badge = (plan.wild && i === d.projects.length - 1)
-      ? `rides the ${plan.wild} wall — the odd one` : '';
-    wField(cc, `w:name:${i}`, badge || (k === 0 ? 'plaque' : ''), 64, y, 430, () => p.name, v => { p.name = v; }, 30);
-    wField(cc, `w:url:${i}`, k === 0 ? 'url' : '', 540, y, 1280, () => p.url, v => { p.url = v; }, 200);
+    const isLast = i === d.projects.length - 1;
+    const badge = isLast && plan.wild     ? `rides the ${plan.wild} wall — the odd one`
+                : isLast && plan.blocked  ? 'blocked — both walls are full'
+                :                           '';
+    // blocked odd slab → its strings stay soft-grey and still typeable, hanging
+    // nothing until a wall frees up (a wildcard odd slab inks normally)
+    const dim = isLast && plan.blocked ? 'soft' : false;
+    wField(cc, `w:name:${i}`, badge || (k === 0 ? 'plaque' : ''), 64, y, 430, () => p.name, v => { p.name = v; }, 30, dim);
+    wField(cc, `w:url:${i}`, k === 0 ? 'url' : '', 540, y, 1280, () => p.url, v => { p.url = v; }, 200, dim);
     wButton(cc, `w:del:${i}`, '✕', 1860, y, 62, 62, () => {
       d.projects.splice(i, 1); ui.focus = null; saveDraft(); ui.dirty = true;
     }, 'ghost');
@@ -2232,7 +2276,7 @@ function drawPublish(cc, top){
   cc.fillStyle = AERO.inkSoft; cFont(cc, 26);
   const oj = buildOwnerJson();
   const ojPlan = planWalls(oj.projects.length, normWalls(oj.walls), !!d.consoleOn);
-  const ojWorlds = oj.projects.length + (ojPlan.west === 'slot' ? 1 : 0) + (ojPlan.east === 'slot' ? 1 : 0);
+  const ojWorlds = oj.projects.length - (ojPlan.blocked ? 1 : 0) + (ojPlan.west === 'slot' ? 1 : 0) + (ojPlan.east === 'slot' ? 1 : 0);
   [
     `“${oj.title}”  by  ${oj.creator}`,
     `${ojWorlds} worlds  ·  ${Math.round(oj.bubbles.count)} bubbles`,
