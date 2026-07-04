@@ -2496,6 +2496,15 @@ function setInputMode(mode){
 const keys = {};
 addEventListener('keydown', e => {
   if (consoleTypeKey(e)) return;      // a lit console field owns the keyboard
+  // Tab belongs to the game, not the browser. preventDefault kills the focus-ring
+  // cycling (the black outline hopping between page elements) and we spend the key
+  // on the pause toggle instead — same in/out as Esc and the pause button.
+  if (e.code === 'Tab'){
+    e.preventDefault();
+    if (state === 'paused'){ resumeGame(); if (!isTouch) relockLook(); }
+    else if (state === 'play' || state === 'intro'){ controls.isLocked ? controls.unlock() : pauseGame(); }
+    return;
+  }
   keys[e.code] = true;
   if (e.code === 'KeyE' && !e.repeat) tryLaunch();   // held E drags sliders; autorepeat must not re-press
   if (e.code !== 'Escape') setInputMode('keyboard');
