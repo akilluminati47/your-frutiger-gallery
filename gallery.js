@@ -3270,11 +3270,11 @@ function moveAndInteract(dt, t, autoFwd = 0){
   if (_lookFwd.y <= 0.55){
     _visitRay.setFromCamera(_screenCentre, camera);
     // intersections come back nearest-first; take the first whose panel is still
-    // within the planar reach — 6.9 units, a touch closer than before
+    // within the planar reach — 4.20 units, close to the glass
     for (const hit of _visitRay.intersectObjects(_visitTargets, false)){
       const f = hit.object.userData.frame;
       const dx = f.position.x - o.position.x, dz = f.position.z - o.position.z;
-      if (Math.hypot(dx, dz) <= 6.9){ activeFrame = f; break; }
+      if (Math.hypot(dx, dz) <= 4.20){ activeFrame = f; break; }
     }
   }
   const canVisit = !!(activeFrame && activeFrame.userData.loadState === 'done');
