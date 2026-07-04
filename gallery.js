@@ -1400,6 +1400,7 @@ function buildGallery(font){
     u.faceZ = 0.3 + 0.286 / 2;            // the slab's front face (strip + iframe ride it)
     u.liveSlab = true;
     u.label.visible = false;              // no name badge on an interactive slab
+    u.visit.visible = false;              // no visit? text either — the portal is live, not visitable
   }
   if (wallProjects.east){
     const f = makeFrame(wallProjects.east, 'auto', autoDelayForRow(0), LOAD_DUR);
@@ -2577,6 +2578,10 @@ function applyLook(dYaw, dPitch){
   // relock lands, isLocked flips true and PLC + the settle guard take back over.
   addEventListener('mousemove', e => {
     if (controls.isLocked || onUiScreen() || (state !== 'play' && state !== 'intro')) return;
+    // a live portal is armed (centre-aim within reach): the free cursor is for
+    // IT — hold the view still so the cursor can travel onto the slab instead
+    // of the camera chasing it away. Click off the slab to re-lock and turn.
+    if (activeFrame?.userData.liveWall) return;
     const cap = 80;                                          // gentle cap — no cursor-travel punch
     const mx = clamp(e.movementX || 0, -cap, cap), my = clamp(e.movementY || 0, -cap, cap);
     if (!mx && !my) return;
@@ -2603,10 +2608,8 @@ function setInputMode(mode){
 const keys = {};
 addEventListener('keydown', e => {
   if (consoleTypeKey(e)) return;      // a lit console field owns the keyboard
-  if (state === 'screen'){            // a live screen is up: the PAGE owns the keyboard —
-    if (e.code === 'Escape' || e.code === 'Tab'){ e.preventDefault(); exitScreen(); }
-    return;                           // no keys[] buildup, no pause toggles underneath it
-  }
+  // (live portals need no key handling here: once you click INTO one, the
+  // iframe owns the keyboard outright — our listeners never see those keys)
   // Tab belongs to the game, not the browser. preventDefault kills the focus-ring
   // cycling (the black outline hopping between page elements) and we spend the key
   // on the pause toggle instead — same in/out as Esc and the pause button.
@@ -2942,6 +2945,7 @@ addEventListener('pointerdown', () => audio.init(), { once:true });
 let state = 'menu';
 let introT = 0;
 let launch = null;
+let panelHandoff = false;   // our own deliberate unlock (cursor handed to a live portal) — not a pause
 let activeFrame = null, lastActive = null, lastCanVisit = false;
 let started = false;
 
@@ -2961,6 +2965,7 @@ function beginPlay(){
   player.position.set(0, INTRO_START_Y, -6);
   velocity.set(0, 0, 0);
   state = 'intro'; introT = 0;
+  if (live3d?.byFrame.size) liveShow();   // re-entry from the splash: portals back up, state intact
   if (inputMode === 'touch') $('touch')?.classList.remove('hidden');
 }
 function startExperience(){
@@ -3068,6 +3073,9 @@ function revealWorld(f){
   }
   u.stripTex?.dispose?.(); u.stripTex = null; u.stripCanvas = null;
   u.whiteTex?.dispose?.(); u.whiteTex = null;
+  // a live end wall ARMS right here: the iframe portal goes up the moment the
+  // slab reveals — no visit, no wake — the page simply IS the slab from now on
+  if (u.liveWall) armPortal(f);
   // Trigger name-plaque bloop — the balloon ping rings from the panel's spot
   // on its wall, one sound for every slab. Live slabs skip the badge (they
   // wear none, like the console) but keep their ping.
@@ -3119,9 +3127,9 @@ function updateLoadingSystem(dt, t){
 // back to the entry card (used when returning via the browser Back button, which
 // would otherwise restore a frozen mid-swoop white screen = a "blank realm")
 function resetToMenu(){
-  // a live screen must not survive the trip back to the splash
-  screenFx = null;
-  if (live3d){ live3d.container.style.display = 'none'; live3d.backdrop.style.display = 'none'; }
+  // live portals must not float over the splash — hidden, not destroyed
+  // (their pages keep state for the next entry)
+  liveHide();
   launch = null; state = 'menu'; started = false;
   padCursor.ready = false;                    // gamepad cursor re-centres on the splash
   $('fade').style.opacity = '0';
@@ -3139,7 +3147,11 @@ controls.addEventListener('lock', () => {
   crosshairEl?.classList.remove('show');     // clear the menu cursor while in-game
   if (!started) beginPlay(); else resumeGame();
 });
-controls.addEventListener('unlock', () => { if (state === 'launching' || state === 'screen') return; pauseGame(); });
+controls.addEventListener('unlock', () => {
+  if (state === 'launching') return;
+  if (panelHandoff){ panelHandoff = false; return; }   // cursor handed to a live portal — play continues
+  pauseGame();
+});
 
 $('enterBtn').addEventListener('click', startExperience);
 // Resume must feel instant. The browser enforces a ~1.25s cooldown on
@@ -3183,9 +3195,12 @@ renderer.domElement.addEventListener('click', () => {
   // still presses the slab it's on (gamepad A + touch always could); consolePress
   // returns true only when the crosshair is actually on the slab, consuming the
   // click. A click that MISSES the console falls through to (re)acquiring
-  // mouse-look, so switching pad→mouse in open hall still engages the look.
+  // mouse-look, so switching pad→mouse in open hall still engages the look —
+  // and it's also the step-back gesture from a live portal: clicking off the
+  // slab re-locks the walk. relockLook (not a bare lock()) so the relock still
+  // lands when the click falls inside the browser's post-unlock cooldown.
   if (!conDesk && consolePress()) return;
-  if (!isTouch && state === 'play') controls.lock();
+  if (!isTouch && state === 'play') relockLook();
 });
 // middle-click = force a new tab, like real links: it overrides the owner's
 // openInNewTab setting for this one visit. click never fires for button 1 —
@@ -3202,9 +3217,10 @@ function tryLaunch(forceTab = false){
   if (consolePress()) return;           // aiming at the back-wall console → press it
   if (state !== 'play' || !activeFrame || launch) return;
   if (activeFrame.userData.loadState !== 'done') return;   // world still loading
-  // a live end wall wakes in place instead of swooping away — the wheel press
-  // (forceTab) still opens the real tab, the escape hatch for a broken embed
-  if (activeFrame.userData.liveWall && !forceTab){ enterScreen(activeFrame); return; }
+  // a live end wall is ALREADY the page — E / click just hands it the OS
+  // cursor (release the lock in place: no glide, no state change). The wheel
+  // press (forceTab) still opens the real tab, the escape hatch for a broken embed
+  if (activeFrame.userData.liveWall && !forceTab){ handPortalCursor(activeFrame); return; }
   const f = activeFrame;
   state = 'launching';
   audio.launch();
@@ -3226,48 +3242,42 @@ function tryLaunch(forceTab = false){
 }
 
 /* ════════════════════════════════════════════════════════════════
-   8c · live screens — end walls with { live:true }
-   A live end-wall world doesn't swoop the browser away: E glides you
-   to the swoop's own vantage, then the slab WAKES as the real page —
-   an iframe transformed onto the pane in true perspective (CSS3D,
-   same camera, so it sits exactly where the screenshot sat). The
-   pointer is handed to the PAGE: pointer lock releases and the OS /
-   the site's own cursor works on the slab alone — everywhere else a
-   cursorless backdrop waits for a click (or Esc / Tab) to step back
-   into the world. The iframe survives leaving, so a game on the wall
-   keeps its state between visits. Any URL that permits framing works,
+   8c · live portals — end walls with { live:true }
+   A live end-wall world is ALWAYS armed: the moment its slab reveals,
+   the real page goes up — an iframe transformed onto the pane in true
+   perspective (CSS3D, same camera) — and simply IS the slab from then
+   on. No visit, no wake, no camera lock-in: interaction is free-roam.
+   Whenever the OS cursor exists (pad/touch play, the relock cooldown,
+   or E/click on the slab handing the lock over) it works on the portal
+   natively — click, drag, mouseover — at the iframe's own small pixel
+   grid mapped through the slab's 2D plane. Only the ARMED portal
+   (centre-aim within reach, the same condition that stands the
+   free-look bridge down) takes the mouse, so a far slab never swallows
+   a click meant for the hall; clicking off the slab re-locks the walk.
+   The iframe survives everything short of leaving the page — a game on
+   the wall keeps its state. Any URL that permits framing works,
    whichever repo hosts it — same-repo hosting buys nothing here.
    ════════════════════════════════════════════════════════════════ */
-let live3d = null;       // lazy singleton: { container, backdrop, renderer, scene, byFrame }
-let screenFx = null;     // the active session: glide (t 0→1) → on (iframe interactive)
+let live3d = null;       // lazy singleton: { container, renderer, scene, byFrame, shown }
 
 function liveLayerInit(){
   if (live3d) return live3d;
-  // the backdrop sits UNDER the CSS3D layer (canvas < backdrop 10 < screens 12
-  // < hud 20): it catches every click that misses the slab — the exit gesture —
-  // and hides the cursor, so the pointer exists on the page and nowhere else
-  const backdrop = document.createElement('div');
-  Object.assign(backdrop.style, { position:'fixed', inset:'0', zIndex:'10', cursor:'none', display:'none' });
-  backdrop.addEventListener('click', exitScreen);
-  const hint = document.createElement('div');
-  hint.textContent = 'click outside the screen (or Esc) to step back';
-  Object.assign(hint.style, {
-    position:'absolute', left:'50%', bottom:'26px', transform:'translateX(-50%)',
-    padding:'8px 18px', borderRadius:'999px', font:'600 13px Quicksand, "Segoe UI", sans-serif',
-    color:'#0a5aa8', background:'rgba(255,255,255,.72)', backdropFilter:'blur(6px)',
-    boxShadow:'0 8px 28px rgba(10,60,120,.25)', pointerEvents:'none', whiteSpace:'nowrap',
-  });
-  backdrop.appendChild(hint);
+  // the CSS3D layer rides over the canvas, under every overlay (canvas <
+  // screens 12 < hud 20 < fade 40 < menus 50). The container itself never
+  // takes the mouse — only an armed portal's iframe does — so the cursor,
+  // clicks and the free-look bridge keep working across the rest of the hall
   const container = document.createElement('div');
   Object.assign(container.style, { position:'fixed', inset:'0', zIndex:'12', display:'none', pointerEvents:'none' });
   const r3d = new CSS3DRenderer();
   r3d.setSize(innerWidth, innerHeight);
   Object.assign(r3d.domElement.style, { position:'absolute', inset:'0' });
   container.appendChild(r3d.domElement);
-  document.body.append(backdrop, container);
-  live3d = { container, backdrop, renderer: r3d, scene: new THREE.Scene(), byFrame: new Map() };
+  document.body.append(container);
+  live3d = { container, renderer: r3d, scene: new THREE.Scene(), byFrame: new Map(), shown: false };
   return live3d;
 }
+function liveShow(){ if (live3d && !live3d.shown){ live3d.shown = true; live3d.container.style.display = ''; } }
+function liveHide(){ if (live3d &&  live3d.shown){ live3d.shown = false; live3d.container.style.display = 'none'; } }
 function liveScreenFor(f){
   const L = liveLayerInit();
   let s = L.byFrame.get(f);
@@ -3275,9 +3285,9 @@ function liveScreenFor(f){
   const u = f.userData;
   // the iframe wears the slab's exact footprint on a crisp CSS pixel grid —
   // console-sized for live slabs (1600px wide: sites lay out their desktop
-  // face), corners matched to the rim. pointerEvents re-enables on the iframe
-  // ALONE — the container stays inert, so only the slab is clickable and the
-  // world around it belongs to the backdrop
+  // face), corners matched to the rim. pointerEvents starts OFF: the animate
+  // loop flips it on for the ARMED portal alone, so only the slab you're
+  // actually at is clickable and the rest of the hall keeps the mouse
   const wW = u.liveSlab ? CON_CW : FW, wH = u.liveSlab ? CON_CH : FH;
   const pw = u.liveSlab ? 1600 : 1024, ph = Math.round(pw * wH / wW), k = wW / pw;
   const el = document.createElement('iframe');
@@ -3286,7 +3296,7 @@ function liveScreenFor(f){
   Object.assign(el.style, {
     width: pw + 'px', height: ph + 'px', border:'0', background:'#fff',
     borderRadius: Math.round((u.liveSlab ? 0.132 : isTouch ? 0.0385 : 0.121) / k) + 'px',
-    pointerEvents:'auto',
+    pointerEvents:'none',
   });
   const obj = new CSS3DObject(el);
   obj.position.copy(f.position);
@@ -3298,50 +3308,28 @@ function liveScreenFor(f){
   obj.position.z += Math.cos(f.rotation.y) * faceZ;
   obj.scale.setScalar(k);
   L.scene.add(obj);
-  s = { obj, el };
+  s = { obj, el, armed:false };
   L.byFrame.set(f, s);
   return s;
 }
-function enterScreen(f){
-  if (state !== 'play' || screenFx) return;
-  state = 'screen';                          // freezes the walk; the loop drives the glide
-  audio.ping(f.userData.worldPos);
-  $('prompt').classList.remove('show');
-  $('hud').classList.add('hidden');
-  // console-sized slabs need the console's reading distance (portrait phones a
-  // touch more) and a gaze lifted to the slab's raised centre; device panels
-  // keep the swoop's own 2.3
-  const dist = f.userData.liveSlab ? (isTouch ? 7.2 : 4.9) : 2.3;
-  const dir = new THREE.Vector3(Math.sin(f.rotation.y), 0, Math.cos(f.rotation.y));
-  const toPos = f.position.clone().add(dir.multiplyScalar(dist)); toPos.y = eyeHeight;
-  // CAMERA-convention look-at (plain Object3D.lookAt faces +z at the target —
-  // adopting that quaternion would leave the camera staring AWAY from the slab;
-  // the visit swoop gets away with it under its white fade, this glide can't)
-  const target = new THREE.Vector3(f.position.x, f.userData.liveSlab ? CON_SLAB_Y : eyeHeight, f.position.z);
-  const toQuat = new THREE.Quaternion().setFromRotationMatrix(
-    new THREE.Matrix4().lookAt(toPos, target, new THREE.Vector3(0, 1, 0)));
-  screenFx = { frame:f, t:0, on:false,
-    fromPos: player.position.clone(), toPos,
-    fromQuat: camera.quaternion.clone(), toQuat };
-}
-function screenWake(){
+// arm a live portal at reveal: iframe up, layer shown, aligned BEFORE the
+// first paint so the page lands exactly on the slab with no pop
+function armPortal(f){
   const L = liveLayerInit();
-  liveScreenFor(screenFx.frame);
-  velocity.set(0, 0, 0);
-  L.renderer.render(L.scene, camera);        // aligned BEFORE first paint — no pop
-  L.container.style.display = '';
-  L.backdrop.style.display = '';
-  screenFx.on = true;
-  if (controls.isLocked) controls.unlock();  // hand the pointer to the page ('screen' skips the pause)
+  liveScreenFor(f);
+  L.renderer.render(L.scene, camera);
+  liveShow();
 }
-function exitScreen(){
-  if (state !== 'screen') return;
-  screenFx = null;
-  live3d.container.style.display = 'none';
-  live3d.backdrop.style.display = 'none';
-  state = 'play';
-  $('hud').classList.remove('hidden');
-  if (!isTouch) relockLook();                // the exit click's own activation re-locks instantly
+// E / click on a live slab while pointer-locked: the portal is live already —
+// this just RELEASES the OS cursor onto it. panelHandoff gates the unlock
+// listener so the pause never fires, and the free-look bridge stands down
+// while a portal is armed, so the cursor travels onto the slab with the view
+// holding still. Clicking anywhere off the slab re-locks the walk.
+function handPortalCursor(f){
+  if (!controls.isLocked) return;            // cursor already free — the portal has it natively
+  panelHandoff = true;
+  audio.ping(f.userData.worldPos);
+  controls.unlock();
 }
 
 /* ════════════════════════════════════════════════════════════════
@@ -3447,15 +3435,15 @@ function animate(){
       else window.location.href = url;
     }
   }
-  else if (state === 'screen' && screenFx && !screenFx.on){
-    // the live-screen glide: the swoop's approach without its white-out — you
-    // arrive square in front of the slab, then it wakes as the real page
-    screenFx.t = Math.min(1, screenFx.t + dt/0.6);
-    const e = easeIO(screenFx.t);
-    player.position.lerpVectors(screenFx.fromPos, screenFx.toPos, e);
-    camera.quaternion.slerpQuaternions(screenFx.fromQuat, screenFx.toQuat, e);
-    camera.position.y = eyeHeight;
-    if (screenFx.t >= 1) screenWake();
+  // live portals: only the ARMED one (centre-aim within reach — the same
+  // condition that stands the free-look bridge down) takes the mouse, so a
+  // far slab never swallows a click or a mouseover meant for the hall; while
+  // locked the flag is moot (the lock owns every mouse event anyway)
+  if (live3d){
+    for (const [f, s] of live3d.byFrame){
+      const arm = f === activeFrame && (state === 'play' || state === 'intro');
+      if (s.armed !== arm){ s.armed = arm; s.el.style.pointerEvents = arm ? 'auto' : 'none'; }
+    }
   }
 
   // animate the "visit?" text on every frame. Camera world-pos is computed ONCE
@@ -3516,8 +3504,9 @@ function animate(){
     }
   }
   else renderer.render(scene, camera);
-  // the live screen tracks the same camera — kept in step even across resizes
-  if (state === 'screen' && screenFx?.on && live3d) live3d.renderer.render(live3d.scene, camera);
+  // the live portals track the same camera every frame — glued to their slabs
+  // while you walk, kept in step even across resizes
+  if (live3d?.shown) live3d.renderer.render(live3d.scene, camera);
 }
 
 function moveAndInteract(dt, t, autoFwd = 0){
