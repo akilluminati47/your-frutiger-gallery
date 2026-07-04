@@ -1418,6 +1418,10 @@ function seedDraft(){
   };
 }
 let draft = seedDraft(), draftEdited = false;
+// the pristine boot seed, frozen BEFORE any saved draft pours over it and
+// before applyDraftLive ever mutates CONFIG — the reset swirl restores
+// exactly these values, this deployment's true shipped config
+const SEED0 = JSON.stringify(draft);
 try {
   const saved = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null');
   if (saved && typeof saved === 'object'){ draft = { ...draft, ...saved }; draftEdited = true; }
@@ -1428,6 +1432,21 @@ function saveDraft(){
   draftEdited = true;
   clearTimeout(_saveT);
   _saveT = setTimeout(() => { try { localStorage.setItem(DRAFT_KEY, JSON.stringify(draft)); } catch {} }, 250);
+}
+
+// ── the reset swirl's teeth: pour the deployment's own pristine config back
+// into the console and burn the saved draft — the manual fix for a stale
+// localStorage design that outlived the session it belonged to
+function resetDraft(){
+  clearTimeout(_saveT);                                  // a pending save must not resurrect the old draft
+  try { localStorage.removeItem(DRAFT_KEY); } catch {}
+  draft = JSON.parse(SEED0);
+  draft.walls = normWalls(draft.walls);
+  draftEdited = false;
+  ui.focus = null; ui.page = 0;
+  applyDraftLive();                                      // the live world sheds the old design too
+  draftEdited = false;                                   // wearing the seed is not an edit
+  ui.dirty = true;
 }
 
 // what the visitor designed, as the file their fork will serve (see the
@@ -1487,6 +1506,7 @@ const ui = {
   page: 0,                         // worlds-list pager
   dirty: true, lastPaint: 0,
   note: null, noteT: 0,            // transient toast ("copied ✓")
+  resetT: 0,                       // when the reset swirl was last clicked (drives its spin)
   gh: { mode: 'unknown', login: null, forkRepo: null, forkUrl: null, busy: null,
         doneFork: false, doneConfig: false, err: null },
 };
@@ -2086,6 +2106,56 @@ function drawPublish(cc, top){
   cGlassInset(cc, x2, top + 10, 800, 700, 26, false);
   cc.fillStyle = AERO.deep; cFont(cc, 34, 700); cc.textAlign = 'left'; cc.textBaseline = 'alphabetic';
   cc.fillText('your design', x2 + 40, top + 70);
+  // ── the reset swirl: a blue swirly arrow at the OTHER end of the 'your
+  // design' line. Hover cocks it back with an aqua glow, a click spins it a
+  // full turn and pours the deployment's pristine config back into the
+  // console (see resetDraft) — the grey tip underneath says what it is.
+  {
+    const rw = 64, rx = x2 + 800 - rw - 40, ry = top + 24;
+    const hot = ui.hover?.id === 'p:reset';
+    const el = performance.now() - ui.resetT;
+    const spin = el < 650 ? easeOut(el / 650) : 0;       // one full turn on click
+    if (el < 650) ui.dirty = true;                       // keep repainting through the spin
+    const cxp = rx + rw/2, cyp = ry + rw/2;
+    cc.save();
+    cc.translate(cxp, cyp);
+    cc.rotate(spin * Math.PI * 2 + (hot ? -0.28 : 0));   // hover cocks it a notch
+    // the swirl: an arc whose radius grows along the sweep — a true spiral
+    cc.beginPath();
+    const A0 = -Math.PI * 0.5, A1 = Math.PI * 1.05, STEPS = 30;
+    for (let i = 0; i <= STEPS; i++){
+      const a = A0 + (A1 - A0) * i / STEPS, r = 14 + 8 * i / STEPS;
+      const px = Math.cos(a) * r, py = Math.sin(a) * r;
+      i ? cc.lineTo(px, py) : cc.moveTo(px, py);
+    }
+    const sg = cc.createLinearGradient(-22, -22, 22, 22);
+    sg.addColorStop(0, '#5cc0ff'); sg.addColorStop(1, AERO.deep);
+    cc.strokeStyle = hot ? AERO.aqua : sg;
+    cc.lineWidth = hot ? 8 : 7; cc.lineCap = 'round';
+    if (hot){ cc.shadowColor = 'rgba(26,150,255,.8)'; cc.shadowBlur = 14; }
+    cc.stroke();
+    cc.shadowColor = 'transparent'; cc.shadowBlur = 0;
+    // arrowhead at the spiral's mouth, tangent to the curve
+    const rEnd = 22, ex = Math.cos(A1) * rEnd, ey = Math.sin(A1) * rEnd;
+    const tx = -Math.sin(A1), ty = Math.cos(A1);         // direction of travel
+    cc.beginPath();
+    cc.moveTo(ex + tx * 17, ey + ty * 17);               // apex, along the tangent
+    cc.lineTo(ex + Math.cos(A1) * 10, ey + Math.sin(A1) * 10);
+    cc.lineTo(ex - Math.cos(A1) * 10, ey - Math.sin(A1) * 10);
+    cc.closePath();
+    cc.fillStyle = hot ? AERO.aqua : AERO.deep;
+    cc.fill();
+    cc.restore();
+    // the grey tip line under the swirl
+    cc.fillStyle = AERO.inkFaint; cFont(cc, 21); cc.textAlign = 'center'; cc.textBaseline = 'alphabetic';
+    cc.fillText('reset?', cxp, ry + rw + 24);
+    cc.textAlign = 'left';                               // the payload lines below expect left
+    ui.widgets.push({ id:'p:reset', x:rx - 8, y:ry - 8, w:rw + 16, h:rw + 16, label:'reset', act(){
+      ui.resetT = performance.now();
+      resetDraft();
+      toast('reset ✓ — template values restored');
+    } });
+  }
   cc.fillStyle = AERO.inkSoft; cFont(cc, 26);
   const oj = buildOwnerJson();
   const ojPlan = planWalls(oj.projects.length, normWalls(oj.walls), !!d.consoleOn);
