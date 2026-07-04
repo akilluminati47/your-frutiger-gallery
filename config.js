@@ -58,9 +58,11 @@ export const CONFIG = {
   //
   // END WALLS: the `walls` slots below can hang one more world on each end of
   // the hall — INDEPENDENT strings, never drawn from this list. An ODD count
-  // here never leaves a lonely half-row either way: the LAST entry becomes a
-  // wildcard and rides a free end wall automatically (west first while the
-  // console is off, else the entrance), so the side walls stay in pairs.
+  // here never leaves a lonely half-row: the LAST entry becomes a wildcard and
+  // rides a free end wall automatically (west first while the console is off,
+  // else the entrance), so the side walls stay in pairs. If BOTH end walls
+  // already hold worlds there's no free wall to take it — the odd one is then
+  // blocked (left out of the hall, kept here) rather than stranded alone.
   projects: [
     { name: "Wikipedia",     url: "https://www.wikipedia.org/" },  // front · right
     { name: "YouTube",       url: "https://www.youtube.com/" },    // front · left
@@ -85,10 +87,19 @@ export const CONFIG = {
   // (an empty toggled wall is just glass); on: false keeps the strings but
   // builds nothing — unless the odd-count wildcard needs the wall: an ODD
   // projects count sends its LAST entry to a free end wall automatically
-  // (west first, console off; else east), building that pane if it must.
+  // (west first, console off; else east), building that pane if it must — or,
+  // if both end walls are already taken, blocks that odd world instead.
+  //
+  // live: true → the hung world doesn't swoop the browser away: walk up,
+  // press E, and the slab WAKES as the real page — a fully interactive
+  // in-world screen (your pointer works on the slab, the site's own cursor
+  // and all; click outside it or Esc to step back into the hall). Works
+  // with any URL that allows iframe embedding, hosted in any repo — the
+  // world does NOT need to live inside this one. A west live screen waits
+  // while the console is on (the console owns that wall).
   walls: {
-    west: { on: true, name: "", url: "" },
-    east: { on: true, name: "Designer", url: "https://akilluminati47.pages.dev/" },
+    west: { on: true, name: "", url: "", live: false },
+    east: { on: true, name: "Designer", url: "https://akilluminati47.pages.dev/", live: true },
   },
 
   // ── CREATE-YOUR-OWN CONSOLE ────────────────────────────────────────

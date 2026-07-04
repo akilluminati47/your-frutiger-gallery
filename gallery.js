@@ -10,6 +10,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { CSS3DRenderer, CSS3DObject } from 'three/addons/renderers/CSS3DRenderer.js';
 import { CONFIG } from './config.js';
 
 /* ════════════════════════════════════════════════════════════════
@@ -375,14 +376,26 @@ const FH = 2.64, FW = FH * ASPECT, FRAME_Y = eyeHeight;  // slab faces +10%, sti
    the unannounced 0000 wildcard and rides a free end wall — west first
    (priority: console off and no west world), else east — building that
    wall's pane even when its toggle is off. Both walls already holding
-   worlds → the lone world rides the last row. */
+   worlds → no free wall to fill, so the odd world is BLOCKED: dropped from
+   the hall so the sides stay paired (kept in config, never wiped), and
+   greyed instead of inked in the builder so the designer sees why. */
 const CON_ENABLED = CONFIG.console?.enabled !== false;   // section 5c's app gate — the layout needs it up here
 function normWalls(w){
-  // one wall slot = { on, name, url }. Legacy boolean toggles (old owner
-  // configs / saved drafts) normalise to a toggled empty slot.
-  const one = v => (v && typeof v === 'object')
-    ? { on: v.on === true, name: String(v.name ?? ''), url: String(v.url ?? '') }
-    : { on: v === true, name: '', url: '' };
+  // one wall slot = { on, name, url, live }. Legacy boolean toggles (old owner
+  // configs / saved drafts) normalise to a toggled empty slot. live → the
+  // hung world wakes as a REAL interactive page on its pane (see section 8c)
+  // instead of swooping the browser away. live DRAGS the wall toggle on with
+  // it — an interactive screen needs its pane, so a live slot can never boot
+  // as a floating console, whatever a hand-edited config claims. An empty url
+  // still hangs nothing: live + empty string = a bare glass wall, and the only
+  // OPEN end is console off + toggles off.
+  const one = v => {
+    if (v && typeof v === 'object'){
+      const live = v.live === true;
+      return { on: v.on === true || live, name: String(v.name ?? ''), url: String(v.url ?? ''), live };
+    }
+    return { on: v === true, name: '', url: '', live: false };
+  };
   return { west: one(w?.west), east: one(w?.east) };
 }
 function planWalls(count, walls, consoleOn){
@@ -392,11 +405,15 @@ function planWalls(count, walls, consoleOn){
   if (count % 2 === 1){
     if (!consoleOn && !westWorld) wild = 'west';         // far wall first — use it or build it
     else if (!eastWorld)          wild = 'east';         // else the sun-lit entrance
-  }                                                      // both taken → lone last row
+  }
+  // odd count, both end walls already holding worlds → no free wall for the
+  // wildcard. The odd (last) world is BLOCKED: left out of the hall so the
+  // corridor stays paired instead of stranding a lonely half-row.
+  const blocked = count % 2 === 1 && !wild;
   return {
     west: westWorld ? 'slot' : wild === 'west' ? 'wild' : null,
     east: eastWorld ? 'slot' : wild === 'east' ? 'wild' : null,
-    wild,
+    wild, blocked,
     // the glass panes follow the TOGGLES (empty glass is fine), plus the
     // console's own backwall and whichever wall the wildcard forces
     westPane: consoleOn || walls.west.on || wild === 'west',
@@ -405,13 +422,16 @@ function planWalls(count, walls, consoleOn){
 }
 const WALLS = normWalls(CONFIG.walls);
 const WALL_PLAN = planWalls(CONFIG.projects.length, WALLS, CON_ENABLED);
-const wallSlot  = s => ({ name: WALLS[s].name.trim() || 'World', url: WALLS[s].url.trim() });
+const wallSlot  = s => ({ name: WALLS[s].name.trim() || 'World', url: WALLS[s].url.trim(), live: WALLS[s].live });
 const wildWorld = WALL_PLAN.wild ? CONFIG.projects[CONFIG.projects.length - 1] : null;
 const wallProjects = {
   east: WALL_PLAN.east === 'slot' ? wallSlot('east') : WALL_PLAN.east === 'wild' ? wildWorld : null,
   west: WALL_PLAN.west === 'slot' ? wallSlot('west') : WALL_PLAN.west === 'wild' ? wildWorld : null,
 };
-const sideProjects = WALL_PLAN.wild ? CONFIG.projects.slice(0, -1) : CONFIG.projects.slice();
+// odd count drops its last entry from the corridor either way: the wildcard
+// hangs it on a free end wall, or — both walls taken — it's blocked and left
+// out entirely (kept in config, greyed in the builder), so the sides stay paired.
+const sideProjects = (WALL_PLAN.wild || WALL_PLAN.blocked) ? CONFIG.projects.slice(0, -1) : CONFIG.projects.slice();
 const EAST_ON = WALL_PLAN.eastPane;     // entrance glass pane + rail
 const WEST_ON = WALL_PLAN.westPane;     // far/back glass pane + rail (always with the console)
 const PANEL_COUNT = sideProjects.length + (wallProjects.east ? 1 : 0) + (wallProjects.west ? 1 : 0);
@@ -1130,7 +1150,7 @@ function fitPanelToImage(u, tex){
   const im = tex.image;
   const iw = im?.naturalWidth || im?.width, ih = im?.naturalHeight || im?.height;
   if (!iw || !ih){ tex.repeat.set(1, 1); tex.offset.set(0, 0); tex.needsUpdate = true; return; }
-  const ia = iw / ih, pa = FW / FH;
+  const ia = iw / ih, pa = u.liveSlab ? CON_CW / CON_CH : FW / FH;   // live slabs are console-proportioned
   if (ia >= pa){                       // capture wider than the slab → crop sides, keep centred
     const r = pa / ia;
     tex.repeat.set(r, 1); tex.offset.set((1 - r) / 2, 0);
@@ -1366,12 +1386,33 @@ function buildGallery(font){
   // wall and reveals by gaze, like the hall's last row. Both sit 0.12 off
   // their pane, the same standoff as the side frames. A toggled-on wall
   // with an empty slot hangs nothing — the pane stands bare.
-  if (wallProjects.east)
-    placeFrame(makeFrame(wallProjects.east, 'auto', autoDelayForRow(0), LOAD_DUR),
-               0, PLAT_Z0 + 0.4 + 0.12, 0);
-  if (wallProjects.west)
-    placeFrame(makeFrame(wallProjects.west, 'gaze', Infinity, GAZE_LOAD_DUR),
-               0, PLAT_Z1 - 0.4 - 0.12, Math.PI);
+  // a LIVE end wall trades the device panel for the console's own XXL slab:
+  // same rounded rim, same raised 60/40 centring, same standoff — an
+  // interactive screen reads as a sibling of the builder console, and like
+  // the console it wears NO name badge (the prompt still says the name)
+  function makeLiveSlab(f){
+    const u = f.userData;
+    const geo = new RoundedBoxGeometry(CON_CW, CON_CH, 0.286, 6, 0.132);
+    planarUV(geo, CON_CW, CON_CH);
+    u.panel.geometry = geo;               // deviceGeo is shared — never dispose it
+    u.panel.position.y = CON_SLAB_Y - FRAME_Y;
+    u.panel.position.z = 0.3;
+    u.faceZ = 0.3 + 0.286 / 2;            // the slab's front face (strip + iframe ride it)
+    u.liveSlab = true;
+    u.label.visible = false;              // no name badge on an interactive slab
+  }
+  if (wallProjects.east){
+    const f = makeFrame(wallProjects.east, 'auto', autoDelayForRow(0), LOAD_DUR);
+    f.userData.liveWall = !!wallProjects.east.live;   // { live:true } slot → wakes as the real page (8c)
+    if (f.userData.liveWall) makeLiveSlab(f);
+    placeFrame(f, 0, PLAT_Z0 + 0.4 + 0.12, 0);
+  }
+  if (wallProjects.west){
+    const f = makeFrame(wallProjects.west, 'gaze', Infinity, GAZE_LOAD_DUR);
+    f.userData.liveWall = !!wallProjects.west.live;   // only hangs console-off, so live never fights the console
+    if (f.userData.liveWall) makeLiveSlab(f);
+    placeFrame(f, 0, PLAT_Z1 - 0.4 - 0.12, Math.PI);
+  }
 }
 
 /* ════════════════════════════════════════════════════════════════
@@ -1387,6 +1428,9 @@ function buildGallery(font){
 const CON = { W: lowPerf ? 1536 : 2048, H: lowPerf ? 864 : 1152 };   // 16:9 canvas
 const CON_CW = 9.24, CON_CH = CON_CW * (CON.H / CON.W);  // slab size in world units (+10%)
 const CON_PX = CON_CW / 2048;                            // one layout px on the slab
+// the console slab's centring rule (60/40 reveal split, biggest padding under
+// it) — live end-wall screens wear the SAME slab, so they share the rule
+const CON_SLAB_Y = (WALL_H - CON_CH) * 0.6 + CON_CH / 2;
 let consoleMesh = null, consoleTex = null, consoleCtx = null, consoleGroup = null;
 let conDesk = false;   // ?console desk overlay: the OS pointer owns cursor + hover, not the raycast
 let conCursor = null;                                    // the aero pointer: its own tiny quad
@@ -1466,10 +1510,12 @@ function buildOwnerJson(){
     movement: { speed: +d.moveSpeed.toFixed(2) },   // deep-merges over CONFIG.movement — accel/friction survive
     shuffleOrder: d.shuffleOrder, openInNewTab: d.openInNewTab,
     console: { enabled: !!d.consoleOn },   // deep-merges over CONFIG.console — sourceRepo survives
-    // wall slots persist their strings even while toggled off — that's the point
+    // wall slots persist their strings even while toggled off — that's the
+    // point. live forces on: the invariant the console UI locks (a live
+    // screen needs its pane) holds in the committed file too.
     walls: {
-      west: { on: !!d.walls.west.on, name: d.walls.west.name.trim(), url: d.walls.west.url.trim() },
-      east: { on: !!d.walls.east.on, name: d.walls.east.name.trim(), url: d.walls.east.url.trim() },
+      west: { on: !!(d.walls.west.on || d.walls.west.live), name: d.walls.west.name.trim(), url: d.walls.west.url.trim(), live: !!d.walls.west.live },
+      east: { on: !!(d.walls.east.on || d.walls.east.live), name: d.walls.east.name.trim(), url: d.walls.east.url.trim(), live: !!d.walls.east.live },
     },
     projects: d.projects.filter(p => p.url.trim()).map(p => ({ name: p.name.trim() || 'World', url: p.url.trim() })),
   };
@@ -1682,8 +1728,12 @@ function wButton(cc, id, label, x, y, w, h, act, style = 'aqua', sub){
   ui.widgets.push({ id, x, y, w, h, label, act });
 }
 function wField(cc, id, label, x, y, w, get, set, max = 60, dim = false){
-  // dim = a disabled slot: still shows its (kept) strings, greyed, no hit-rect
-  const h = 62, focused = !dim && ui.focus === id, hot = !dim && ui.hover?.id === id;
+  // dim = a disabled slot: still shows its (kept) strings, greyed. Two grades:
+  //   true   → locked, no hit-rect (a toggled-off slot)
+  //   'soft' → greyed but still TYPEABLE — the west slot while the console owns
+  //            its wall: the strings can be written now, they hang later
+  const locked = dim === true;
+  const h = 62, focused = !locked && ui.focus === id, hot = !locked && ui.hover?.id === id;
   if (label){
     cc.fillStyle = dim ? AERO.inkFaint : AERO.inkSoft; cFont(cc, 24, 600);
     cc.textAlign = 'left'; cc.textBaseline = 'alphabetic';
@@ -1718,7 +1768,7 @@ function wField(cc, id, label, x, y, w, get, set, max = 60, dim = false){
     cc.fillText(shown, tx, ty);
     if (!v){ cc.fillStyle = AERO.inkFaint; cc.fillText('· empty ·', tx, ty); }
   }
-  if (dim) return;                                      // no hit-rect — can't focus a dim slot
+  if (locked) return;                                   // no hit-rect — can't focus a locked slot
   const wid = { id, x, y, w, h, label, type:'field', get, set, max };
   wid.act = cx => fieldPress(wid, cx);
   ui.widgets.push(wid);
@@ -1842,15 +1892,20 @@ function wSlider(cc, id, label, x, y, w, val, min, max, set, fmt, note){
   ui.widgets.push({ id, x: x - 10, y: y - 14, w: w + 20, h: 52, label, type:'slider',
                     act(cx){ set(min + clamp((cx - x)/w, 0, 1) * (max - min)); } });
 }
-function wToggle(cc, id, label, x, y, on, set, sub){
+function wToggle(cc, id, label, x, y, on, set, sub, dim = false){
+  // dim greys the pill but keeps it PRESSABLE — a setting that stays writable
+  // while the thing it governs is parked (the wall live-toggles under a live
+  // console): flip it now, it takes effect the moment the wall frees up
   const w = 92, h = 48, hot = ui.hover?.id === id;
+  if (dim){ cc.save(); cc.globalAlpha = 0.45; }
   cc.fillStyle = on ? '#57c46e' : 'rgba(150,180,205,.55)';
   roundRect(cc, x, y, w, h, h/2); cc.fill();
   cc.strokeStyle = hot ? AERO.aqua : 'rgba(255,255,255,.7)'; cc.lineWidth = hot ? 4 : 2;
   roundRect(cc, x, y, w, h, h/2); cc.stroke();
   cc.beginPath(); cc.arc(on ? x + w - h/2 : x + h/2, y + h/2, h/2 - 6, 0, 7);
   cc.fillStyle = '#ffffff'; cc.fill();
-  cc.fillStyle = AERO.ink; cFont(cc, 26, 600); cc.textAlign = 'left'; cc.textBaseline = 'middle';
+  if (dim) cc.restore();
+  cc.fillStyle = dim ? AERO.inkFaint : AERO.ink; cFont(cc, 26, 600); cc.textAlign = 'left'; cc.textBaseline = 'middle';
   cc.fillText(label, x + w + 18, y + h/2 + 1);
   if (sub){ cc.fillStyle = AERO.inkFaint; cFont(cc, 19); cc.fillText(sub, x + w + 18, y + h/2 + 30); }
   ui.widgets.push({ id, x, y, w: w + 20 + cc.measureText(label).width, h, label, act(){ set(!on); } });
@@ -1957,11 +2012,11 @@ function drawWorlds(cc, top){
   // where everything lands, on the DRAFT's own console/wall settings — the
   // same planner the hall layout uses, so the badges never lie
   const plan = planWalls(d.projects.length, d.walls, d.consoleOn);
-  const panels = d.projects.length + (plan.west === 'slot' ? 1 : 0) + (plan.east === 'slot' ? 1 : 0);
+  const panels = d.projects.length - (plan.blocked ? 1 : 0) + (plan.west === 'slot' ? 1 : 0) + (plan.east === 'slot' ? 1 : 0);
   // (00/000/0000 are the code's slot breadcrumbs — the visitor reads "west wall")
   const hint = plan.wild === 'west'  ? '  ·  the odd world rides the west wall'
              : plan.wild === 'east'  ? '  ·  the odd world rides the east wall'
-             : d.projects.length % 2 ? '  ·  both walls hold worlds — the odd one rides the last row'
+             : plan.blocked          ? '  ·  both walls are full — the odd world is blocked (greyed below)'
              :                         '  ·  walls balanced ✓';
   cc.fillStyle = AERO.inkSoft; cFont(cc, 26); cc.textAlign = 'left'; cc.textBaseline = 'alphabetic';
   cc.fillText(`your worlds — ${panels} panels` + hint, 64, top + 6);
@@ -1971,32 +2026,78 @@ function drawWorlds(cc, top){
   // on + empty slot simply builds its glass wall bare. West is the far wall
   // the console occupies while it's on; east the sun-lit entrance.
   let y = top + 70;
-  const wallRow = (slot, label, dimmed, tOn, tSet) => {
+  // tiny column captions over the wall toggles: live = the slab wakes as the
+  // REAL page in-world (E to play, click outside to step back), wall = the
+  // pane builds at all
+  cc.fillStyle = AERO.inkFaint; cFont(cc, 19); cc.textAlign = 'left'; cc.textBaseline = 'alphabetic';
+  cc.fillText('live screen', 1642, y - 22);
+  cc.fillText('wall', 1872, y - 22);
+  const wallRow = (slot, label, o) => {
     const s = d.walls[slot];
-    wField(cc, `w:${slot}:name`, label, 64, y, 430, () => s.name, v => { s.name = v; }, 30, dimmed);
-    wField(cc, `w:${slot}:url`,  '',   540, y, 1280, () => s.url,  v => { s.url  = v; }, 200, dimmed);
-    wToggle(cc, `w:${slot}`, '', 1860, y + 7, tOn, tSet);
+    wField(cc, `w:${slot}:name`, label, 64, y, 430, () => s.name, v => { s.name = v; }, 30, o.nameDim);
+    wField(cc, `w:${slot}:url`,  '',   540, y, 1080, () => s.url,  v => { s.url  = v; }, 200, o.urlDim);
+    wToggle(cc, `w:${slot}:live`, '', 1660, y + 7, s.live, o.liveSet, undefined, o.liveDim);
+    wToggle(cc, `w:${slot}`, '', 1860, y + 7, o.wallOn, o.wallSet, undefined, o.wallDim);
     y += 108;
   };
+  // per-slot greying, in priority order:
+  //   console owns the wall (west: draft plan or THIS deployment's live config)
+  //     → the whole row parks: strings soft-grey but typeable, live toggle
+  //       pressable at 45%, wall toggle toasts — it takes over when the
+  //       console hides
+  //   live on → only the NAME greys (no badge hangs on an interactive slab —
+  //       the prompt still says it): the LINK stays full ink, it's the live
+  //       thing. live drags the wall on and LOCKS it (dimmed toggle, toast) —
+  //       no floating consoles. An empty url still leaves the wall bare glass.
+  //   live off, wall on → everything normal ink.
+  //   toggles off → kept strings grey out locked; flipping live back on brings
+  //       the wall with it. Console off + toggles off = the only open end.
+  const slotOpts = (slot, owned) => {
+    const s = d.walls[slot];
+    const liveSet = v => { s.live = v; if (v) s.on = true; saveDraft(); ui.dirty = true; };
+    if (owned) return {
+      nameDim: 'soft', urlDim: 'soft', liveDim: true, liveSet,
+      wallOn: false, wallDim: false,
+      wallSet: () => toast('the console owns the west wall — hide it in atmosphere first'),
+    };
+    if (s.live) return {
+      nameDim: 'soft', urlDim: false, liveDim: false, liveSet,
+      wallOn: true, wallDim: true,
+      wallSet: () => toast('a live screen needs its wall — flip live off first'),
+    };
+    return {
+      nameDim: !s.on, urlDim: !s.on, liveDim: !s.on, liveSet,
+      wallOn: s.on, wallDim: false,
+      wallSet: v => { s.on = v; saveDraft(); ui.dirty = true; },
+    };
+  };
+  const conOwns = d.consoleOn || CON_ENABLED;
   wallRow('west',
-    d.consoleOn ? 'west wall — the console lives here'
-                : d.walls.west.on ? 'west wall' : 'west wall — off',
-    d.consoleOn || !d.walls.west.on,
-    d.walls.west.on && !d.consoleOn,
-    d.consoleOn ? () => toast('the console owns the west wall — hide it in atmosphere first')
-                : v => { d.walls.west.on = v; saveDraft(); ui.dirty = true; });
+    conOwns            ? 'west wall — the console lives here'
+    : d.walls.west.live ? 'west wall — live screen'
+    : d.walls.west.on   ? 'west wall' : 'west wall — off',
+    slotOpts('west', conOwns));
+  if (conOwns){
+    cc.fillStyle = AERO.inkFaint; cFont(cc, 19); cc.textAlign = 'left'; cc.textBaseline = 'alphabetic';
+    cc.fillText('parked under the console — hide it (atmosphere tab) and your west link hangs here instead: static panel, or big interactive screen with live on', 70, y - 30);
+    y += 26;
+  }
   wallRow('east',
-    d.walls.east.on ? 'east wall — the entrance' : 'east wall — off',
-    !d.walls.east.on,
-    d.walls.east.on,
-    v => { d.walls.east.on = v; saveDraft(); ui.dirty = true; });
+    d.walls.east.live ? 'east wall — live screen'
+    : d.walls.east.on ? 'east wall — the entrance' : 'east wall — off',
+    slotOpts('east', false));
   const start = ui.page * PER;
   d.projects.slice(start, start + PER).forEach((p, k) => {
     const i = start + k;
-    const badge = (plan.wild && i === d.projects.length - 1)
-      ? `rides the ${plan.wild} wall — the odd one` : '';
-    wField(cc, `w:name:${i}`, badge || (k === 0 ? 'plaque' : ''), 64, y, 430, () => p.name, v => { p.name = v; }, 30);
-    wField(cc, `w:url:${i}`, k === 0 ? 'url' : '', 540, y, 1280, () => p.url, v => { p.url = v; }, 200);
+    const isLast = i === d.projects.length - 1;
+    const badge = isLast && plan.wild     ? `rides the ${plan.wild} wall — the odd one`
+                : isLast && plan.blocked  ? 'blocked — both walls are full'
+                :                           '';
+    // blocked odd slab → its strings stay soft-grey and still typeable, hanging
+    // nothing until a wall frees up (a wildcard odd slab inks normally)
+    const dim = isLast && plan.blocked ? 'soft' : false;
+    wField(cc, `w:name:${i}`, badge || (k === 0 ? 'plaque' : ''), 64, y, 430, () => p.name, v => { p.name = v; }, 30, dim);
+    wField(cc, `w:url:${i}`, k === 0 ? 'url' : '', 540, y, 1280, () => p.url, v => { p.url = v; }, 200, dim);
     wButton(cc, `w:del:${i}`, '✕', 1860, y, 62, 62, () => {
       d.projects.splice(i, 1); ui.focus = null; saveDraft(); ui.dirty = true;
     }, 'ghost');
@@ -2175,7 +2276,7 @@ function drawPublish(cc, top){
   cc.fillStyle = AERO.inkSoft; cFont(cc, 26);
   const oj = buildOwnerJson();
   const ojPlan = planWalls(oj.projects.length, normWalls(oj.walls), !!d.consoleOn);
-  const ojWorlds = oj.projects.length + (ojPlan.west === 'slot' ? 1 : 0) + (ojPlan.east === 'slot' ? 1 : 0);
+  const ojWorlds = oj.projects.length - (ojPlan.blocked ? 1 : 0) + (ojPlan.west === 'slot' ? 1 : 0) + (ojPlan.east === 'slot' ? 1 : 0);
   [
     `“${oj.title}”  by  ${oj.creator}`,
     `${ojWorlds} worlds  ·  ${Math.round(oj.bubbles.count)} bubbles`,
@@ -2496,6 +2597,10 @@ function setInputMode(mode){
 const keys = {};
 addEventListener('keydown', e => {
   if (consoleTypeKey(e)) return;      // a lit console field owns the keyboard
+  if (state === 'screen'){            // a live screen is up: the PAGE owns the keyboard —
+    if (e.code === 'Escape' || e.code === 'Tab'){ e.preventDefault(); exitScreen(); }
+    return;                           // no keys[] buildup, no pause toggles underneath it
+  }
   // Tab belongs to the game, not the browser. preventDefault kills the focus-ring
   // cycling (the black outline hopping between page elements) and we spend the key
   // on the pause toggle instead — same in/out as Esc and the pause button.
@@ -2925,7 +3030,7 @@ function startFrameLoading(f){
     });
     if (FX) m.color.setScalar(1.12);   // same ACES lift as the screens
     u.strip = new THREE.Mesh(stripGeo, m);
-    u.strip.position.set(0, 0, stripZ);
+    u.strip.position.set(0, 0, u.faceZ ? u.faceZ + 0.012 : stripZ);   // live slabs are thicker
     u.strip.renderOrder = 4;           // over its panel, under the name plaque
     f.add(u.strip);
   }
@@ -2958,8 +3063,9 @@ function revealWorld(f){
   u.stripTex?.dispose?.(); u.stripTex = null; u.stripCanvas = null;
   u.whiteTex?.dispose?.(); u.whiteTex = null;
   // Trigger name-plaque bloop — the balloon ping rings from the panel's spot
-  // on its wall, one sound for every slab
-  u.labelBloop = 0;
+  // on its wall, one sound for every slab. Live slabs skip the badge (they
+  // wear none, like the console) but keep their ping.
+  if (!u.liveWall) u.labelBloop = 0;
   audio.ping(u.worldPos);
 }
 
@@ -3007,6 +3113,9 @@ function updateLoadingSystem(dt, t){
 // back to the entry card (used when returning via the browser Back button, which
 // would otherwise restore a frozen mid-swoop white screen = a "blank realm")
 function resetToMenu(){
+  // a live screen must not survive the trip back to the splash
+  screenFx = null;
+  if (live3d){ live3d.container.style.display = 'none'; live3d.backdrop.style.display = 'none'; }
   launch = null; state = 'menu'; started = false;
   padCursor.ready = false;                    // gamepad cursor re-centres on the splash
   $('fade').style.opacity = '0';
@@ -3024,7 +3133,7 @@ controls.addEventListener('lock', () => {
   crosshairEl?.classList.remove('show');     // clear the menu cursor while in-game
   if (!started) beginPlay(); else resumeGame();
 });
-controls.addEventListener('unlock', () => { if (state === 'launching') return; pauseGame(); });
+controls.addEventListener('unlock', () => { if (state === 'launching' || state === 'screen') return; pauseGame(); });
 
 $('enterBtn').addEventListener('click', startExperience);
 // Resume must feel instant. The browser enforces a ~1.25s cooldown on
@@ -3080,6 +3189,9 @@ function tryLaunch(forceTab = false){
   if (consolePress()) return;           // aiming at the back-wall console → press it
   if (state !== 'play' || !activeFrame || launch) return;
   if (activeFrame.userData.loadState !== 'done') return;   // world still loading
+  // a live end wall wakes in place instead of swooping away — the wheel press
+  // (forceTab) still opens the real tab, the escape hatch for a broken embed
+  if (activeFrame.userData.liveWall && !forceTab){ enterScreen(activeFrame); return; }
   const f = activeFrame;
   state = 'launching';
   audio.launch();
@@ -3098,6 +3210,125 @@ function tryLaunch(forceTab = false){
     toQuat: tmp.quaternion.clone(),
   };
   $('fade').style.opacity = '1';
+}
+
+/* ════════════════════════════════════════════════════════════════
+   8c · live screens — end walls with { live:true }
+   A live end-wall world doesn't swoop the browser away: E glides you
+   to the swoop's own vantage, then the slab WAKES as the real page —
+   an iframe transformed onto the pane in true perspective (CSS3D,
+   same camera, so it sits exactly where the screenshot sat). The
+   pointer is handed to the PAGE: pointer lock releases and the OS /
+   the site's own cursor works on the slab alone — everywhere else a
+   cursorless backdrop waits for a click (or Esc / Tab) to step back
+   into the world. The iframe survives leaving, so a game on the wall
+   keeps its state between visits. Any URL that permits framing works,
+   whichever repo hosts it — same-repo hosting buys nothing here.
+   ════════════════════════════════════════════════════════════════ */
+let live3d = null;       // lazy singleton: { container, backdrop, renderer, scene, byFrame }
+let screenFx = null;     // the active session: glide (t 0→1) → on (iframe interactive)
+
+function liveLayerInit(){
+  if (live3d) return live3d;
+  // the backdrop sits UNDER the CSS3D layer (canvas < backdrop 10 < screens 12
+  // < hud 20): it catches every click that misses the slab — the exit gesture —
+  // and hides the cursor, so the pointer exists on the page and nowhere else
+  const backdrop = document.createElement('div');
+  Object.assign(backdrop.style, { position:'fixed', inset:'0', zIndex:'10', cursor:'none', display:'none' });
+  backdrop.addEventListener('click', exitScreen);
+  const hint = document.createElement('div');
+  hint.textContent = 'click outside the screen (or Esc) to step back';
+  Object.assign(hint.style, {
+    position:'absolute', left:'50%', bottom:'26px', transform:'translateX(-50%)',
+    padding:'8px 18px', borderRadius:'999px', font:'600 13px Quicksand, "Segoe UI", sans-serif',
+    color:'#0a5aa8', background:'rgba(255,255,255,.72)', backdropFilter:'blur(6px)',
+    boxShadow:'0 8px 28px rgba(10,60,120,.25)', pointerEvents:'none', whiteSpace:'nowrap',
+  });
+  backdrop.appendChild(hint);
+  const container = document.createElement('div');
+  Object.assign(container.style, { position:'fixed', inset:'0', zIndex:'12', display:'none', pointerEvents:'none' });
+  const r3d = new CSS3DRenderer();
+  r3d.setSize(innerWidth, innerHeight);
+  Object.assign(r3d.domElement.style, { position:'absolute', inset:'0' });
+  container.appendChild(r3d.domElement);
+  document.body.append(backdrop, container);
+  live3d = { container, backdrop, renderer: r3d, scene: new THREE.Scene(), byFrame: new Map() };
+  return live3d;
+}
+function liveScreenFor(f){
+  const L = liveLayerInit();
+  let s = L.byFrame.get(f);
+  if (s) return s;
+  const u = f.userData;
+  // the iframe wears the slab's exact footprint on a crisp CSS pixel grid —
+  // console-sized for live slabs (1600px wide: sites lay out their desktop
+  // face), corners matched to the rim. pointerEvents re-enables on the iframe
+  // ALONE — the container stays inert, so only the slab is clickable and the
+  // world around it belongs to the backdrop
+  const wW = u.liveSlab ? CON_CW : FW, wH = u.liveSlab ? CON_CH : FH;
+  const pw = u.liveSlab ? 1600 : 1024, ph = Math.round(pw * wH / wW), k = wW / pw;
+  const el = document.createElement('iframe');
+  el.src = withProtocol(u.project.url);
+  el.allow = 'autoplay; fullscreen; gamepad';
+  Object.assign(el.style, {
+    width: pw + 'px', height: ph + 'px', border:'0', background:'#fff',
+    borderRadius: Math.round((u.liveSlab ? 0.132 : isTouch ? 0.0385 : 0.121) / k) + 'px',
+    pointerEvents:'auto',
+  });
+  const obj = new CSS3DObject(el);
+  obj.position.copy(f.position);
+  obj.position.y += u.panel.position.y;              // live slabs ride raised, console-style
+  obj.rotation.y = f.rotation.y;
+  // float it off the pane to the slab's front face
+  const faceZ = (u.faceZ ?? (stripZ - 0.012)) + 0.008;
+  obj.position.x += Math.sin(f.rotation.y) * faceZ;
+  obj.position.z += Math.cos(f.rotation.y) * faceZ;
+  obj.scale.setScalar(k);
+  L.scene.add(obj);
+  s = { obj, el };
+  L.byFrame.set(f, s);
+  return s;
+}
+function enterScreen(f){
+  if (state !== 'play' || screenFx) return;
+  state = 'screen';                          // freezes the walk; the loop drives the glide
+  audio.ping(f.userData.worldPos);
+  $('prompt').classList.remove('show');
+  $('hud').classList.add('hidden');
+  // console-sized slabs need the console's reading distance (portrait phones a
+  // touch more) and a gaze lifted to the slab's raised centre; device panels
+  // keep the swoop's own 2.3
+  const dist = f.userData.liveSlab ? (isTouch ? 7.2 : 4.9) : 2.3;
+  const dir = new THREE.Vector3(Math.sin(f.rotation.y), 0, Math.cos(f.rotation.y));
+  const toPos = f.position.clone().add(dir.multiplyScalar(dist)); toPos.y = eyeHeight;
+  // CAMERA-convention look-at (plain Object3D.lookAt faces +z at the target —
+  // adopting that quaternion would leave the camera staring AWAY from the slab;
+  // the visit swoop gets away with it under its white fade, this glide can't)
+  const target = new THREE.Vector3(f.position.x, f.userData.liveSlab ? CON_SLAB_Y : eyeHeight, f.position.z);
+  const toQuat = new THREE.Quaternion().setFromRotationMatrix(
+    new THREE.Matrix4().lookAt(toPos, target, new THREE.Vector3(0, 1, 0)));
+  screenFx = { frame:f, t:0, on:false,
+    fromPos: player.position.clone(), toPos,
+    fromQuat: camera.quaternion.clone(), toQuat };
+}
+function screenWake(){
+  const L = liveLayerInit();
+  liveScreenFor(screenFx.frame);
+  velocity.set(0, 0, 0);
+  L.renderer.render(L.scene, camera);        // aligned BEFORE first paint — no pop
+  L.container.style.display = '';
+  L.backdrop.style.display = '';
+  screenFx.on = true;
+  if (controls.isLocked) controls.unlock();  // hand the pointer to the page ('screen' skips the pause)
+}
+function exitScreen(){
+  if (state !== 'screen') return;
+  screenFx = null;
+  live3d.container.style.display = 'none';
+  live3d.backdrop.style.display = 'none';
+  state = 'play';
+  $('hud').classList.remove('hidden');
+  if (!isTouch) relockLook();                // the exit click's own activation re-locks instantly
 }
 
 /* ════════════════════════════════════════════════════════════════
@@ -3203,6 +3434,16 @@ function animate(){
       else window.location.href = url;
     }
   }
+  else if (state === 'screen' && screenFx && !screenFx.on){
+    // the live-screen glide: the swoop's approach without its white-out — you
+    // arrive square in front of the slab, then it wakes as the real page
+    screenFx.t = Math.min(1, screenFx.t + dt/0.6);
+    const e = easeIO(screenFx.t);
+    player.position.lerpVectors(screenFx.fromPos, screenFx.toPos, e);
+    camera.quaternion.slerpQuaternions(screenFx.fromQuat, screenFx.toQuat, e);
+    camera.position.y = eyeHeight;
+    if (screenFx.t >= 1) screenWake();
+  }
 
   // animate the "visit?" text on every frame. Camera world-pos is computed ONCE
   // here, and each frame's world position is read from the cached u.worldPos (the
@@ -3262,6 +3503,8 @@ function animate(){
     }
   }
   else renderer.render(scene, camera);
+  // the live screen tracks the same camera — kept in step even across resizes
+  if (state === 'screen' && screenFx?.on && live3d) live3d.renderer.render(live3d.scene, camera);
 }
 
 function moveAndInteract(dt, t, autoFwd = 0){
@@ -3322,7 +3565,10 @@ function moveAndInteract(dt, t, autoFwd = 0){
     for (const hit of _visitRay.intersectObjects(_visitTargets, false)){
       const f = hit.object.userData.frame;
       const dx = f.position.x - o.position.x, dz = f.position.z - o.position.z;
-      if (Math.hypot(dx, dz) <= 4.20){ activeFrame = f; break; }
+      // console-sized live slabs read from further back — their reach matches
+      // the distance you'd stand at to take the whole screen in
+      const reach = f.userData.liveSlab ? 8.5 : 4.20;
+      if (Math.hypot(dx, dz) <= reach){ activeFrame = f; break; }
     }
   }
   const canVisit = !!(activeFrame && activeFrame.userData.loadState === 'done');
@@ -3336,7 +3582,9 @@ function moveAndInteract(dt, t, autoFwd = 0){
       // Mobile shows no badge/button — you just tap the floating 3D "visit?" text.
       // Desktop keeps the "visit <name>" pill as the click/E affordance.
       if (!isTouch){
-        $('prompt').textContent = `visit  ${activeFrame.userData.project.name}`;
+        // live end walls "wake" in place — the verb says which one you're facing
+        $('prompt').textContent =
+          `${activeFrame.userData.liveWall ? 'play' : 'visit'}  ${activeFrame.userData.project.name}`;
         $('prompt').classList.add('show');
       }
     } else {
@@ -3351,6 +3599,7 @@ function moveAndInteract(dt, t, autoFwd = 0){
 addEventListener('resize', () => {
   camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
+  live3d?.renderer.setSize(innerWidth, innerHeight);
   if (composer) composer.setSize(innerWidth, innerHeight);
   gradePass?.uniforms.uRes.value.set(innerWidth * BASE_PR * resScale, innerHeight * BASE_PR * resScale);
 });
