@@ -3002,10 +3002,33 @@ controls.addEventListener('lock', () => {
 controls.addEventListener('unlock', () => { if (state === 'launching') return; pauseGame(); });
 
 $('enterBtn').addEventListener('click', startExperience);
+// Resume must feel instant. The browser enforces a ~1.25s cooldown on
+// re-acquiring pointer lock after Esc drops it, and the old handler hung the
+// whole resume on that lock landing ('lock' → resumeGame) — so for a beat or
+// two the button silently ate clicks. Now the click resumes the game AND cuts
+// the open-chime immediately (resumeGame plays the interrupt SFX while state is
+// still 'paused'), then re-locks the look the instant the cooldown clears.
+let _relockT = null;
+function requestLook(){                     // direct request so we can swallow the cooldown rejection
+  try { renderer.domElement.requestPointerLock()?.catch?.(() => {}); } catch { /* older API → interval retries */ }
+}
+function relockLook(){
+  clearInterval(_relockT); _relockT = null;
+  if (controls.isLocked) return;
+  const deadline = performance.now() + 2600;   // the resume click's user-activation covers this window
+  const tryOnce = () => {
+    if (controls.isLocked || state === 'paused' || state === 'menu' || performance.now() > deadline){
+      clearInterval(_relockT); _relockT = null; return;
+    }
+    requestLook();                          // fails silently through the cooldown, lands the moment it lifts
+  };
+  tryOnce();
+  _relockT = setInterval(tryOnce, 180);
+}
 $('resumeBtn').addEventListener('click', () => {
   audio.init();
-  if (isTouch) resumeGame();
-  else controls.lock();                     // desktop: re-lock → 'lock' handler resumes
+  resumeGame();                             // snap the menu shut + interrupt the open chime NOW
+  if (!isTouch) relockLook();               // re-acquire mouse-look as soon as the browser allows
 });
 $('pauseBtn')?.addEventListener('click', e => { e.preventDefault(); togglePause(); });
 
