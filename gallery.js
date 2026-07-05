@@ -2518,6 +2518,7 @@ const M = CONFIG.movement;
 const _camWorld = new THREE.Vector3();
 const _moveDir  = new THREE.Vector3();
 const _lookFwd  = new THREE.Vector3();
+const _portalFwd = new THREE.Vector3();           // view forward for the live-portal mouse gate
 const _visitRay = new THREE.Raycaster();          // centre-screen "invisible cursor" for visit? targeting
 const _visitTargets = [];                          // cached panel+label meshes, rebuilt only when the hall changes
 const _screenCentre = { x: 0, y: 0 };
@@ -2616,6 +2617,15 @@ addEventListener('keydown', e => {
     e.preventDefault();
     if (state === 'paused'){ resumeGame(); if (!isTouch) relockLook(); }
     else if (state === 'play' || state === 'intro'){ controls.isLocked ? controls.unlock() : pauseGame(); }
+    return;
+  }
+  // Esc pauses NO MATTER WHAT. Locked, the browser spends Esc on exiting
+  // pointer lock and the unlock event pauses (below) — but UNLOCKED (the
+  // relock cooldown, a portal handoff, a pad/touch session) Esc used to fall
+  // on the floor: no lock to exit, no keydown path, a dead key until you
+  // clicked the hall to re-lock first. Now the key pauses directly.
+  if (e.code === 'Escape' && !controls.isLocked && (state === 'play' || state === 'intro')){
+    pauseGame();
     return;
   }
   keys[e.code] = true;
@@ -3248,9 +3258,14 @@ function tryLaunch(forceTab = false){
    on. No visit, no prompt, no wake, no camera hold: interaction is
    fully free. Whenever the OS cursor exists (pad/touch play, the
    relock cooldown, or E/click on the slab releasing the lock) it works
-   on every portal natively — click, drag, mouseover — at the iframe's
-   own small pixel grid mapped through the slab's 2D plane, near or
-   far, at whatever size the portal projects to. Look and movement are
+   on the portal natively — click, drag, mouseover — at the iframe's
+   own small pixel grid mapped through the slab's 2D plane. The MOUSE
+   has a range: a portal takes the pointer only within PORTAL_RANGE
+   (6.9) with the slab in front of the view — beyond it the page still
+   renders live, but clicks belong to the hall. (Never leave the mouse
+   on unconditionally: a slab behind the eye projects as a phantom,
+   screen-covering quad that eats every click and drags keyboard focus
+   — Esc included — into the cross-origin page.) Look and movement are
    never held: the free-look bridge keeps driving the view off any
    mousemove that lands on the hall, and rests only while the cursor is
    physically ON a page (the iframe swallows those moves itself).
@@ -3259,6 +3274,7 @@ function tryLaunch(forceTab = false){
    state. Any URL that permits framing works, whichever repo hosts it —
    same-repo hosting buys nothing here.
    ════════════════════════════════════════════════════════════════ */
+const PORTAL_RANGE = 6.9;   // mouse-use reach of a live portal, in world units
 let live3d = null;       // lazy singleton: { container, renderer, scene, byFrame, shown }
 
 function liveLayerInit(){
@@ -3286,10 +3302,13 @@ function liveScreenFor(f){
   const u = f.userData;
   // the iframe wears the slab's exact footprint on a crisp CSS pixel grid —
   // console-sized for live slabs (1600px wide: sites lay out their desktop
-  // face), corners matched to the rim. pointerEvents stays ON for good: the
-  // portal owns the mouse wherever the cursor overlaps it, near or far, at
-  // whatever size it projects to — the rest of the viewport still belongs to
-  // the hall (the container itself is inert)
+  // face), corners matched to the rim. pointerEvents starts OFF — the animate
+  // loop flips it on within MOUSE RANGE (6.9, portal in front of the view).
+  // It must never sit on unconditionally: a slab BEHIND the eye projects as a
+  // phantom, screen-covering quad (that's what CSS does to a plane behind the
+  // perspective origin), and with the mouse enabled that invisible quad eats
+  // every unlocked click in the hall and drags keyboard focus into the
+  // cross-origin page — the "stuck gallery, dead Esc" failure.
   const wW = u.liveSlab ? CON_CW : FW, wH = u.liveSlab ? CON_CH : FH;
   const pw = u.liveSlab ? 1600 : 1024, ph = Math.round(pw * wH / wW), k = wW / pw;
   const el = document.createElement('iframe');
@@ -3298,9 +3317,10 @@ function liveScreenFor(f){
   Object.assign(el.style, {
     width: pw + 'px', height: ph + 'px', border:'0', background:'#fff',
     borderRadius: Math.round((u.liveSlab ? 0.132 : isTouch ? 0.0385 : 0.121) / k) + 'px',
-    pointerEvents:'auto',
+    pointerEvents:'none',
   });
   const obj = new CSS3DObject(el);
+  el.style.pointerEvents = 'none';   // CSS3DObject's constructor force-sets 'auto' — undo it; the gate owns this
   obj.position.copy(f.position);
   obj.position.y += u.panel.position.y;              // live slabs ride raised, console-style
   obj.rotation.y = f.rotation.y;
@@ -3310,7 +3330,7 @@ function liveScreenFor(f){
   obj.position.z += Math.cos(f.rotation.y) * faceZ;
   obj.scale.setScalar(k);
   L.scene.add(obj);
-  s = { obj, el };
+  s = { obj, el, on: null };   // null → the gate's first pass always writes a real state
   L.byFrame.set(f, s);
   return s;
 }
@@ -3442,6 +3462,32 @@ function animate(){
   // groups never move) — so we skip a per-frame matrix decompose and the two
   // Vector3 allocations per panel that used to churn the GC each frame.
   camera.getWorldPosition(_camWorld);
+
+  // ── live-portal mouse gate ──
+  // a portal takes the pointer only inside PORTAL_RANGE with the slab in
+  // FRONT of the view (dot > 0 — a hemisphere test, not an aim gate). Out of
+  // range / behind you it stays pe:none, so its phantom projection can never
+  // swallow a click meant for the hall — and if the page held keyboard focus
+  // when the mouse leaves it, focus comes home so Esc answers the gallery.
+  // The inner deadband skips the eye-on-the-plane pose (nose pressed to the
+  // slab — the face sits ~0.45 in front of the frame origin, and a quad
+  // crossing the eye hit-tests as garbage); nobody mouses a screen from 10cm.
+  if (live3d){
+    camera.getWorldDirection(_portalFwd);
+    for (const [f, s] of live3d.byFrame){
+      const dx = f.userData.worldPos.x - _camWorld.x, dz = f.userData.worldPos.z - _camWorld.z;
+      const d = Math.hypot(dx, dz);
+      const on = (state === 'play' || state === 'intro') &&
+                 d <= PORTAL_RANGE && d > 1.2 &&
+                 (dx * _portalFwd.x + dz * _portalFwd.z) > 0;
+      if (s.on !== on){
+        s.on = on;
+        s.el.style.pointerEvents = on ? 'auto' : 'none';
+        if (!on && document.activeElement === s.el){ s.el.blur(); window.focus(); }
+      }
+    }
+  }
+
   // ── the ONE breath every active-frame animation rides ──
   // A full 0→1→0 swing: at the trough the glow is truly GONE (emissive back at
   // the 0.22 resting tint, under the bloom threshold — no halo), the badge
@@ -3558,9 +3604,9 @@ function moveAndInteract(dt, t, autoFwd = 0){
     for (const hit of _visitRay.intersectObjects(_visitTargets, false)){
       const f = hit.object.userData.frame;
       const dx = f.position.x - o.position.x, dz = f.position.z - o.position.z;
-      // console-sized live slabs read from further back — their reach matches
-      // the distance you'd stand at to take the whole screen in
-      const reach = f.userData.liveSlab ? 8.5 : 4.20;
+      // console-sized live slabs arm at the portal's own mouse range, so the
+      // E handoff and the pointer gate agree on where "at the screen" begins
+      const reach = f.userData.liveSlab ? PORTAL_RANGE : 4.20;
       if (Math.hypot(dx, dz) <= reach){ activeFrame = f; break; }
     }
   }
