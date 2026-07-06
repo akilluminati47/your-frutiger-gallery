@@ -1250,6 +1250,9 @@ function buildGallery(font){
   // dots onto their glyphs and closed up the gaps between letters. Per-glyph we
   // can restore a touch of tracking and float the dots clear of their stems.
   // Built ONCE and shared by every frame's mesh (it was 12 identical builds).
+  // (Live end-wall slabs don't wear a floating word — the iframe DOM composited
+  // over them would occlude any WebGL text; their "view?" affordance is the DOM
+  // pill instead, which paints above the portal layer. See moveAndInteract.)
   const visitGeo = (() => {
     const SIZE = 0.46, TRACK = 0.055, DOT_GAP = 0.075;
     const opts = { depth:0.13, curveSegments:6,
@@ -1400,7 +1403,11 @@ function buildGallery(font){
     u.faceZ = 0.3 + 0.286 / 2;            // the slab's front face (strip + iframe ride it)
     u.liveSlab = true;
     u.label.visible = false;              // no name badge on an interactive slab
-    u.visit.visible = false;              // no visit? text either — the portal is live, not visitable
+    // no floating 3D word here: the live iframe is a DOM layer composited OVER
+    // the canvas, so any WebGL text on the slab would sit behind it. A live slab
+    // offers "view?" through the DOM pill instead (moveAndInteract), which draws
+    // above the portal layer on every device.
+    u.visit.visible = false;
   }
   if (wallProjects.east){
     const f = makeFrame(wallProjects.east, 'auto', autoDelayForRow(0), LOAD_DUR);
@@ -2526,10 +2533,22 @@ const moveInput = { x:0, y:0 };       // keyboard
 const padMove   = { x:0, y:0 };       // gamepad left stick
 const touchMove = { x:0, y:0 };       // on-screen joystick
 
+// ── view mode: the visitor's own lock over the big live slabs ──
+// A deliberate toggle (Ctrl tap / gamepad R3 / the touch eye button, or the
+// "view?" click on a slab). While it's on, movement AND camera are frozen and
+// the live portal within reach takes the mouse so the embedded page answers
+// your pointer natively; while it's off, EVERY portal releases the mouse, so a
+// slab never grabs the pointer unless the visitor asked for it. viewGlide is
+// the brief auto-walk that eases you into a padded viewing pose before the
+// mode engages (set by the "view?" affordance; null once seated / off).
+let viewMode  = false;
+let viewGlide = null;
+
 // apply a look delta the same way PointerLockControls does (so they compose)
 const _PI2 = Math.PI/2;
 const _lookE = new THREE.Euler(0, 0, 0, 'YXZ');
 function applyLook(dYaw, dPitch){
+  if (viewMode || viewGlide) return;   // view mode / the glide-in freeze the camera whole
   _lookE.setFromQuaternion(camera.quaternion);
   _lookE.y -= dYaw;
   _lookE.x -= dPitch;
@@ -2596,9 +2615,9 @@ function setInputMode(mode){
   if (mode === inputMode) return;
   inputMode = mode;
   const L = {
-    keyboard: '<b>WASD</b> / arrows move &nbsp;·&nbsp; <b>mouse</b> look &nbsp;·&nbsp; <b>E</b> / click visit &nbsp;·&nbsp; <b>Esc</b> pause',
-    gamepad:  '<b>L‑stick</b> move &nbsp;·&nbsp; <b>R‑stick</b> look &nbsp;·&nbsp; <b>A</b> visit &nbsp;·&nbsp; <b>Start</b> pause',
-    touch:    '<b>left stick</b> move &nbsp;·&nbsp; <b>drag</b> look &nbsp;·&nbsp; <b>tap</b> to visit',
+    keyboard: '<b>WASD</b> / arrows move &nbsp;·&nbsp; <b>mouse</b> look &nbsp;·&nbsp; <b>E</b> / click visit &nbsp;·&nbsp; <b>Ctrl</b> view lock &nbsp;·&nbsp; <b>Esc</b> pause',
+    gamepad:  '<b>L‑stick</b> move &nbsp;·&nbsp; <b>R‑stick</b> look &nbsp;·&nbsp; <b>A</b> visit &nbsp;·&nbsp; <b>R3</b> view lock &nbsp;·&nbsp; <b>Start</b> pause',
+    touch:    '<b>left stick</b> move &nbsp;·&nbsp; <b>drag</b> look &nbsp;·&nbsp; <b>tap</b> visit &nbsp;·&nbsp; <b>👁</b> view lock',
   };
   const legend = $('legend'); if (legend) legend.innerHTML = L[mode] || L.keyboard;
   $('touch')?.classList.toggle('hidden', !(mode === 'touch' && started));
@@ -2606,8 +2625,27 @@ function setInputMode(mode){
 
 /* ── keyboard ── */
 const keys = {};
+// Ctrl is the desktop "view lock" control, and it has to work NO MATTER what
+// the embedded page is doing. A clean tap toggles view mode (freeze / release);
+// a HOLD is the panic escape — it refreshes the live slab(s) to shake loose a
+// page that grabbed the pointer or keyboard, then drops back to the walk. We
+// tell tap from hold on the UP edge, and a Ctrl+key combo (Ctrl+R, Ctrl+C, …)
+// cancels both so the browser's own shortcuts still fire.
+const CTRL_HOLD_MS = 550;
+let ctrlDownAt = 0, ctrlHeld = false, ctrlHoldFired = false, ctrlCombo = false, ctrlHoldT = null;
 addEventListener('keydown', e => {
   if (consoleTypeKey(e)) return;      // a lit console field owns the keyboard
+  if (e.code === 'ControlLeft' || e.code === 'ControlRight'){
+    if (!ctrlHeld && !e.repeat){
+      ctrlHeld = true; ctrlHoldFired = false; ctrlCombo = false; ctrlDownAt = performance.now();
+      clearTimeout(ctrlHoldT);
+      ctrlHoldT = setTimeout(() => {                       // held past the threshold → panic refresh
+        if (ctrlHeld && !ctrlCombo){ ctrlHoldFired = true; refreshPortals(); }
+      }, CTRL_HOLD_MS);
+    }
+    return;
+  }
+  if (ctrlHeld) ctrlCombo = true;     // any other key while Ctrl is down → it's a combo, not our toggle
   // (live portals need no key handling here: once you click INTO one, the
   // iframe owns the keyboard outright — our listeners never see those keys)
   // Tab belongs to the game, not the browser. preventDefault kills the focus-ring
@@ -2632,7 +2670,15 @@ addEventListener('keydown', e => {
   if (e.code === 'KeyE' && !e.repeat) tryLaunch();   // held E drags sliders; autorepeat must not re-press
   if (e.code !== 'Escape') setInputMode('keyboard');
 });
-addEventListener('keyup', e => { keys[e.code] = false; });
+addEventListener('keyup', e => {
+  keys[e.code] = false;
+  if (e.code === 'ControlLeft' || e.code === 'ControlRight'){
+    clearTimeout(ctrlHoldT); ctrlHoldT = null;
+    const heldMs = performance.now() - ctrlDownAt;
+    ctrlHeld = false;
+    if (!ctrlHoldFired && !ctrlCombo && heldMs < CTRL_HOLD_MS) toggleView();   // clean tap → toggle
+  }
+});
 // mouse move → keyboard input mode + drive the custom crosshair cursor, which
 // only shows on UI screens (never while pointer-locked / walking the gallery)
 const crosshairEl = $('crosshair');
@@ -2694,7 +2740,7 @@ addEventListener('click', (e) => {
    under the cursor, B / Start leaves the pause menu. Button edge flags are shared
    across branches so a button still held while the state flips (e.g. the Start
    that opened the menu, or the A that started the realm) doesn't instantly re‑fire. */
-let padIndex = null, padVisitPrev = false, padPausePrev = false, padBackPrev = false;
+let padIndex = null, padVisitPrev = false, padPausePrev = false, padBackPrev = false, padR3Prev = false;
 const padCursor = { x:0, y:0, ready:false };   // virtual mouse for the UI screens
 addEventListener('gamepadconnected',   e => { padIndex = e.gamepad.index; setInputMode('gamepad'); });
 addEventListener('gamepaddisconnected', e => {
@@ -2712,6 +2758,7 @@ function pollPad(dt){
   const aBtn = !!gp.buttons[0]?.pressed;        // A / cross
   const bBtn = !!gp.buttons[1]?.pressed;        // B / circle
   const startBtn = !!gp.buttons[9]?.pressed;    // Start / options
+  const r3Btn = !!gp.buttons[11]?.pressed;      // R3 / right-stick click → view-lock toggle
   held.padA = aBtn;                             // a held A keeps a slider drag alive
 
   // ── UI screens (entry splash + pause menu): left stick = cursor, A = click ──
@@ -2745,7 +2792,7 @@ function pollPad(dt){
       }
       if (state === 'paused' && (bBtn || startBtn) && !padBackPrev){ audio.init(); resumeGame(); }   // B / Start → leave
     }
-    padVisitPrev = aBtn; padBackPrev = bBtn || startBtn; padPausePrev = startBtn;
+    padVisitPrev = aBtn; padBackPrev = bBtn || startBtn; padPausePrev = startBtn; padR3Prev = r3Btn;
     return;
   }
 
@@ -2756,9 +2803,10 @@ function pollPad(dt){
     if (rx || ry) applyLook(rx * (M.padLook ?? 2.6) * dt, ry * (M.padLook ?? 2.6) * dt);
     if (aBtn && !padVisitPrev) tryLaunch();
     if (startBtn && !padPausePrev) togglePause();
+    if (r3Btn && !padR3Prev){ setInputMode('gamepad'); toggleView(); }   // R3 → view-lock toggle
   }
   // edge bookkeeping every frame so transitions between states stay clean
-  padVisitPrev = aBtn; padPausePrev = startBtn; padBackPrev = bBtn || startBtn;
+  padVisitPrev = aBtn; padPausePrev = startBtn; padBackPrev = bBtn || startBtn; padR3Prev = r3Btn;
 }
 
 /* ── touch: floating joystick (move) + drag (look) + tap/button (visit) ── */
@@ -2990,6 +3038,9 @@ function pauseGame(){
   // pausable during the entry glide too (Esc during the whoosh used to no-op and
   // leave you stranded with the cursor showing and no menu)
   if (state !== 'play' && state !== 'intro') return;
+  // pausing drops view mode too, so Resume returns you to the walk (not a freeze);
+  // the slabs disarm on the next gate pass (viewMode off)
+  viewMode = false; viewGlide = null; setEyeGlow(false);
   pausedFrom = state;
   if (performance.now() > pauseHushUntil) audio.pauseOpen();
   state = 'paused';                         // freezes movement (loop skips intro/play)
@@ -3140,6 +3191,7 @@ function resetToMenu(){
   // (their pages keep state for the next entry)
   liveHide();
   launch = null; state = 'menu'; started = false;
+  viewMode = false; viewGlide = null; setEyeGlow(false);   // clear any view-lock on the way out
   padCursor.ready = false;                    // gamepad cursor re-centres on the splash
   $('fade').style.opacity = '0';
   $('enter').classList.remove('hidden');
@@ -3192,12 +3244,19 @@ $('resumeBtn').addEventListener('click', () => {
   if (!isTouch) relockLook();               // re-acquire mouse-look as soon as the browser allows
 });
 $('pauseBtn')?.addEventListener('click', e => { e.preventDefault(); togglePause(); });
+// touch view-lock eye — the finger-friendly twin of Ctrl / gamepad R3
+$('viewBtn')?.addEventListener('click', e => { e.preventDefault(); toggleView(); });
 
 // desktop click inside the world = visit the active frame. If a gamepad/touch
 // session started us without pointer lock, the first click instead engages
 // mouse-look (a click IS a user gesture, so the lock succeeds) — letting you
 // switch from pad to mouse mid-walk with no hitch.
 renderer.domElement.addEventListener('click', () => {
+  // mid glide-in → swallow stray clicks; in view mode a click that reaches the
+  // canvas landed OFF the slab (the armed iframe eats its own), so it's the
+  // step-back gesture: release every lock and walk again.
+  if (viewGlide) return;
+  if (viewMode){ exitView(); return; }
   if (controls.isLocked){ tryLaunch(); return; }
   // Unlocked but still in-world — the resume relock cooldown after Esc, or a
   // pad/touch session that never locked. The console is view-aimed, so a click
@@ -3223,13 +3282,15 @@ renderer.domElement.addEventListener('auxclick', e => {
 });
 
 function tryLaunch(forceTab = false){
+  if (viewMode || viewGlide) return;    // frozen in / gliding into a view — the toggle/click owns the exit
   if (consolePress()) return;           // aiming at the back-wall console → press it
   if (state !== 'play' || !activeFrame || launch) return;
   if (activeFrame.userData.loadState !== 'done') return;   // world still loading
-  // a live end wall is ALREADY the page — E / click just hands it the OS
-  // cursor (release the lock in place: no glide, no state change). The wheel
-  // press (forceTab) still opens the real tab, the escape hatch for a broken embed
-  if (activeFrame.userData.liveWall && !forceTab){ handPortalCursor(activeFrame); return; }
+  // a live end wall answers "view?" — glide into a padded viewing pose and
+  // engage view mode (walk + look freeze, the slab takes the mouse), rather
+  // than swooping the browser away. The wheel press (forceTab) still opens the
+  // real tab: the escape hatch for a broken embed, or to leave the gallery for it.
+  if (activeFrame.userData.liveWall && !forceTab){ enterView(activeFrame); return; }
   const f = activeFrame;
   state = 'launching';
   audio.launch();
@@ -3250,29 +3311,110 @@ function tryLaunch(forceTab = false){
   $('fade').style.opacity = '1';
 }
 
+/* ── view mode: the visitor's deliberate lock over a live slab ──
+   The "view?" click (or a bare Ctrl / R3 / eye-button toggle standing at a
+   slab) eases you into a padded viewing pose, then FREEZES walk + look and
+   lets that slab take the mouse; the eye button breathes to prove it's on.
+   Toggle again — or Ctrl-hold to force it — and every lock releases: no slab
+   grabs the pointer unless the visitor asked for it. */
+const VIEW_PAD_DIST = 5.5;   // stand-off from the slab origin — frames the whole
+                             // face with margin, and sits inside PORTAL_RANGE so
+                             // the slab arms for the mouse once you're seated
+
+function enterView(f){
+  if (viewMode || viewGlide || state !== 'play') return;
+  // a bare toggle away from any slab just freezes in place (no glide, nothing to
+  // arm) — "stops movement and camera movement", full stop
+  if (!f || !f.userData.liveWall){ engageView(null); return; }
+  const dir  = new THREE.Vector3(Math.sin(f.rotation.y), 0, Math.cos(f.rotation.y));
+  const toPos = f.position.clone().add(dir.multiplyScalar(VIEW_PAD_DIST));
+  toPos.y = eyeHeight;
+  // never glide through a wall in a short hall — clamp to the same box the walk uses
+  toPos.x = clamp(toPos.x, -(WALL_X-0.7), WALL_X-0.7);
+  toPos.z = clamp(toPos.z, PLAT_Z0+1, PLAT_Z1-1);
+  const tmp = new THREE.Object3D(); tmp.position.copy(toPos);
+  tmp.lookAt(f.position.x, CON_SLAB_Y, f.position.z);   // centre the tall slab (not the eye line)
+  // release the lock up front so PointerLockControls can't fight the glide; the
+  // camera is held still meanwhile by applyLook's viewGlide guard
+  if (controls.isLocked){ panelHandoff = true; controls.unlock(); }
+  viewGlide = {
+    frame:f, t:0,
+    fromPos: player.position.clone(), toPos,
+    fromQuat: camera.quaternion.clone(), toQuat: tmp.quaternion.clone(),
+  };
+  audio.launch();
+}
+function updateViewGlide(dt){
+  viewGlide.t = Math.min(1, viewGlide.t + dt/0.9);
+  const e = easeIO(viewGlide.t);
+  player.position.lerpVectors(viewGlide.fromPos, viewGlide.toPos, e);
+  camera.quaternion.slerpQuaternions(viewGlide.fromQuat, viewGlide.toQuat, e);
+  camera.position.y = eyeHeight;
+  if (viewGlide.t >= 1){ const f = viewGlide.frame; viewGlide = null; engageView(f); }
+}
+function engageView(f){
+  viewMode = true;
+  viewGlide = null;
+  if (controls.isLocked){ panelHandoff = true; controls.unlock(); }   // free the OS cursor for the slab
+  setEyeGlow(true);
+  showViewHint(true);
+  if (f) audio.ping(f.userData.worldPos);   // the slab is yours — same ding as a reveal
+}
+function exitView(){
+  if (!viewMode && !viewGlide) return;
+  viewMode = false; viewGlide = null;
+  setEyeGlow(false);
+  showViewHint(false);
+  // moveAndInteract froze while view mode was on, so its affordance memory is
+  // stale — clear it so the "view?"/"visit?" pill recomputes and re-shows the
+  // moment you're walking again and still facing a panel
+  lastActive = null; lastCanVisit = false;
+  // the animate gate drops every portal's pointerEvents next frame (viewMode is
+  // off), and the walk unfreezes on its own; desktop re-acquires mouse-look
+  if (!isTouch && (state === 'play' || state === 'intro')) relockLook();
+}
+function toggleView(){
+  if (viewMode || viewGlide) exitView();
+  else enterView(activeFrame && activeFrame.userData.liveWall ? activeFrame : null);
+}
+// Ctrl-HOLD panic escape: reload the live slab(s) to shake a page that trapped
+// the pointer/keyboard, and drop back to the walk. Re-assigning src forces a
+// fresh load (a cross-origin reload() is blocked); it's the only lock we can't
+// win by releasing our own, so it also resets whatever state the page grabbed.
+function refreshPortals(){
+  if (live3d) for (const [, s] of live3d.byFrame){ try { s.el.src = s.el.src; } catch {} }
+  exitView();
+}
+function setEyeGlow(on){ $('viewBtn')?.classList.toggle('active', on); }
+// touch has the glowing eye as its proof; desktop/gamepad get a quiet line
+// carrying the same "you're in view mode, here's the way out"
+function showViewHint(on){
+  const p = $('prompt'); if (!p) return;
+  if (on && !isTouch){ p.textContent = 'view mode — Ctrl / click the hall to step back'; p.classList.add('show'); }
+  else p.classList.remove('show');   // off, or on-touch → clear the pill (glow carries it)
+}
+
 /* ════════════════════════════════════════════════════════════════
    8c · live portals — end walls with { live:true }
-   A live end-wall world is ALWAYS armed: the moment its slab reveals,
-   the real page goes up — an iframe transformed onto the pane in true
-   perspective (CSS3D, same camera) — and simply IS the slab from then
-   on. No visit, no prompt, no wake, no camera hold: interaction is
-   fully free. Whenever the OS cursor exists (pad/touch play, the
-   relock cooldown, or E/click on the slab releasing the lock) it works
-   on the portal natively — click, drag, mouseover — at the iframe's
-   own small pixel grid mapped through the slab's 2D plane. The MOUSE
-   has a range: a portal takes the pointer only within PORTAL_RANGE
-   (6.9) with the slab in front of the view — beyond it the page still
-   renders live, but clicks belong to the hall. (Never leave the mouse
-   on unconditionally: a slab behind the eye projects as a phantom,
-   screen-covering quad that eats every click and drags keyboard focus
-   — Esc included — into the cross-origin page.) Look and movement are
-   never held: the free-look bridge keeps driving the view off any
-   mousemove that lands on the hall, and rests only while the cursor is
-   physically ON a page (the iframe swallows those moves itself).
-   Clicking off a slab re-locks the walk. The iframe survives
-   everything short of leaving the page — a game on the wall keeps its
-   state. Any URL that permits framing works, whichever repo hosts it —
-   same-repo hosting buys nothing here.
+   A live end-wall world reveals as the real page: an iframe transformed
+   onto the pane in true perspective (CSS3D, same camera) that simply IS
+   the slab, rendered live every frame as you walk. But it does NOT take
+   your mouse on its own — the visitor decides that. Approach it (the
+   same reach a normal panel offers "visit?") and it offers "view?";
+   click / E / tap / A, or toggle the view lock (Ctrl · gamepad R3 · the
+   touch eye button), and you glide into a padded pose and enter VIEW
+   MODE: walk + look freeze and THIS slab takes the pointer, so the page
+   answers click, drag, mouseover natively at the iframe's own pixel grid
+   mapped through the slab's plane. Toggle off (or click the hall, or
+   Ctrl-hold to refresh a page that trapped you) and every slab releases
+   the mouse again. The gate below only ever hands a slab the pointer
+   while viewMode is on, and only for the one inside PORTAL_RANGE, in
+   FRONT of the view, outside the inner deadband — so a slab behind the
+   eye can never project as a phantom quad that eats hall clicks or drags
+   keyboard focus (Esc included) into the cross-origin page. The iframe
+   survives everything short of leaving the page (or a Ctrl-hold reload)
+   — a game on the wall keeps its state. Any URL that permits framing
+   works, whichever repo hosts it.
    ════════════════════════════════════════════════════════════════ */
 const PORTAL_RANGE    = 6.9;   // mouse-use reach of a live portal, in world units
 const PORTAL_DEADBAND = 1.2;   // inner no-mouse band: the face sits ~0.45 ahead of the
@@ -3350,28 +3492,14 @@ function liveScreenFor(f){
   return s;
 }
 // arm a live portal at reveal: iframe up, layer shown, aligned BEFORE the
-// first paint so the page lands exactly on the slab with no pop
+// first paint so the page lands exactly on the slab with no pop. The iframe's
+// pointerEvents stays OFF here — only view mode (the animate gate below) ever
+// hands a slab the mouse, so a live page never grabs the pointer on its own.
 function armPortal(f){
   const L = liveLayerInit();
   liveScreenFor(f);
   L.renderer.render(L.scene, camera);
   liveShow();
-}
-// E / click on a live slab while pointer-locked: the portal is live already —
-// this just RELEASES the OS cursor (a locked mouse has no cursor to give the
-// page). panelHandoff gates the unlock listener so the pause never fires;
-// nothing else changes — look, walk and state all keep flowing. Clicking
-// anywhere off a slab re-locks the walk.
-function handPortalCursor(f){
-  if (!controls.isLocked) return;            // cursor already free — the portal has it natively
-  // nose pressed to the glass (inside the pointer gate's deadband) the portal
-  // can't take the mouse — releasing the cursor there would strand it on a
-  // dead pane, a ping with nothing behind it; step back and it works
-  const dx = f.userData.worldPos.x - player.position.x, dz = f.userData.worldPos.z - player.position.z;
-  if (Math.hypot(dx, dz) <= PORTAL_DEADBAND) return;
-  panelHandoff = true;
-  audio.ping(f.userData.worldPos);
-  controls.unlock();
 }
 
 /* ════════════════════════════════════════════════════════════════
@@ -3461,7 +3589,8 @@ function animate(){
     if (introT >= 1) state = 'play';
   }
   else if (state === 'play'){
-    moveAndInteract(dt, t);
+    if (viewGlide) updateViewGlide(dt);   // easing into a padded view — walk frozen until seated
+    else moveAndInteract(dt, t);
   }
   else if (state === 'launching' && launch){
     launch.t = Math.min(1, launch.t + dt/1.15);
@@ -3484,20 +3613,20 @@ function animate(){
   camera.getWorldPosition(_camWorld);
 
   // ── live-portal mouse gate ──
-  // a portal takes the pointer only inside PORTAL_RANGE with the slab in
-  // FRONT of the view (dot > 0 — a hemisphere test, not an aim gate). Out of
-  // range / behind you it stays pe:none, so its phantom projection can never
-  // swallow a click meant for the hall — and if the page held keyboard focus
-  // when the mouse leaves it, focus comes home so Esc answers the gallery.
-  // The inner deadband skips the eye-on-the-plane pose (nose pressed to the
-  // slab — the face sits ~0.45 in front of the frame origin, and a quad
-  // crossing the eye hit-tests as garbage); nobody mouses a screen from 10cm.
+  // a portal takes the pointer ONLY in view mode — the visitor's own deliberate
+  // lock — and then only for the slab inside PORTAL_RANGE, in FRONT of the view
+  // (dot > 0, a hemisphere test). Off view mode every slab stays pe:none, so a
+  // live page can never grab the pointer, drag keyboard focus (Esc included) or
+  // eat a click meant for the hall on its own; the visitor decides when a slab
+  // is live to the mouse. The inner deadband skips the eye-on-the-plane pose (a
+  // quad crossing the eye hit-tests as garbage). When the mouse leaves a slab
+  // that held keyboard focus, focus comes home so Esc answers the gallery.
   if (live3d){
     camera.getWorldDirection(_portalFwd);
     for (const [f, s] of live3d.byFrame){
       const dx = f.userData.worldPos.x - _camWorld.x, dz = f.userData.worldPos.z - _camWorld.z;
       const d = Math.hypot(dx, dz);
-      const on = (state === 'play' || state === 'intro') &&
+      const on = viewMode && (state === 'play' || state === 'intro') &&
                  d <= PORTAL_RANGE && d > PORTAL_DEADBAND &&
                  (dx * _portalFwd.x + dz * _portalFwd.z) > 0;
       if (s.on !== on){
@@ -3516,7 +3645,8 @@ function animate(){
   // so the handoff read as "click did nothing". In play/intro without pointer
   // lock the arrow shows over the hall; crossing onto an armed portal hands
   // the visual to the page's own cursor, exactly like a browser tab.
-  const cursorLive = !isTouch && !controls.isLocked && (state === 'play' || state === 'intro');
+  // (the glide-in is a cinematic — hold the arrow off until you're seated)
+  const cursorLive = !isTouch && !controls.isLocked && !viewGlide && (state === 'play' || state === 'intro');
   if (cursorLive !== hallCursor){
     hallCursor = cursorLive;
     document.body.classList.toggle('cursor-live', cursorLive);
@@ -3530,7 +3660,11 @@ function animate(){
   const pulse = 0.5 + 0.5*Math.sin(t*2.2);   // calm ~2.9s breath (3.4 blinked)
   for (const f of frames){
     const u = f.userData;
-    const target = (f === activeFrame && state === 'play' && u.loadState === 'done') ? 1 : 0;
+    // "visit?" / "view?" shows for the frame under your gaze — but a live slab's
+    // "view?" shrinks away the instant you commit (glide-in or seated in view
+    // mode), the same way "visit?" bows out under the launch swoop
+    const committing = viewMode || (viewGlide && viewGlide.frame === f);
+    const target = (f === activeFrame && state === 'play' && u.loadState === 'done' && !committing) ? 1 : 0;
     u.scale = lerp(u.scale, target, 1 - Math.pow(0.001, dt));
     const s = u.scale < 0.002 ? 0.001 : u.scale;
     u.visit.scale.setScalar(s);
@@ -3549,7 +3683,7 @@ function animate(){
     // choosing. EMISSIVE, so it reads from any angle; the peak (2.32) sits
     // over the bloom threshold (1.2) on purpose. Walking away (no click)
     // shrinks the text with the glow held at the 0.22 resting tint.
-    const chosen = launch && launch.frame === f;
+    const chosen = (launch && launch.frame === f) || (viewGlide && viewGlide.frame === f);
     u.visit.material.emissiveIntensity =
       0.22 + (FX ? 2.1 : 0.65) * (chosen ? easeIO(1 - u.scale) : 0);
 
@@ -3582,6 +3716,12 @@ function animate(){
 
 function moveAndInteract(dt, t, autoFwd = 0){
   // (gamepad is polled once per frame at the top of animate, before this runs)
+
+  // view mode freezes the visitor whole — no walk, no head-bob, no re-targeting.
+  // The camera is already held by applyLook's guard; killing velocity here stops
+  // any residual glide and leaves activeFrame + the "view mode" prompt as they
+  // were when you engaged (the slab you're viewing).
+  if (viewMode){ velocity.x = 0; velocity.z = 0; smoothSpeed = 0; return; }
 
   // unified analog move vector: keyboard + joystick + gamepad (+ intro auto-glide)
   moveInput.x = (keys.KeyD||keys.ArrowRight?1:0) - (keys.KeyA||keys.ArrowLeft?1:0);
@@ -3638,16 +3778,16 @@ function moveAndInteract(dt, t, autoFwd = 0){
     for (const hit of _visitRay.intersectObjects(_visitTargets, false)){
       const f = hit.object.userData.frame;
       const dx = f.position.x - o.position.x, dz = f.position.z - o.position.z;
-      // console-sized live slabs arm at the portal's own mouse range, so the
-      // E handoff and the pointer gate agree on where "at the screen" begins
-      const reach = f.userData.liveSlab ? PORTAL_RANGE : 4.20;
-      if (Math.hypot(dx, dz) <= reach){ activeFrame = f; break; }
+      // every panel arms at the SAME reach now — a live slab offers "view?" from
+      // the exact distance a normal panel offers "visit?", not the portal's own
+      // (wider) mouse range
+      if (Math.hypot(dx, dz) <= 4.20){ activeFrame = f; break; }
     }
   }
-  // live end walls are exempt from the visit affordance entirely: no pill, no
-  // droplet — the portal is already the live page, nothing is being offered
-  const canVisit = !!(activeFrame && activeFrame.userData.loadState === 'done'
-                      && !activeFrame.userData.liveWall);
+  // both affordances live here now: a normal panel offers "visit?" (swoop away),
+  // a live end wall offers "view?" (glide into a padded pose + engage view mode).
+  // Nothing shows once you're actually in view mode / gliding in.
+  const canVisit = !!(activeFrame && activeFrame.userData.loadState === 'done' && !viewMode && !viewGlide);
   if (activeFrame !== lastActive || canVisit !== lastCanVisit){
     const sameFrame = activeFrame === lastActive;
     lastActive = activeFrame; lastCanVisit = canVisit;
@@ -3655,10 +3795,12 @@ function moveAndInteract(dt, t, autoFwd = 0){
     if (!activeFrame) $('prompt').classList.remove('show');
     if (canVisit){
       if (!sameFrame) audio.droplet(activeFrame.userData.worldPos);   // droplet from the panel you faced
-      // Mobile shows no badge/button — you just tap the floating 3D "visit?" text.
-      // Desktop keeps the "visit <name>" pill as the click/E affordance.
-      if (!isTouch){
-        $('prompt').textContent = `visit  ${activeFrame.userData.project.name}`;
+      const isLive = activeFrame.userData.liveWall;
+      // A normal panel shows the "visit <name>" pill on desktop and leans on the
+      // floating 3D "visit?" text on mobile. A live slab has no 3D text (the
+      // iframe would cover it), so its "view <name>" pill shows on EVERY device.
+      if (!isTouch || isLive){
+        $('prompt').textContent = `${isLive ? 'view' : 'visit'}  ${activeFrame.userData.project.name}`;
         $('prompt').classList.add('show');
       }
     } else {

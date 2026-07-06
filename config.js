@@ -99,7 +99,7 @@ export const CONFIG = {
   // while the console is on (the console owns that wall).
   walls: {
     west: { on: true, name: "", url: "", live: false },
-    east: { on: true, name: "Designer", url: "https://akilluminati47.pages.dev/", live: true },
+    east: { on: true, name: "Designer", url: "https://akilluminati47.pages.dev/", live: false },
   },
 
   // ── CREATE-YOUR-OWN CONSOLE ────────────────────────────────────────
