@@ -1408,6 +1408,11 @@ function buildGallery(font){
     // offers "view?" through the DOM pill instead (moveAndInteract), which draws
     // above the portal layer on every device.
     u.visit.visible = false;
+    // pull the slab out of the WebGL mirror passes: its screen carries a static
+    // screenshot the real page has long since moved past, so a glass reflection
+    // of it is the stale bounce we're replacing. The live CSS3D reflection
+    // (see liveScreenFor) stands in for it instead.
+    noReflect.push(u.panel);
   }
   if (wallProjects.east){
     const f = makeFrame(wallProjects.east, 'auto', autoDelayForRow(0), LOAD_DUR);
@@ -3507,7 +3512,37 @@ function liveScreenFor(f){
   obj.position.z += Math.cos(f.rotation.y) * faceZ;
   obj.scale.setScalar(k);
   L.scene.add(obj);
-  s = { obj, el, on: null };   // null → the gate's first pass always writes a real state
+
+  // ── live floor reflection ──
+  // The WebGL glass mirror can't sample this cross-origin iframe (it's a DOM
+  // layer over the canvas, not scene geometry — see noReflect: the live panel
+  // is pulled from the mirror so its stale screenshot never reflects). So the
+  // slab casts its OWN live reflection: a SECOND iframe of the same page,
+  // mirrored across the floor plane (y flipped, content flipped via scale.y<0),
+  // dimmed + blurred so it reads as a glossy-floor bounce rather than a page.
+  // It's a separate instance (a randomiser shows a different face down there)
+  // and never takes input (pe:none, no autoplay so it can't double the audio).
+  const FLOOR_Y = 0.004;                    // glass floor sits here (see buildCorridor)
+  const rel = document.createElement('iframe');
+  rel.src = withProtocol(u.project.url);
+  rel.allow = '';                           // no autoplay → the reflection can't echo the page's sound
+  rel.tabIndex = -1; rel.setAttribute('aria-hidden', 'true');
+  Object.assign(rel.style, {
+    width: pw + 'px', height: ph + 'px', border:'0', background:'#dfeef7', display:'block',
+    borderRadius: el.style.borderRadius,
+    pointerEvents:'none', opacity:'0.3', filter:'blur(1.4px) brightness(1.05)',
+  });
+  const rwrap = document.createElement('div');
+  Object.assign(rwrap.style, { width: pw + 'px', height: ph + 'px', pointerEvents:'none' });
+  rwrap.appendChild(rel);
+  const robj = new CSS3DObject(rwrap);
+  rwrap.style.pointerEvents = 'none';       // re-assert over CSS3DObject's constructor force-auto
+  robj.position.set(obj.position.x, 2 * FLOOR_Y - obj.position.y, obj.position.z);
+  robj.rotation.y = obj.rotation.y;
+  robj.scale.set(k, -k, k);                 // reflected below the floor, flipped top-to-bottom
+  L.scene.add(robj);
+
+  s = { obj, el, on: null, robj, rel };   // null → the gate's first pass always writes a real state
   L.byFrame.set(f, s);
   return s;
 }
