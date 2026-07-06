@@ -3522,7 +3522,16 @@ function liveScreenFor(f){
   // dimmed + blurred so it reads as a glossy-floor bounce rather than a page.
   // It's a separate instance (a randomiser shows a different face down there)
   // and never takes input (pe:none, no autoplay so it can't double the audio).
+  //
+  // The "3D look" of the real WebGL glass mirrors comes from two things the flat
+  // copy lacked: it FADES with depth (solid where it meets the slab's base at
+  // the floor line, gone by the far end — a grounded reflection, not a floating
+  // pane), and it wears the Frutiger blue-glass tint. Both ride a depth ramp.
+  // The slab reflects flipped (scale.y<0), so the near-floor edge is the
+  // iframe's content-BOTTOM — "to top" runs the ramp from there into the depths.
   const FLOOR_Y = 0.004;                    // glass floor sits here (see buildCorridor)
+  const FADE  = 'linear-gradient(to top, #000 0%, #000 18%, transparent 84%)';   // depth mask: opaque at the floor line → gone deep
+  const GLASS = 'linear-gradient(to top, rgba(150,196,221,0.42) 0%, rgba(150,196,221,0.12) 46%, rgba(150,196,221,0) 84%)';  // blue tint, same ramp
   const rel = document.createElement('iframe');
   rel.src = withProtocol(u.project.url);
   rel.allow = '';                           // no autoplay → the reflection can't echo the page's sound
@@ -3530,10 +3539,15 @@ function liveScreenFor(f){
   Object.assign(rel.style, {
     width: pw + 'px', height: ph + 'px', border:'0', background:'#dfeef7', display:'block',
     borderRadius: el.style.borderRadius,
-    pointerEvents:'none', opacity:'0.3', filter:'blur(1.4px) brightness(1.05)',
+    pointerEvents:'none', opacity:'0.42', filter:'blur(1.4px) brightness(1.05)',
+    maskImage: FADE, WebkitMaskImage: FADE,     // fade the mirror into the floor with depth
   });
   const rwrap = document.createElement('div');
-  Object.assign(rwrap.style, { width: pw + 'px', height: ph + 'px', pointerEvents:'none' });
+  Object.assign(rwrap.style, {
+    width: pw + 'px', height: ph + 'px', pointerEvents:'none',
+    borderRadius: el.style.borderRadius, overflow:'hidden',
+    background: GLASS,                           // blue glass shows through the semi-transparent iframe, fading with depth
+  });
   rwrap.appendChild(rel);
   const robj = new CSS3DObject(rwrap);
   rwrap.style.pointerEvents = 'none';       // re-assert over CSS3DObject's constructor force-auto
