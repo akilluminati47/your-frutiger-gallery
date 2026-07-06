@@ -22,6 +22,10 @@ body{
      glowing crosshair (#crosshair) follows the mouse instead (see gallery.js) */
   cursor:none;
 }
+/* in-world with the pointer unlocked (a live-portal handoff, the relock cooldown,
+   a pad/touch session's mouse) the OS arrow IS the pointer — gallery.js toggles
+   this class per frame; over an armed portal the page's own cursor takes over */
+body.cursor-live{ cursor:default; }
 .hidden{ display:none !important; }
 
 #scene{ position:fixed; inset:0; }

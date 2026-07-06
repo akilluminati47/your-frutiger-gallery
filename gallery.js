@@ -3274,8 +3274,11 @@ function tryLaunch(forceTab = false){
    state. Any URL that permits framing works, whichever repo hosts it —
    same-repo hosting buys nothing here.
    ════════════════════════════════════════════════════════════════ */
-const PORTAL_RANGE = 6.9;   // mouse-use reach of a live portal, in world units
+const PORTAL_RANGE    = 6.9;   // mouse-use reach of a live portal, in world units
+const PORTAL_DEADBAND = 1.2;   // inner no-mouse band: the face sits ~0.45 ahead of the
+                               // frame origin, and a quad crossing the eye projects as garbage
 let live3d = null;       // lazy singleton: { container, renderer, scene, byFrame, shown }
+let hallCursor = null;   // last body.cursor-live state (null → first pass always writes)
 
 function liveLayerInit(){
   if (live3d) return live3d;
@@ -3315,12 +3318,24 @@ function liveScreenFor(f){
   el.src = withProtocol(u.project.url);
   el.allow = 'autoplay; fullscreen; gamepad';
   Object.assign(el.style, {
-    width: pw + 'px', height: ph + 'px', border:'0', background:'#fff',
+    width: pw + 'px', height: ph + 'px', border:'0', background:'#fff', display:'block',
     borderRadius: Math.round((u.liveSlab ? 0.132 : isTouch ? 0.0385 : 0.121) / k) + 'px',
     pointerEvents:'none',
   });
-  const obj = new CSS3DObject(el);
-  el.style.pointerEvents = 'none';   // CSS3DObject's constructor force-sets 'auto' — undo it; the gate owns this
+  // the perspective matrix rides a plain WRAPPER div, never the iframe itself:
+  // Chromium refuses to hit-test an <iframe> that carries a 3D transform (a div
+  // with the identical matrix hit-tests fine, the iframe never — same-origin or
+  // cross), so a bare CSS3D iframe paints perfectly yet takes no mouse at all;
+  // every click falls through to the canvas behind it. With the matrix on the
+  // wrapper and the iframe untransformed inside, the browser routes the pointer
+  // into the page natively — click, drag, mouseover, the page's own cursor — in
+  // full perspective.
+  const wrap = document.createElement('div');
+  Object.assign(wrap.style, { width: pw + 'px', height: ph + 'px' });
+  wrap.appendChild(el);
+  const obj = new CSS3DObject(wrap);
+  wrap.style.pointerEvents = 'none';  // CSS3DObject's constructor force-sets 'auto' — the wrapper
+                                      // must stay transparent; the gate drives the iframe alone
   obj.position.copy(f.position);
   obj.position.y += u.panel.position.y;              // live slabs ride raised, console-style
   obj.rotation.y = f.rotation.y;
@@ -3349,6 +3364,11 @@ function armPortal(f){
 // anywhere off a slab re-locks the walk.
 function handPortalCursor(f){
   if (!controls.isLocked) return;            // cursor already free — the portal has it natively
+  // nose pressed to the glass (inside the pointer gate's deadband) the portal
+  // can't take the mouse — releasing the cursor there would strand it on a
+  // dead pane, a ping with nothing behind it; step back and it works
+  const dx = f.userData.worldPos.x - player.position.x, dz = f.userData.worldPos.z - player.position.z;
+  if (Math.hypot(dx, dz) <= PORTAL_DEADBAND) return;
   panelHandoff = true;
   audio.ping(f.userData.worldPos);
   controls.unlock();
@@ -3478,7 +3498,7 @@ function animate(){
       const dx = f.userData.worldPos.x - _camWorld.x, dz = f.userData.worldPos.z - _camWorld.z;
       const d = Math.hypot(dx, dz);
       const on = (state === 'play' || state === 'intro') &&
-                 d <= PORTAL_RANGE && d > 1.2 &&
+                 d <= PORTAL_RANGE && d > PORTAL_DEADBAND &&
                  (dx * _portalFwd.x + dz * _portalFwd.z) > 0;
       if (s.on !== on){
         s.on = on;
@@ -3486,6 +3506,20 @@ function animate(){
         if (!on && document.activeElement === s.el){ s.el.blur(); window.focus(); }
       }
     }
+  }
+
+  // ── the in-world OS pointer must be SEEN ──
+  // body{cursor:none} serves the locked walk and the menus' custom crosshair,
+  // but whenever the cursor EXISTS in-world (a portal handoff, the relock
+  // cooldown, a pad/touch session's mouse) that rule left an invisible pointer
+  // steering the free-look bridge — indistinguishable from still being locked,
+  // so the handoff read as "click did nothing". In play/intro without pointer
+  // lock the arrow shows over the hall; crossing onto an armed portal hands
+  // the visual to the page's own cursor, exactly like a browser tab.
+  const cursorLive = !isTouch && !controls.isLocked && (state === 'play' || state === 'intro');
+  if (cursorLive !== hallCursor){
+    hallCursor = cursorLive;
+    document.body.classList.toggle('cursor-live', cursorLive);
   }
 
   // ── the ONE breath every active-frame animation rides ──
