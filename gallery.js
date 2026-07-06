@@ -3393,10 +3393,25 @@ function refreshPortals(){
 function setEyeGlow(on){ $('viewBtn')?.classList.toggle('active', on); }
 // touch has the glowing eye as its proof; desktop/gamepad get a quiet line
 // carrying the same "you're in view mode, here's the way out"
+let viewHintFadeT = null;
 function showViewHint(on){
   const p = $('prompt'); if (!p) return;
-  if (on && !isTouch){ p.textContent = 'view mode — Ctrl / click the hall to step back'; p.classList.add('show'); }
-  else p.classList.remove('show');   // off, or on-touch → clear the pill (glow carries it)
+  clearTimeout(viewHintFadeT); viewHintFadeT = null;
+  p.style.transition = ''; p.style.opacity = '';   // drop any leftover fade override
+  if (on && !isTouch){
+    p.textContent = 'view mode — Ctrl / click the hall to step back';
+    p.classList.add('show');
+    // retire the badge on the SAME schedule the sun-gaze retires the controls
+    // legend: hold TIPS_DWELL s, then fade over TIPS_FADE s. Inline override
+    // because the pill's default transition is a quick .3s; cleared above on the
+    // next call so ordinary visit?/view? pills snap back as before.
+    viewHintFadeT = setTimeout(() => {
+      p.style.transition = `opacity ${TIPS_FADE}s ease`;
+      p.style.opacity = '0';
+    }, TIPS_DWELL * 1000);
+  } else {
+    p.classList.remove('show');   // off, or on-touch → clear the pill (glow carries it)
+  }
 }
 
 /* ════════════════════════════════════════════════════════════════
@@ -3512,16 +3527,18 @@ function armPortal(f){
    ════════════════════════════════════════════════════════════════ */
 const clock = new THREE.Clock();
 let bobPhase = 0, smoothSpeed = 0;
-let sunGazeT = 0, tipsFaded = false;     // gaze at the sun for 2s → control tips fade away
+let sunGazeT = 0, tipsFaded = false;     // gaze at the sun for TIPS_DWELL s → control tips fade away
+const TIPS_DWELL = 2;                    // dwell before an on-screen tip retires (sun-gaze legend + view-mode badge)
+const TIPS_FADE  = 1.4;                  // its fade-out duration, in seconds — shared so the two tips retire alike
 const _gazeDir = new THREE.Vector3();
 function updateSunGaze(dt){
   if (tipsFaded || !started || state === 'menu') return;
   camera.getWorldDirection(_gazeDir);
   sunGazeT = (_gazeDir.dot(SUN_DIR) > 0.986) ? sunGazeT + dt : 0;   // looking near the sun disk
-  if (sunGazeT >= 2){
+  if (sunGazeT >= TIPS_DWELL){
     tipsFaded = true;
     const lg = $('legend');
-    if (lg){ lg.style.transition = 'opacity 1.4s ease'; lg.style.opacity = '0'; }
+    if (lg){ lg.style.transition = `opacity ${TIPS_FADE}s ease`; lg.style.opacity = '0'; }
   }
 }
 function animate(){
