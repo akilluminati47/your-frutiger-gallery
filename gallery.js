@@ -1408,11 +1408,12 @@ function buildGallery(font){
     // offers "view?" through the DOM pill instead (moveAndInteract), which draws
     // above the portal layer on every device.
     u.visit.visible = false;
-    // pull the slab out of the WebGL mirror passes: its screen carries a static
-    // screenshot the real page has long since moved past, so a glass reflection
-    // of it is the stale bounce we're replacing. The live CSS3D reflection
-    // (see liveScreenFor) stands in for it instead.
-    noReflect.push(u.panel);
+    // the slab stays IN the WebGL mirror passes on purpose: its screen wears the
+    // wrapped screenshot (planarUV + fitPanelToImage, console-proportioned), so
+    // the glass floor reflects it through the real Reflector — depth-faded,
+    // blue-tinted, blurred — EXACTLY like the smaller panels' reflections. (A
+    // CSS3D mirrored-iframe reflection was tried and read as a flat sticker: a
+    // DOM layer can't sit in the mirror's light. Screenshot-in-the-mirror wins.)
   }
   if (wallProjects.east){
     const f = makeFrame(wallProjects.east, 'auto', autoDelayForRow(0), LOAD_DUR);
@@ -3513,50 +3514,11 @@ function liveScreenFor(f){
   obj.scale.setScalar(k);
   L.scene.add(obj);
 
-  // ── live floor reflection ──
-  // The WebGL glass mirror can't sample this cross-origin iframe (it's a DOM
-  // layer over the canvas, not scene geometry — see noReflect: the live panel
-  // is pulled from the mirror so its stale screenshot never reflects). So the
-  // slab casts its OWN live reflection: a SECOND iframe of the same page,
-  // mirrored across the floor plane (y flipped, content flipped via scale.y<0),
-  // dimmed + blurred so it reads as a glossy-floor bounce rather than a page.
-  // It's a separate instance (a randomiser shows a different face down there)
-  // and never takes input (pe:none, no autoplay so it can't double the audio).
-  //
-  // The "3D look" of the real WebGL glass mirrors comes from two things the flat
-  // copy lacked: it FADES with depth (solid where it meets the slab's base at
-  // the floor line, gone by the far end — a grounded reflection, not a floating
-  // pane), and it wears the Frutiger blue-glass tint. Both ride a depth ramp.
-  // The slab reflects flipped (scale.y<0), so the near-floor edge is the
-  // iframe's content-BOTTOM — "to top" runs the ramp from there into the depths.
-  const FLOOR_Y = 0.004;                    // glass floor sits here (see buildCorridor)
-  const FADE  = 'linear-gradient(to top, #000 0%, #000 18%, transparent 84%)';   // depth mask: opaque at the floor line → gone deep
-  const GLASS = 'linear-gradient(to top, rgba(150,196,221,0.42) 0%, rgba(150,196,221,0.12) 46%, rgba(150,196,221,0) 84%)';  // blue tint, same ramp
-  const rel = document.createElement('iframe');
-  rel.src = withProtocol(u.project.url);
-  rel.allow = '';                           // no autoplay → the reflection can't echo the page's sound
-  rel.tabIndex = -1; rel.setAttribute('aria-hidden', 'true');
-  Object.assign(rel.style, {
-    width: pw + 'px', height: ph + 'px', border:'0', background:'#dfeef7', display:'block',
-    borderRadius: el.style.borderRadius,
-    pointerEvents:'none', opacity:'0.42', filter:'blur(1.4px) brightness(1.05)',
-    maskImage: FADE, WebkitMaskImage: FADE,     // fade the mirror into the floor with depth
-  });
-  const rwrap = document.createElement('div');
-  Object.assign(rwrap.style, {
-    width: pw + 'px', height: ph + 'px', pointerEvents:'none',
-    borderRadius: el.style.borderRadius, overflow:'hidden',
-    background: GLASS,                           // blue glass shows through the semi-transparent iframe, fading with depth
-  });
-  rwrap.appendChild(rel);
-  const robj = new CSS3DObject(rwrap);
-  rwrap.style.pointerEvents = 'none';       // re-assert over CSS3DObject's constructor force-auto
-  robj.position.set(obj.position.x, 2 * FLOOR_Y - obj.position.y, obj.position.z);
-  robj.rotation.y = obj.rotation.y;
-  robj.scale.set(k, -k, k);                 // reflected below the floor, flipped top-to-bottom
-  L.scene.add(robj);
-
-  s = { obj, el, on: null, robj, rel };   // null → the gate's first pass always writes a real state
+  // (no CSS3D floor reflection here: the slab's own WebGL panel — wearing the
+  // wrapped screenshot — stays in the Reflector passes, so the glass floor
+  // bounces it exactly like the smaller panels. A second mirrored iframe was
+  // tried and read as a flat sticker outside the mirror's light.)
+  s = { obj, el, on: null };   // null → the gate's first pass always writes a real state
   L.byFrame.set(f, s);
   return s;
 }
