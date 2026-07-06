@@ -3332,15 +3332,20 @@ function enterView(f){
   // never glide through a wall in a short hall — clamp to the same box the walk uses
   toPos.x = clamp(toPos.x, -(WALL_X-0.7), WALL_X-0.7);
   toPos.z = clamp(toPos.z, PLAT_Z0+1, PLAT_Z1-1);
-  const tmp = new THREE.Object3D(); tmp.position.copy(toPos);
-  tmp.lookAt(f.position.x, CON_SLAB_Y, f.position.z);   // centre the tall slab (not the eye line)
+  // aim the CAMERA at the slab's centre height. NOTE: Object3D.lookAt orients a
+  // plain object's +z at the target, but a camera views down -z — feeding a
+  // bare Object3D quat to the camera turns its back to the slab (a 180° flip).
+  // Build the quat the way camera.lookAt does, straight from a Matrix4.lookAt at
+  // the eye, so the camera actually faces the panel.
+  const lookM = new THREE.Matrix4().lookAt(toPos, new THREE.Vector3(f.position.x, CON_SLAB_Y, f.position.z), camera.up);
+  const toQuat = new THREE.Quaternion().setFromRotationMatrix(lookM);
   // release the lock up front so PointerLockControls can't fight the glide; the
   // camera is held still meanwhile by applyLook's viewGlide guard
   if (controls.isLocked){ panelHandoff = true; controls.unlock(); }
   viewGlide = {
     frame:f, t:0,
     fromPos: player.position.clone(), toPos,
-    fromQuat: camera.quaternion.clone(), toQuat: tmp.quaternion.clone(),
+    fromQuat: camera.quaternion.clone(), toQuat,
   };
   audio.launch();
 }
@@ -3778,10 +3783,11 @@ function moveAndInteract(dt, t, autoFwd = 0){
     for (const hit of _visitRay.intersectObjects(_visitTargets, false)){
       const f = hit.object.userData.frame;
       const dx = f.position.x - o.position.x, dz = f.position.z - o.position.z;
-      // every panel arms at the SAME reach now — a live slab offers "view?" from
-      // the exact distance a normal panel offers "visit?", not the portal's own
-      // (wider) mouse range
-      if (Math.hypot(dx, dz) <= 4.20){ activeFrame = f; break; }
+      // a normal panel offers "visit?" up close (4.20); the big interactive
+      // slabs offer "view?" from further back — the whole PORTAL_RANGE (6.9),
+      // so you can engage the wall-sized page well before you're on top of it
+      const reach = f.userData.liveWall ? PORTAL_RANGE : 4.20;
+      if (Math.hypot(dx, dz) <= reach){ activeFrame = f; break; }
     }
   }
   // both affordances live here now: a normal panel offers "visit?" (swoop away),

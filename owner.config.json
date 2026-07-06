@@ -7,7 +7,7 @@
   "readyNote": "",
   "console": { "enabled": false },
   "walls": {
-    "west": { "on": true, "name": "Build Yours", "url": "https://frutiger-gallery.pages.dev/", "live": true },
+    "west": { "on": true, "name": "Build Yours", "url": "https://frutiger-gallery.pages.dev/", "live": false },
     "east": { "on": true, "name": "Elastic Face", "url": "https://elastic-man-randomizer.pages.dev/", "live": true }
   },
   "projects": [
