@@ -21,9 +21,9 @@
     { "name": "My GitHub",  "url": "https://github.com/" }
   ],
 
-  "_walls":         "Optional end-wall worlds with their OWN name/url — independent of projects: west = the far wall at the end of the hall (slot 00, hangs only with the console off), east = the sun-lit entrance wall (slot 000). on: true builds that glass wall even with an empty slot; on: false keeps your strings but builds nothing.",
+  "_walls":         "Optional end-wall worlds with their OWN name/url — independent of projects: west = the far wall at the end of the hall (slot 00, hangs only with the console off), east = the sun-lit entrance wall (slot 000). on: true builds that glass wall even with an empty slot; on: false keeps your strings but builds nothing. live: true wakes that wall's world as a REAL interactive page on its slab — visitors browse it right in the hall (view mode) instead of swooping away — and switches the wall on with it.",
   "walls": {
-    "west": { "on": false, "name": "", "url": "" },
-    "east": { "on": false, "name": "", "url": "" }
+    "west": { "on": false, "name": "", "url": "", "live": false },
+    "east": { "on": false, "name": "", "url": "", "live": false }
   }
 }
