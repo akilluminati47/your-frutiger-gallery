@@ -69,7 +69,8 @@ const SHOT_H = Math.round(SHOT_W / ASPECT);
 
 function withProtocol(u){ return /^https?:\/\//i.test(u) ? u : 'https://' + u; }
 
-function screenshotURL(provider, url, w, h, maxAge = 86400){
+function screenshotURL(provider, url, w, h){
+  const maxAge = 86400;
   const full = withProtocol(url);
   const enc  = encodeURIComponent(full);
   // w is both the render viewport width AND the output width, h the matching crop,
@@ -90,9 +91,7 @@ function screenshotURL(provider, url, w, h, maxAge = 86400){
     default:
       // width == viewportWidth + crop/height → exactly the visitor's screen at the
       // panel aspect. wait/18 lets slow sites pull webfonts + heavy/lazy assets; png
-      // keeps text crisp; maxAge (seconds) serves the cache when younger — a day
-      // for the ordinary panels, overridden short by the live-slab refresher so
-      // thum.io re-captures the source instead of handing back the stale shot.
+      // keeps text crisp; maxAge serves a day-old cache so repeat visits stay fast.
       return `https://image.thum.io/get/width/${w}/crop/${h}/viewportWidth/${w}`
            + `/wait/18/maxAge/${maxAge}/png/noanimate/${full}`;
   }
@@ -102,10 +101,7 @@ function screenshotURL(provider, url, w, h, maxAge = 86400){
 // Guards against a single provider rate-limiting, blocking a domain, or returning
 // a broken/empty image — the live fetch falls back instead of leaving a blank.
 const PROVIDERS = [...new Set([CONFIG.screenshotProvider, 'thumio', 'mshots', 'microlink'])];
-// opts.maxAge (seconds) overrides thum.io's day-cache; opts.noStore skips the
-// BROWSER's HTTP cache too — a refresh that re-uses the same URL must reach the
-// provider, not be answered from disk with the very image it's replacing.
-function fetchScreenshot(url, onImg, onFail, opts = {}){
+function fetchScreenshot(url, onImg, onFail){
   let i = 0;
   const tryNext = async () => {
     if (i >= PROVIDERS.length){ onFail?.(); return; }
@@ -114,8 +110,7 @@ function fetchScreenshot(url, onImg, onFail, opts = {}){
       // fetch first so the HTTP status is visible: thum.io answers rate-limits
       // with a 403 that still carries a decodable "error" image, which would
       // sail through a plain <img> onload and paint a blank panel forever.
-      const res = await fetch(screenshotURL(prov, url, SHOT_W, SHOT_H, opts.maxAge),
-                              { mode: 'cors', cache: opts.noStore ? 'no-store' : 'default' });
+      const res = await fetch(screenshotURL(prov, url, SHOT_W, SHOT_H), { mode: 'cors' });
       if (!res.ok) return tryNext();
       const blob = await res.blob();
       if (!blob.type.startsWith('image/')) return tryNext();
@@ -1401,12 +1396,36 @@ function buildGallery(font){
   // the console it wears NO name badge (the prompt still says the name)
   function makeLiveSlab(f){
     const u = f.userData;
-    const geo = new RoundedBoxGeometry(CON_CW, CON_CH, 0.286, 6, 0.132);
-    planarUV(geo, CON_CW, CON_CH);
+    // The live slab's own refinement of the console look: NOT the pillow-domed
+    // RoundedBox (whose front face curves away under the iframe's edge, leaving
+    // the page floating proud of a shoulder falling away behind it), but an
+    // extruded rounded-rect PRISM — corners rounded in plan to the iframe's own
+    // radius, sides rising STRAIGHT to the face plane, so the body's rim comes
+    // up flush to meet the rendered page and the two read as one merged object.
+    const R = 0.132, D = 0.286, hw = CON_CW / 2, hh = CON_CH / 2;
+    const shp = new THREE.Shape();
+    shp.moveTo(-hw + R, -hh);
+    shp.lineTo( hw - R, -hh); shp.absarc( hw - R, -hh + R, R, -Math.PI/2, 0);
+    shp.lineTo( hw,  hh - R); shp.absarc( hw - R,  hh - R, R, 0, Math.PI/2);
+    shp.lineTo(-hw + R,  hh); shp.absarc(-hw + R,  hh - R, R, Math.PI/2, Math.PI);
+    shp.lineTo(-hw, -hh + R); shp.absarc(-hw + R, -hh + R, R, Math.PI, Math.PI*1.5);
+    const geo = new THREE.ExtrudeGeometry(shp, { depth: D, bevelEnabled: false, curveSegments: 12 });
+    geo.translate(0, 0, -D/2);            // centre the depth like the old RoundedBox
+    planarUV(geo, CON_CW, CON_CH);        // sane 0..1 UVs for the loading backdrop
     u.panel.geometry = geo;               // deviceGeo is shared — never dispose it
+    // ALL-WHITE body, and only white: no capture ever dresses this slab — the
+    // live page IS its face. Lit (not the unlit basic the screens use) so the
+    // straight sides shade and the body reads as real hardware, in the hall and
+    // in the mirror both; no FX colour lift — lighting + ACES own the white.
+    const liveMat = new THREE.MeshStandardMaterial({
+      color: 0xffffff, roughness: 0.35, metalness: 0, envMapIntensity: 0.8,
+    });
+    u.panel.material.dispose();           // the basic screen material (its whiteTex dies at reveal)
+    u.panel.material = liveMat;
+    u.screenMat = liveMat;                // loading backdrop + reveal drive THIS material now
     u.panel.position.y = CON_SLAB_Y - FRAME_Y;
     u.panel.position.z = 0.3;
-    u.faceZ = 0.3 + 0.286 / 2;            // the slab's front face (strip + iframe ride it)
+    u.faceZ = 0.3 + D / 2;                // the slab's front face (strip + iframe ride it)
     u.liveSlab = true;
     u.label.visible = false;              // no name badge on an interactive slab
     // no floating 3D word here: the live iframe is a DOM layer composited OVER
@@ -1414,13 +1433,11 @@ function buildGallery(font){
     // offers "view?" through the DOM pill instead (moveAndInteract), which draws
     // above the portal layer on every device.
     u.visit.visible = false;
-    // the slab stays IN the WebGL mirror passes: its screen wears the wrapped
-    // capture (planarUV + fitPanelToImage, console-proportioned), so the glass
-    // floor reflects the 3D slab BODY through the real Reflector — rounded rim,
-    // glass tint, blur, true parallax — exactly like the smaller panels. The
-    // wrap is kept tracking the live source by startLiveShotRefresh (8c): one
-    // texture, one mirror. (Both a mirrored-iframe reflection and a two-layer
-    // combine were tried: the first read as a flat sticker, the second doubled.)
+    // the slab stays IN the WebGL mirror passes: the glass floor bounces this
+    // WHITE body through the real Reflector — glass tint, blur, true parallax —
+    // and since the body carries no image, that bounce can never go stale. The
+    // live picture in the reflection rides a mirrored iframe laid over it (see
+    // liveScreenFor): white bounce under, live image over, nothing to disagree.
   }
   if (wallProjects.east){
     const f = makeFrame(wallProjects.east, 'auto', autoDelayForRow(0), LOAD_DUR);
@@ -3147,7 +3164,12 @@ function revealWorld(f){
   // aspect so the whole page shows, filling it without a crop. On a failed
   // fetch the shared backdrop stays — a clean blank screen, no dead texture.
   // (Never dispose the current map here: it's the SHARED loadBackdropTex.)
-  if (u.liveTexture){
+  // A live slab is the exception: its body is ALL WHITE — the real page is
+  // about to arm over its face, so no capture ever dresses it. Just shed
+  // whatever the loading choreography painted and stand bare.
+  if (u.liveWall){
+    u.screenMat.map = null; u.screenMat.needsUpdate = true;
+  } else if (u.liveTexture){
     u.screenMat.map = u.liveTexture; u.screenMat.needsUpdate = true;
     fitPanelToImage(u, u.liveTexture);
   }
@@ -3413,7 +3435,9 @@ function toggleView(){
 // fresh load (a cross-origin reload() is blocked); it's the only lock we can't
 // win by releasing our own, so it also resets whatever state the page grabbed.
 function refreshPortals(){
-  if (live3d) for (const [, s] of live3d.byFrame){ try { s.el.src = s.el.src; } catch {} }
+  if (live3d) for (const [, s] of live3d.byFrame){
+    try { s.el.src = s.el.src; if (s.rel) s.rel.src = s.rel.src; } catch {}   // face + its floor reflection
+  }
   exitView();
 }
 function setEyeGlow(on){ $('viewBtn')?.classList.toggle('active', on); }
@@ -3534,14 +3558,47 @@ function liveScreenFor(f){
   obj.scale.setScalar(k);
   L.scene.add(obj);
 
-  // (ONE reflection only — the WebGL Reflector's bounce of the slab body. A
-  // second CSS3D mirrored iframe was layered under the floor and it doubled:
-  // two reflections disagreeing about the page. The mirror can never sample
-  // this cross-origin iframe anyway — no web API reads another origin's
-  // pixels — so instead the slab's WRAPPED texture is kept tracking the live
-  // source by the re-scrape cycle in startLiveShotRefresh, and the one true
-  // mirror reflects that.)
-  s = { obj, el, on: null };   // null → the gate's first pass always writes a real state
+  // ── live floor reflection: white bounce under, live image over ──
+  // The WebGL Reflector bounces the slab's ALL-WHITE body (glass tint, blur,
+  // true parallax) — imageless, so it can never go stale. This SECOND iframe of
+  // the same page lays the LIVE picture over that bounce, mirrored across the
+  // floor plane (y reflected, content flipped via scale.y<0), dimmed + blurred,
+  // depth-fade mask solid at the floor line and gone by the deep end, blue-glass
+  // ramp clipped to the slab's corner radius. Transparent background: where the
+  // fade thins the image, the white WebGL bounce reads through — one merged
+  // reflection, and the earlier doubling is impossible because only THIS layer
+  // carries an image. (The mirror itself can never show the page: no web API
+  // reads a cross-origin iframe's pixels.) A separate instance — a randomiser
+  // shows a different face down there — that never takes input: pe:none,
+  // tabindex -1, allow='' so it can't echo the page's audio.
+  const FLOOR_Y = 0.004;                    // glass floor sits here (see buildCorridor)
+  const FADE  = 'linear-gradient(to top, #000 0%, #000 18%, transparent 84%)';   // depth mask: solid at the floor line → gone deep
+  const GLASS = 'linear-gradient(to top, rgba(150,196,221,0.42) 0%, rgba(150,196,221,0.12) 46%, rgba(150,196,221,0) 84%)';  // blue glass, same ramp
+  const rel = document.createElement('iframe');
+  rel.src = withProtocol(u.project.url);
+  rel.allow = '';                           // no autoplay → the reflection can't echo the page's sound
+  rel.tabIndex = -1; rel.setAttribute('aria-hidden', 'true');
+  Object.assign(rel.style, {
+    width: pw + 'px', height: ph + 'px', border:'0', background:'transparent', display:'block',
+    borderRadius: el.style.borderRadius,
+    pointerEvents:'none', opacity:'0.42', filter:'blur(1.4px) brightness(1.05)',
+    maskImage: FADE, WebkitMaskImage: FADE,     // fade the live image into the white bounce beneath
+  });
+  const rwrap = document.createElement('div');
+  Object.assign(rwrap.style, {
+    width: pw + 'px', height: ph + 'px', pointerEvents:'none',
+    borderRadius: el.style.borderRadius, overflow:'hidden',
+    background: GLASS,                           // blue glass shows through the semi-transparent iframe, fading with depth
+  });
+  rwrap.appendChild(rel);
+  const robj = new CSS3DObject(rwrap);
+  rwrap.style.pointerEvents = 'none';       // re-assert over CSS3DObject's constructor force-auto
+  robj.position.set(obj.position.x, 2 * FLOOR_Y - obj.position.y, obj.position.z);
+  robj.rotation.y = obj.rotation.y;
+  robj.scale.set(k, -k, k);                 // reflected below the floor, flipped top-to-bottom
+  L.scene.add(robj);
+
+  s = { obj, el, on: null, robj, rel };   // null → the gate's first pass always writes a real state
   L.byFrame.set(f, s);
   return s;
 }
@@ -3554,50 +3611,10 @@ function armPortal(f){
   liveScreenFor(f);
   L.renderer.render(L.scene, camera);
   liveShow();
-  startLiveShotRefresh(f);
 }
-
-// ── the live slab's UV texture tracks its source ──
-// The glass floor's Reflector bounces the slab's WRAPPED WebGL texture — it can
-// never sample the cross-origin iframe riding on top (no web API may read
-// another origin's pixels), so left alone that texture is whatever thum.io's
-// day-cache held at boot: the stale face in the mirror. This keeps the wrap
-// honest by re-scraping the deployed page itself on a short cycle — the first
-// pass lands quickly to kill an old cache, then a steady beat with a short
-// maxAge so the provider re-captures the source instead of echoing its cache.
-// One source, one mirror: the slab wears the fresh capture and the reflection
-// follows it through the true WebGL pipeline. (It mirrors the SOURCE, not this
-// visitor's in-slab session — that stays unreadable across origins.)
-const LIVE_SHOT_FIRST_MS = 15e3;    // first re-scrape lands soon after the slab arms
-const LIVE_SHOT_CYCLE_MS = 90e3;    // then a steady beat
-const LIVE_SHOT_MAXAGE_S = 60;      // thum.io re-captures when its shot is older than this
-function startLiveShotRefresh(f){
-  const u = f.userData;
-  if (u.shotTimer) return;                    // one cycle per slab, ever
-  const tick = () => {
-    if (document.hidden || !started || state === 'menu') return;   // idle tab / splash: don't scrape
-    fetchScreenshot(u.project.url, (img) => {
-      const tex = new THREE.Texture(img);     // same recipe as the prefetch textures
-      tex.colorSpace = THREE.SRGBColorSpace;
-      tex.minFilter = THREE.LinearMipmapLinearFilter;
-      tex.magFilter = THREE.LinearFilter;
-      tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
-      tex.generateMipmaps = true;
-      tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
-      tex.needsUpdate = true;
-      renderer.initTexture(tex);              // upload off the swap so the frame never hitches
-      const old = u.screenMat.map;
-      u.screenMat.map = tex; u.screenMat.needsUpdate = true;
-      fitPanelToImage(u, tex);
-      u.liveTexture = tex;
-      // free only textures THIS cycle made — the boot texture stays alive in
-      // prefetchMap (another panel may share the URL), the backdrop is shared
-      if (u.shotOwned && old && old !== loadBackdropTex) old.dispose();
-      u.shotOwned = true;
-    }, null, { maxAge: LIVE_SHOT_MAXAGE_S, noStore: true });
-  };
-  u.shotTimer = setTimeout(() => { tick(); u.shotTimer = setInterval(tick, LIVE_SHOT_CYCLE_MS); }, LIVE_SHOT_FIRST_MS);
-}
+// (no re-scrape cycle anymore: the slab's body is all white — there is no
+// wrapped capture to keep fresh. The reflection's image rides the mirrored
+// iframe in liveScreenFor, live by construction.)
 
 /* ════════════════════════════════════════════════════════════════
    9 · the loop
