@@ -38,33 +38,31 @@ if (CONFIG.shuffleOrder !== false){
 }
 
 /* ════════════════════════════════════════════════════════════════
-   1 · detect the VISITOR'S display → frame aspect + screenshot size
+   1 · ONE panel aspect for every visitor → screenshot size
    ════════════════════════════════════════════════════════════════ */
-// ── detect touch FIRST — all geometry + screenshot sizing flows from this ──
+// ── detect touch FIRST — input mode + perf tier flow from this (geometry
+//    no longer does: the hall is the same hall on every device) ──
 const isTouch = matchMedia('(pointer: coarse)').matches
              || (navigator.maxTouchPoints || 0) > 0
              || 'ontouchstart' in window;
 const lowPerf = isTouch;
 
 const realDpr = window.devicePixelRatio || 1;
-const SW = window.screen.width, SH = window.screen.height;
+const SW = window.screen.width;
 
-// Mobile → always portrait screenshots so sites render their phone layout correctly.
-// Some Android devices report landscape dimensions even held portrait, so we swap.
-const ASPECT = isTouch
-  ? Math.min(SW, SH) / Math.max(SW, SH)    // < 1 → tall portrait frames on phones
-  : (SW / SH || 16 / 9);
+// ONE aspect, every panel, every device: 16:9. Phones used to hang tall
+// portrait frames shaped to their own screen; now the hall is uniform —
+// the same wide slabs whatever the visitor holds it on.
+const ASPECT = 16 / 9;
 
-// Capture ONE screenful of the visitor's own device, sized to the panel aspect:
-//   • SHOT_W is the render viewport's CSS width, so each site lays out for THIS
-//     screen — phones get the mobile layout (big hero/emoji), desktops the desktop
-//     layout. Desktop width is clamped so ultra-wide monitors don't trigger a
-//     stretched layout.
-//   • SHOT_H is derived from ASPECT, so the capture already matches the device
-//     panel. We then cover-fit it (see fitPanelToImage) edge-to-edge, centred +
-//     top-anchored — no empty bars, no off-centre crop, full content in view.
-const SHOT_W = isTouch ? Math.round(Math.min(SW, SH))
-                       : clamp(Math.round(SW), 1024, 1600);
+// Capture one 16:9 desktop-laid-out screenful for every visitor:
+//   • SHOT_W is the render viewport's CSS width, clamped to a sane desktop
+//     band — a phone's ~390 screen rides the 1024 floor so sites serve their
+//     desktop face (the panels are desktop-shaped now), and ultra-wide
+//     monitors sit at the 1600 ceiling so nothing lays out stretched.
+//   • SHOT_H derives from ASPECT, so the capture already matches the panels
+//     and stretches edge-to-edge with no crop (see fitPanelToImage).
+const SHOT_W = clamp(Math.round(SW), 1024, 1600);
 const SHOT_H = Math.round(SHOT_W / ASPECT);
 
 function withProtocol(u){ return /^https?:\/\//i.test(u) ? u : 'https://' + u; }
@@ -85,7 +83,7 @@ function screenshotURL(provider, url, w, h){
       // networkidle0 + a settle delay → wait until the page is truly quiet (web
       // fonts swapped in, images decoded) instead of grabbing a half-painted frame.
       return `https://api.microlink.io/?url=${enc}&screenshot=true&embed=screenshot.url`
-           + `&viewport.width=${w}&viewport.height=${h}&viewport.deviceScaleFactor=${isTouch ? 2 : 1}`
+           + `&viewport.width=${w}&viewport.height=${h}&viewport.deviceScaleFactor=1`
            + `&waitUntil=networkidle0&waitForTimeout=2500&meta=false`;
     case 'thumio':
     default:
@@ -1043,11 +1041,12 @@ texLoader.setCrossOrigin('anonymous');
 const STRIP_W = 1024, STRIP_H = 256;
 
 function makeWhiteCanvas(){
-  // solid fill — 2×2 is enough, the GPU stretches a flat colour losslessly
+  // solid fill — 2×2 is enough, the GPU stretches a flat colour losslessly.
+  // WHITE on every device: the black-phone fiction is retired — the hall is
+  // white-bodied everywhere, one look on every screen.
   const c = document.createElement('canvas'); c.width = c.height = 2;
   const ctx = c.getContext('2d');
-  // mobile reads each device as a phone: its idle/off screen is black, not white
-  ctx.fillStyle = isTouch ? '#000000' : '#ffffff'; ctx.fillRect(0, 0, 2, 2);
+  ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, 2, 2);
   return c;
 }
 
@@ -1055,10 +1054,10 @@ function makeStripCanvas(){
   const c = document.createElement('canvas'); c.width = STRIP_W; c.height = STRIP_H; return c;
 }
 
-// Panel backdrop while loading — a flat field (white on desktop / black phone
-// bezel; the old faint blue Aero glow at the top is gone — no gradient on a
-// loading screen) baked into one tiny texture SHARED by every panel: since
-// it's now a solid colour it IS makeWhiteCanvas, uploaded to the GPU once.
+// Panel backdrop while loading — one flat white field on every device (the
+// old faint blue Aero glow at the top is gone — no gradient on a loading
+// screen) baked into one tiny texture SHARED by every panel: since it's a
+// solid colour it IS makeWhiteCanvas, uploaded to the GPU once.
 const loadBackdropTex = (() => {
   const t = new THREE.CanvasTexture(makeWhiteCanvas());
   t.colorSpace = THREE.SRGBColorSpace;
@@ -1071,12 +1070,11 @@ const loadBackdropTex = (() => {
 // 1024\u00d7256 whatever the panel aspect, so layout metrics are plain pixels.
 function drawLoadingStrip(canvas, progress, animTime){
   const c2 = canvas.getContext('2d'), W = canvas.width, H = canvas.height;
-  const dark = isTouch;
   c2.clearRect(0, 0, W, H);
   // Bar geometry \u2014 vertically centred; the label + percentage anchor to it
   const barH = 64, barX = 24, barW = W - barX*2, barY = (H - barH)/2, rr = barH/2;
-  // Status label
-  c2.fillStyle = dark ? 'rgba(170,215,255,.92)' : 'rgba(50,130,200,.65)';
+  // Status label \u2014 one palette: the strip rides a white panel on every device
+  c2.fillStyle = 'rgba(50,130,200,.65)';
   c2.font = '500 44px Quicksand, Segoe UI, sans-serif';
   c2.textAlign = 'center'; c2.textBaseline = 'middle';
   c2.fillText(progress < 0.995 ? 'loading world\u2026' : 'rendering\u2026', W/2, barY - 42);
@@ -1106,7 +1104,7 @@ function drawLoadingStrip(canvas, progress, animTime){
     roundRect(c2,barX,barY,fillW,barH,Math.min(rr,fillW/2)); c2.stroke();
   }
   // Percentage (below bar)
-  c2.fillStyle = dark ? 'rgba(180,220,255,.95)' : 'rgba(50,130,200,.75)';
+  c2.fillStyle = 'rgba(50,130,200,.75)';
   c2.font='600 36px Quicksand, Segoe UI, sans-serif';
   c2.textBaseline='top';
   c2.fillText(`${Math.min(100,Math.round(progress*100))}%`, W/2, barY+barH+14);
@@ -1134,28 +1132,13 @@ function planarUV(geo, w, h){
   uv.needsUpdate = true;
 }
 
-// Fit the capture onto the device panel.
-//  • Desktop: stretch the WHOLE page across the slab (full content, no crop).
-//  • Mobile: COVER-fit one phone screenful as if you were on the site — fill the
-//    portrait slab at the capture's true proportions, anchored to the TOP and centred
-//    horizontally, cropping the overflow. This is robust to a provider returning a
-//    full-page (very tall) or off-aspect image: instead of squishing the whole page
-//    into the slab (which reads as a cut-off corner), it shows the top screenful at
-//    the right aspect. Needs the texture's real pixel size, so it reads tex.image.
+// Fit the capture onto the device panel: stretch the WHOLE page across the
+// slab, full content, no crop — ONE rule on every device. Panels and captures
+// share the single 16:9 aspect now, so the stretch is honest; the old mobile
+// cover-fit (a phone screenful cropped onto a portrait slab) retired with the
+// portrait slabs themselves.
 function fitPanelToImage(u, tex){
-  if (!isTouch){ tex.repeat.set(1, 1); tex.offset.set(0, 0); tex.needsUpdate = true; return; }
-  const im = tex.image;
-  const iw = im?.naturalWidth || im?.width, ih = im?.naturalHeight || im?.height;
-  if (!iw || !ih){ tex.repeat.set(1, 1); tex.offset.set(0, 0); tex.needsUpdate = true; return; }
-  const ia = iw / ih, pa = u.liveSlab ? CON_CW / CON_CH : FW / FH;   // live slabs are console-proportioned
-  if (ia >= pa){                       // capture wider than the slab → crop sides, keep centred
-    const r = pa / ia;
-    tex.repeat.set(r, 1); tex.offset.set((1 - r) / 2, 0);
-  } else {                             // capture taller than the slab → crop the bottom, keep the TOP
-    const r = ia / pa;                 // (flipY: the page's top sits at v=1, so offset up to it)
-    tex.repeat.set(1, r); tex.offset.set(0, 1 - r);
-  }
-  tex.needsUpdate = true;
+  tex.repeat.set(1, 1); tex.offset.set(0, 0); tex.needsUpdate = true;
 }
 
 // name plaque texture — painted to MATCH the .aero-btn enter pill (deep aqua
@@ -1215,17 +1198,16 @@ function buildGallery(font){
   // Phones are slimmer than desktop monitors: a thinner slab + tighter rim radius so
   // mobile reads as a modern phone, while the screenshot still skins the front AND
   // wraps the curved edge (planarUV) exactly like desktop — no separate bezel.
-  const DEV_DEPTH  = isTouch ? 0.121  : 0.242;   // +10% with the faces (FH/FW) — true uniform scale
-  const DEV_RADIUS = isTouch ? 0.0385 : 0.121;
+  const DEV_DEPTH  = 0.242;   // one device body on every screen — no thin phone slab
+  const DEV_RADIUS = 0.121;
   const DEV_Z = 0.06;                              // lifts the slab off the glass wall
   const deviceGeo = new RoundedBoxGeometry(FW, FH, DEV_DEPTH, 6, DEV_RADIUS);
   planarUV(deviceGeo, FW, FH);
 
-  // loading-strip plane shared by every panel: ~80% of the panel's width (a
-  // touch narrower on phones so the cluster sits daintily on the tall bezel),
+  // loading-strip plane shared by every panel: 80% of the panel's width,
   // floated just off the slab's front face. Geometry is shared; each loading
   // panel gets its own small canvas texture (see startFrameLoading).
-  const stripW = FW * (isTouch ? 0.72 : 0.8);
+  const stripW = FW * 0.8;
   stripGeo = new THREE.PlaneGeometry(stripW, stripW * (STRIP_H / STRIP_W));
   stripZ   = DEV_Z + DEV_DEPTH / 2 + 0.012;
 
@@ -1427,13 +1409,13 @@ function buildGallery(font){
     planarUV(geo, CON_CW, CON_CH);        // sane 0..1 UVs for the loading backdrop
     u.panel.geometry = geo;               // deviceGeo is shared — never dispose it
     // The body is bare hardware, never dressed by a capture — the live page
-    // IS its face. WHITE on desktop; on mobile every device reads as a
-    // phone, so the body is BLACK (makeWhiteCanvas's convention, now in 3D).
+    // IS its face. WHITE on every device (the mobile black-phone detour is
+    // retired with the rest of the phone fiction — one white hall, blanco).
     // Lit (not the unlit basic the screens use) so the rim and the curved
     // back shade like real hardware, in the hall and in the mirror both;
     // no FX colour lift — lighting + ACES own the tone.
     const liveMat = new THREE.MeshStandardMaterial({
-      color: isTouch ? 0x0a0a0a : 0xffffff, roughness: 0.35, metalness: 0, envMapIntensity: 0.8,
+      color: 0xffffff, roughness: 0.35, metalness: 0, envMapIntensity: 0.8,
     });
     u.panel.material.dispose();           // the basic screen material (its whiteTex dies at reveal)
     u.panel.material = liveMat;
@@ -3546,7 +3528,7 @@ function liveScreenFor(f){
   el.allow = 'autoplay; fullscreen; gamepad';
   Object.assign(el.style, {
     width: pw + 'px', height: ph + 'px', border:'0', background:'#fff', display:'block',
-    borderRadius: Math.round((u.liveSlab ? 0.132 : isTouch ? 0.0385 : 0.121) / k) + 'px',
+    borderRadius: Math.round((u.liveSlab ? 0.132 : 0.121) / k) + 'px',
     pointerEvents:'none',
   });
   // the perspective matrix rides a plain WRAPPER div, never the iframe itself:
