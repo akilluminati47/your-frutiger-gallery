@@ -69,7 +69,7 @@ const SHOT_H = Math.round(SHOT_W / ASPECT);
 
 function withProtocol(u){ return /^https?:\/\//i.test(u) ? u : 'https://' + u; }
 
-function screenshotURL(provider, url, w, h){
+function screenshotURL(provider, url, w, h, maxAge = 86400){
   const full = withProtocol(url);
   const enc  = encodeURIComponent(full);
   // w is both the render viewport width AND the output width, h the matching crop,
@@ -90,9 +90,11 @@ function screenshotURL(provider, url, w, h){
     default:
       // width == viewportWidth + crop/height → exactly the visitor's screen at the
       // panel aspect. wait/18 lets slow sites pull webfonts + heavy/lazy assets; png
-      // keeps text crisp; maxAge serves a day-old cache so repeat visits stay fast.
+      // keeps text crisp; maxAge (seconds) serves the cache when younger — a day
+      // for the ordinary panels, overridden short by the live-slab refresher so
+      // thum.io re-captures the source instead of handing back the stale shot.
       return `https://image.thum.io/get/width/${w}/crop/${h}/viewportWidth/${w}`
-           + `/wait/18/maxAge/86400/png/noanimate/${full}`;
+           + `/wait/18/maxAge/${maxAge}/png/noanimate/${full}`;
   }
 }
 
@@ -100,7 +102,10 @@ function screenshotURL(provider, url, w, h){
 // Guards against a single provider rate-limiting, blocking a domain, or returning
 // a broken/empty image — the live fetch falls back instead of leaving a blank.
 const PROVIDERS = [...new Set([CONFIG.screenshotProvider, 'thumio', 'mshots', 'microlink'])];
-function fetchScreenshot(url, onImg, onFail){
+// opts.maxAge (seconds) overrides thum.io's day-cache; opts.noStore skips the
+// BROWSER's HTTP cache too — a refresh that re-uses the same URL must reach the
+// provider, not be answered from disk with the very image it's replacing.
+function fetchScreenshot(url, onImg, onFail, opts = {}){
   let i = 0;
   const tryNext = async () => {
     if (i >= PROVIDERS.length){ onFail?.(); return; }
@@ -109,7 +114,8 @@ function fetchScreenshot(url, onImg, onFail){
       // fetch first so the HTTP status is visible: thum.io answers rate-limits
       // with a 403 that still carries a decodable "error" image, which would
       // sail through a plain <img> onload and paint a blank panel forever.
-      const res = await fetch(screenshotURL(prov, url, SHOT_W, SHOT_H), { mode: 'cors' });
+      const res = await fetch(screenshotURL(prov, url, SHOT_W, SHOT_H, opts.maxAge),
+                              { mode: 'cors', cache: opts.noStore ? 'no-store' : 'default' });
       if (!res.ok) return tryNext();
       const blob = await res.blob();
       if (!blob.type.startsWith('image/')) return tryNext();
@@ -1408,14 +1414,13 @@ function buildGallery(font){
     // offers "view?" through the DOM pill instead (moveAndInteract), which draws
     // above the portal layer on every device.
     u.visit.visible = false;
-    // the slab stays IN the WebGL mirror passes on purpose: its screen wears the
-    // wrapped screenshot (planarUV + fitPanelToImage, console-proportioned), so
-    // the glass floor reflects the 3D slab BODY through the real Reflector —
-    // rounded rim, glass tint, blur, true parallax — exactly like the smaller
-    // panels. The LIVE image is layered over that bounce by a mirrored iframe
-    // (see liveScreenFor): the WebGL bounce carries the body, the iframe the
-    // picture. (Each alone failed: iframe-only read as a flat sticker with no
-    // slab body; mirror-only could only ever show the stale screenshot.)
+    // the slab stays IN the WebGL mirror passes: its screen wears the wrapped
+    // capture (planarUV + fitPanelToImage, console-proportioned), so the glass
+    // floor reflects the 3D slab BODY through the real Reflector — rounded rim,
+    // glass tint, blur, true parallax — exactly like the smaller panels. The
+    // wrap is kept tracking the live source by startLiveShotRefresh (8c): one
+    // texture, one mirror. (Both a mirrored-iframe reflection and a two-layer
+    // combine were tried: the first read as a flat sticker, the second doubled.)
   }
   if (wallProjects.east){
     const f = makeFrame(wallProjects.east, 'auto', autoDelayForRow(0), LOAD_DUR);
@@ -3529,48 +3534,14 @@ function liveScreenFor(f){
   obj.scale.setScalar(k);
   L.scene.add(obj);
 
-  // ── live floor reflection: the WebGL bounce carries the BODY, this carries
-  // the IMAGE ──
-  // The slab's WebGL panel stays IN the Reflector passes (wrapped screenshot,
-  // rounded rim, glass tint, 5-tap blur, true parallax) — that bounce is the
-  // 3D look, and losing it was why a lone mirrored iframe read as a flat
-  // sticker. But the WebGL mirror can only ever show the fetched screenshot:
-  // it cannot sample a cross-origin iframe, so its image goes stale the moment
-  // the live page moves. This SECOND iframe of the same page lays the LIVE
-  // image over the reflected face — mirrored across the floor plane (y
-  // reflected, content flipped via scale.y<0), dimmed + blurred + depth-faded
-  // so it marries the WebGL bounce underneath: where it fades, the mirror's
-  // own reflection carries on. A separate instance (a randomiser shows a
-  // different face down there) that never takes input (pe:none, tabindex -1,
-  // allow='' so it can't echo the page's audio).
-  const FLOOR_Y = 0.004;                    // glass floor sits here (see buildCorridor)
-  const FADE  = 'linear-gradient(to top, #000 0%, #000 18%, transparent 84%)';   // depth mask: solid at the floor line → gone deep
-  const GLASS = 'linear-gradient(to top, rgba(150,196,221,0.42) 0%, rgba(150,196,221,0.12) 46%, rgba(150,196,221,0) 84%)';  // blue glass, same ramp
-  const rel = document.createElement('iframe');
-  rel.src = withProtocol(u.project.url);
-  rel.allow = '';                           // no autoplay → the reflection can't echo the page's sound
-  rel.tabIndex = -1; rel.setAttribute('aria-hidden', 'true');
-  Object.assign(rel.style, {
-    width: pw + 'px', height: ph + 'px', border:'0', background:'transparent', display:'block',
-    borderRadius: el.style.borderRadius,
-    pointerEvents:'none', opacity:'0.42', filter:'blur(1.4px) brightness(1.05)',
-    maskImage: FADE, WebkitMaskImage: FADE,     // fade the live image into the mirror's own bounce
-  });
-  const rwrap = document.createElement('div');
-  Object.assign(rwrap.style, {
-    width: pw + 'px', height: ph + 'px', pointerEvents:'none',
-    borderRadius: el.style.borderRadius, overflow:'hidden',
-    background: GLASS,                           // blue glass shows through the semi-transparent iframe, fading with depth
-  });
-  rwrap.appendChild(rel);
-  const robj = new CSS3DObject(rwrap);
-  rwrap.style.pointerEvents = 'none';       // re-assert over CSS3DObject's constructor force-auto
-  robj.position.set(obj.position.x, 2 * FLOOR_Y - obj.position.y, obj.position.z);
-  robj.rotation.y = obj.rotation.y;
-  robj.scale.set(k, -k, k);                 // reflected below the floor, flipped top-to-bottom
-  L.scene.add(robj);
-
-  s = { obj, el, on: null, robj, rel };   // null → the gate's first pass always writes a real state
+  // (ONE reflection only — the WebGL Reflector's bounce of the slab body. A
+  // second CSS3D mirrored iframe was layered under the floor and it doubled:
+  // two reflections disagreeing about the page. The mirror can never sample
+  // this cross-origin iframe anyway — no web API reads another origin's
+  // pixels — so instead the slab's WRAPPED texture is kept tracking the live
+  // source by the re-scrape cycle in startLiveShotRefresh, and the one true
+  // mirror reflects that.)
+  s = { obj, el, on: null };   // null → the gate's first pass always writes a real state
   L.byFrame.set(f, s);
   return s;
 }
@@ -3583,6 +3554,49 @@ function armPortal(f){
   liveScreenFor(f);
   L.renderer.render(L.scene, camera);
   liveShow();
+  startLiveShotRefresh(f);
+}
+
+// ── the live slab's UV texture tracks its source ──
+// The glass floor's Reflector bounces the slab's WRAPPED WebGL texture — it can
+// never sample the cross-origin iframe riding on top (no web API may read
+// another origin's pixels), so left alone that texture is whatever thum.io's
+// day-cache held at boot: the stale face in the mirror. This keeps the wrap
+// honest by re-scraping the deployed page itself on a short cycle — the first
+// pass lands quickly to kill an old cache, then a steady beat with a short
+// maxAge so the provider re-captures the source instead of echoing its cache.
+// One source, one mirror: the slab wears the fresh capture and the reflection
+// follows it through the true WebGL pipeline. (It mirrors the SOURCE, not this
+// visitor's in-slab session — that stays unreadable across origins.)
+const LIVE_SHOT_FIRST_MS = 15e3;    // first re-scrape lands soon after the slab arms
+const LIVE_SHOT_CYCLE_MS = 90e3;    // then a steady beat
+const LIVE_SHOT_MAXAGE_S = 60;      // thum.io re-captures when its shot is older than this
+function startLiveShotRefresh(f){
+  const u = f.userData;
+  if (u.shotTimer) return;                    // one cycle per slab, ever
+  const tick = () => {
+    if (document.hidden || !started || state === 'menu') return;   // idle tab / splash: don't scrape
+    fetchScreenshot(u.project.url, (img) => {
+      const tex = new THREE.Texture(img);     // same recipe as the prefetch textures
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.minFilter = THREE.LinearMipmapLinearFilter;
+      tex.magFilter = THREE.LinearFilter;
+      tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+      tex.generateMipmaps = true;
+      tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+      tex.needsUpdate = true;
+      renderer.initTexture(tex);              // upload off the swap so the frame never hitches
+      const old = u.screenMat.map;
+      u.screenMat.map = tex; u.screenMat.needsUpdate = true;
+      fitPanelToImage(u, tex);
+      u.liveTexture = tex;
+      // free only textures THIS cycle made — the boot texture stays alive in
+      // prefetchMap (another panel may share the URL), the backdrop is shared
+      if (u.shotOwned && old && old !== loadBackdropTex) old.dispose();
+      u.shotOwned = true;
+    }, null, { maxAge: LIVE_SHOT_MAXAGE_S, noStore: true });
+  };
+  u.shotTimer = setTimeout(() => { tick(); u.shotTimer = setInterval(tick, LIVE_SHOT_CYCLE_MS); }, LIVE_SHOT_FIRST_MS);
 }
 
 /* ════════════════════════════════════════════════════════════════
