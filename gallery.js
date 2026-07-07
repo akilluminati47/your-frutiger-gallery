@@ -1055,17 +1055,13 @@ function makeStripCanvas(){
   const c = document.createElement('canvas'); c.width = STRIP_W; c.height = STRIP_H; return c;
 }
 
-// Panel backdrop while loading — the old full-canvas background (white on
-// desktop / black phone bezel, faint blue Aero glow at the top) baked into one
-// tiny texture SHARED by every panel: 4×256, uploaded to the GPU exactly once.
+// Panel backdrop while loading — a flat field (white on desktop / black phone
+// bezel; the old faint blue Aero glow at the top is gone — no gradient on a
+// loading screen) baked into one tiny texture SHARED by every panel: since
+// it's now a solid colour it IS makeWhiteCanvas, uploaded to the GPU once.
 const loadBackdropTex = (() => {
-  const c = document.createElement('canvas'); c.width = 4; c.height = 256;
-  const x = c.getContext('2d');
-  x.fillStyle = isTouch ? '#000000' : '#ffffff'; x.fillRect(0, 0, 4, 256);
-  const tg = x.createLinearGradient(0, 0, 0, 256 * 0.28);
-  tg.addColorStop(0,'rgba(195,238,255,.55)'); tg.addColorStop(1,'rgba(195,238,255,0)');
-  x.fillStyle = tg; x.fillRect(0, 0, 4, 256 * 0.28);
-  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+  const t = new THREE.CanvasTexture(makeWhiteCanvas());
+  t.colorSpace = THREE.SRGBColorSpace;
   return t;
 })();
 
@@ -1396,29 +1392,48 @@ function buildGallery(font){
   // the console it wears NO name badge (the prompt still says the name)
   function makeLiveSlab(f){
     const u = f.userData;
-    // The live slab's own refinement of the console look: NOT the pillow-domed
-    // RoundedBox (whose front face curves away under the iframe's edge, leaving
-    // the page floating proud of a shoulder falling away behind it), but an
-    // extruded rounded-rect PRISM — corners rounded in plan to the iframe's own
-    // radius, sides rising STRAIGHT to the face plane, so the body's rim comes
-    // up flush to meet the rendered page and the two read as one merged object.
+    // The live slab's body, two halves like the early iPad touch hardware:
+    // the FACE keeps the flush prism rim — corners rounded in plan to the
+    // iframe's own radius, a straight band rising to the face plane so the
+    // rim meets the rendered page and the two read as one merged object —
+    // while the BACK rounds off, the sides sweeping inward over the deep
+    // 60% of the depth onto a flat, inset back panel. One extrude builds
+    // it: the outline is INSET (corners tightened so the bevel's outward
+    // sweep lands exactly back on the iframe's R — offsetting an arc grows
+    // its radius by exactly the offset), extruded through the straight band
+    // with a rounded bevel on BOTH ends, then the front bevel is pressed
+    // flat — every vertex past the rim plane clamps onto it — so the flush
+    // face survives and the back bevel alone carries the curve.
     const R = 0.132, D = 0.286, hw = CON_CW / 2, hh = CON_CH / 2;
+    const CURVE = 0.17, INSET = 0.11, BAND = D - CURVE;   // shoulder z-depth / xy-sweep / straight rim
+    const Ri = R - INSET, iw = hw - INSET, ih = hh - INSET;
     const shp = new THREE.Shape();
-    shp.moveTo(-hw + R, -hh);
-    shp.lineTo( hw - R, -hh); shp.absarc( hw - R, -hh + R, R, -Math.PI/2, 0);
-    shp.lineTo( hw,  hh - R); shp.absarc( hw - R,  hh - R, R, 0, Math.PI/2);
-    shp.lineTo(-hw + R,  hh); shp.absarc(-hw + R,  hh - R, R, Math.PI/2, Math.PI);
-    shp.lineTo(-hw, -hh + R); shp.absarc(-hw + R, -hh + R, R, Math.PI, Math.PI*1.5);
-    const geo = new THREE.ExtrudeGeometry(shp, { depth: D, bevelEnabled: false, curveSegments: 12 });
-    geo.translate(0, 0, -D/2);            // centre the depth like the old RoundedBox
+    shp.moveTo(-iw + Ri, -ih);
+    shp.lineTo( iw - Ri, -ih); shp.absarc( iw - Ri, -ih + Ri, Ri, -Math.PI/2, 0);
+    shp.lineTo( iw,  ih - Ri); shp.absarc( iw - Ri,  ih - Ri, Ri, 0, Math.PI/2);
+    shp.lineTo(-iw + Ri,  ih); shp.absarc(-iw + Ri,  ih - Ri, Ri, Math.PI/2, Math.PI);
+    shp.lineTo(-iw, -ih + Ri); shp.absarc(-iw + Ri, -ih + Ri, Ri, Math.PI, Math.PI*1.5);
+    const raw = new THREE.ExtrudeGeometry(shp, { depth: BAND, curveSegments: 12,
+      bevelEnabled: true, bevelThickness: CURVE, bevelSize: INSET, bevelSegments: 6 });
+    const pos = raw.attributes.position;
+    for (let i = 0; i < pos.count; i++)   // press the front bevel flat: the flush rim
+      if (pos.getZ(i) > BAND) pos.setZ(i, BAND);
+    // weld the shoulder's facet normals (~15° apart) so light glides around
+    // the curved back as one surface, while the 90° face-rim edge keeps its
+    // crease — computed AFTER the clamp so the flat face shades flat
+    const geo = toCreasedNormals(raw, Math.PI / 3);
+    if (geo !== raw) raw.dispose();
+    geo.translate(0, 0, (CURVE - BAND) / 2);   // centre the depth: face at +D/2, back at -D/2
     planarUV(geo, CON_CW, CON_CH);        // sane 0..1 UVs for the loading backdrop
     u.panel.geometry = geo;               // deviceGeo is shared — never dispose it
-    // ALL-WHITE body, and only white: no capture ever dresses this slab — the
-    // live page IS its face. Lit (not the unlit basic the screens use) so the
-    // straight sides shade and the body reads as real hardware, in the hall and
-    // in the mirror both; no FX colour lift — lighting + ACES own the white.
+    // The body is bare hardware, never dressed by a capture — the live page
+    // IS its face. WHITE on desktop; on mobile every device reads as a
+    // phone, so the body is BLACK (makeWhiteCanvas's convention, now in 3D).
+    // Lit (not the unlit basic the screens use) so the rim and the curved
+    // back shade like real hardware, in the hall and in the mirror both;
+    // no FX colour lift — lighting + ACES own the tone.
     const liveMat = new THREE.MeshStandardMaterial({
-      color: 0xffffff, roughness: 0.35, metalness: 0, envMapIntensity: 0.8,
+      color: isTouch ? 0x0a0a0a : 0xffffff, roughness: 0.35, metalness: 0, envMapIntensity: 0.8,
     });
     u.panel.material.dispose();           // the basic screen material (its whiteTex dies at reveal)
     u.panel.material = liveMat;
@@ -1434,10 +1449,10 @@ function buildGallery(font){
     // above the portal layer on every device.
     u.visit.visible = false;
     // the slab stays IN the WebGL mirror passes: the glass floor bounces this
-    // WHITE body through the real Reflector — glass tint, blur, true parallax —
+    // bare body through the real Reflector — glass tint, blur, true parallax —
     // and since the body carries no image, that bounce can never go stale. The
     // live picture in the reflection rides a mirrored iframe laid over it (see
-    // liveScreenFor): white bounce under, live image over, nothing to disagree.
+    // liveScreenFor): bare bounce under, live image over, nothing to disagree.
   }
   if (wallProjects.east){
     const f = makeFrame(wallProjects.east, 'auto', autoDelayForRow(0), LOAD_DUR);
@@ -3149,7 +3164,7 @@ function startFrameLoading(f){
     f.add(u.strip);
   }
   u.lastBarPaint = -1;
-  // panel behind the strip: the shared white/black + Aero-tint backdrop
+  // panel behind the strip: the shared flat white/black backdrop
   u.screenMat.map = loadBackdropTex;
   u.screenMat.needsUpdate = true;
   drawLoadingStrip(u.stripCanvas, 0, 0); u.stripTex.needsUpdate = true;
@@ -3558,22 +3573,23 @@ function liveScreenFor(f){
   obj.scale.setScalar(k);
   L.scene.add(obj);
 
-  // ── live floor reflection: white bounce under, live image over ──
-  // The WebGL Reflector bounces the slab's ALL-WHITE body (glass tint, blur,
-  // true parallax) — imageless, so it can never go stale. This SECOND iframe of
+  // ── live floor reflection: bare bounce under, live image over ──
+  // The WebGL Reflector bounces the slab's bare body (glass tint, blur, true
+  // parallax) — imageless, so it can never go stale. This SECOND iframe of
   // the same page lays the LIVE picture over that bounce, mirrored across the
-  // floor plane (y reflected, content flipped via scale.y<0), dimmed + blurred,
-  // depth-fade mask solid at the floor line and gone by the deep end, blue-glass
-  // ramp clipped to the slab's corner radius. Transparent background: where the
-  // fade thins the image, the white WebGL bounce reads through — one merged
-  // reflection, and the earlier doubling is impossible because only THIS layer
-  // carries an image. (The mirror itself can never show the page: no web API
-  // reads a cross-origin iframe's pixels.) A separate instance — a randomiser
-  // shows a different face down there — that never takes input: pe:none,
-  // tabindex -1, allow='' so it can't echo the page's audio.
+  // floor plane (y reflected, content flipped via scale.y<0), dimmed + blurred
+  // at ONE even strength edge to edge — no gradients here, not the blue-glass
+  // tint ramp nor the depth-fade mask that used to thin the image toward the
+  // deep end; the mirror pipeline's own glass colour is all the tint the
+  // bounce gets, and the flat opacity is all the dimming. Transparent
+  // background so the WebGL bounce reads through the page's clear areas —
+  // one merged reflection, and the earlier doubling is impossible because
+  // only THIS layer carries an image. (The mirror itself can never show the
+  // page: no web API reads a cross-origin iframe's pixels.) A separate
+  // instance — a randomiser shows a different face down there — that never
+  // takes input: pe:none, tabindex -1, allow='' so it can't echo the page's
+  // audio.
   const FLOOR_Y = 0.004;                    // glass floor sits here (see buildCorridor)
-  const FADE  = 'linear-gradient(to top, #000 0%, #000 18%, transparent 84%)';   // depth mask: solid at the floor line → gone deep
-  const GLASS = 'linear-gradient(to top, rgba(150,196,221,0.42) 0%, rgba(150,196,221,0.12) 46%, rgba(150,196,221,0) 84%)';  // blue glass, same ramp
   const rel = document.createElement('iframe');
   rel.src = withProtocol(u.project.url);
   rel.allow = '';                           // no autoplay → the reflection can't echo the page's sound
@@ -3582,13 +3598,11 @@ function liveScreenFor(f){
     width: pw + 'px', height: ph + 'px', border:'0', background:'transparent', display:'block',
     borderRadius: el.style.borderRadius,
     pointerEvents:'none', opacity:'0.42', filter:'blur(1.4px) brightness(1.05)',
-    maskImage: FADE, WebkitMaskImage: FADE,     // fade the live image into the white bounce beneath
   });
   const rwrap = document.createElement('div');
   Object.assign(rwrap.style, {
     width: pw + 'px', height: ph + 'px', pointerEvents:'none',
-    borderRadius: el.style.borderRadius, overflow:'hidden',
-    background: GLASS,                           // blue glass shows through the semi-transparent iframe, fading with depth
+    borderRadius: el.style.borderRadius, overflow:'hidden',   // no background — the WebGL bounce is the card
   });
   rwrap.appendChild(rel);
   const robj = new CSS3DObject(rwrap);
