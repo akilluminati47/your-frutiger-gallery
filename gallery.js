@@ -1374,7 +1374,7 @@ function buildGallery(font){
   // the console it wears NO name badge (the prompt still says the name)
   function makeLiveSlab(f){
     const u = f.userData;
-    // The live slab's body, two halves like the early iPad touch hardware:
+    // The live slab's body — the Aero-Pad — in two halves of hardware:
     // the FACE keeps the flush prism rim — corners rounded in plan to the
     // iframe's own radius, a straight band rising to the face plane so the
     // rim meets the rendered page and the two read as one merged object —
