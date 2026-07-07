@@ -6,10 +6,11 @@
 [![Cloudflare Pages](https://img.shields.io/badge/hosted%20on-Cloudflare%20Pages-F38020)](https://pages.cloudflare.com)
 
 A walk-through, first-person 3D gallery in the Frutiger Aero style. Every panel is a
-live screenshot of a site, hung on glass walls over a grassy Bliss landscape, with
-drifting bubbles, a volumetric sky, and a dynamic sun flare. At the end of the hall
-stands a glass console where you design your own gallery, fork this repository, and
-deploy it, all without leaving the world.
+fresh screenshot of a site, hung on glass walls over a grassy Bliss landscape, with
+drifting bubbles, a volumetric sky, and a dynamic sun flare. An end wall can even wake
+its world as a **live, browsable page** standing right in the hall. At the end of the
+hall stands a glass console where you design your own gallery, fork this repository,
+and deploy it, all without leaving the world.
 
 **Walk it now: [frutiger-gallery.pages.dev](https://frutiger-gallery.pages.dev)**
 
@@ -50,8 +51,9 @@ to a Pages project (no build command, no output directory).
 | | |
 |---|---|
 | No build step | Plain `index.html` + `styles.css` + `gallery.js` + `config.js`. Serve the folder statically and it runs. |
-| Live panels | Each work is captured at the visitor's own viewport aspect, so phones see phone layouts and desktops see desktop layouts. |
+| One hall, every device | Every panel is the same wide 16:9 slab on phones, laptops, and ultra-wides alike. Captures render a desktop-laid-out screenful and stretch edge-to-edge, so a gallery looks like itself wherever it's opened. |
 | Self-scaling hall | Add or remove works freely: frames auto-arrange two per row and the glass floor, walls, and legs lengthen to fit. The end walls are independent slots that can hang a world each (00 west, 000 east) or stand as bare glass, and an odd count is always caught by a free end wall; no lonely half-rows. |
+| Live end walls | An end-wall slot with `live: true` wakes its world as a real interactive page on an iPad-style white slab: engage view mode and browse it right there in the hall, floor reflection included. |
 | In-world sign-ups | The back-wall console designs, forks, and hands off deployment: a complete registration pipeline inside the 3D scene. |
 | Fork-safe template | The repository ships anonymous. An owner's real branding lives in a Cloudflare secret or a committed `owner.config.json`, never in the template. |
 | Full input support | Keyboard + mouse, gamepad, and touch are auto-detected, with an adaptive on-screen hint. |
@@ -68,7 +70,7 @@ while you type.
 | Tab | What it does | Preview |
 |---|---|---|
 | identity | Handle, gallery title, browser-tab title, splash and pause lines | Live, on the real splash |
-| worlds | Static west/east end-wall slots (own strings, toggled on/off without losing them) above a paged plaque + URL editor with add/remove, and a wall-balance hint | On your deployed gallery |
+| worlds | Static west/east end-wall slots (own strings, toggled on/off without losing them, plus a **live** toggle that wakes the hung world as an interactive screen) above a paged plaque + URL editor with add/remove, and a wall-balance hint | On your deployed gallery |
 | atmosphere | Bubble count/size/speed, cloud sliders, volume, shuffle and new-tab toggles | Bubbles and volume live |
 | publish | The three-step pipeline above, plus an optional privacy step | |
 
@@ -106,7 +108,7 @@ an owner's real settings arrive through the handshake below.
 | `bubbles` | object | `count` (0 disables, phones run about two-thirds), `size`, `speed` multipliers |
 | `clouds` | object | `cover` 0..1 puffy coverage, `cirrus` 0..1 streak amount |
 | `projects` | array | `{ name, url }` per panel; pairs fill the hall front to back, and an odd LAST entry rides a free end wall automatically (far wall first while the console is off, else the entrance) |
-| `walls` | object | Independent end-wall slots, `west`/`east` each `{ on, name, url }`: west hangs world 00 on the far wall (console off only), east world 000 on the sun-lit entrance. `on: true` builds that glass pane + rail even with an empty slot; `on: false` keeps the strings but builds nothing |
+| `walls` | object | Independent end-wall slots, `west`/`east` each `{ on, name, url, live }`: west hangs world 00 on the far wall (console off only), east world 000 on the sun-lit entrance. `on: true` builds that glass pane + rail even with an empty slot; `on: false` keeps the strings but builds nothing. `live: true` wakes the hung world as a real interactive page on its slab instead of a swoop-away link (and drags the wall toggle on with it — an interactive screen needs its pane) |
 | `console` | object | `enabled: false` removes the sign-ups wall; `sourceRepo` is the template it forks |
 | `shuffleOrder` | bool | Shuffle the hall on every load |
 | `openInNewTab` | bool | Open chosen worlds in a new tab instead of the same-tab swoop |
@@ -137,14 +139,18 @@ directly into an `OWNER_CONFIG` secret.
 
 ## Controls
 
-| Input | Move | Look | Visit / press | Pause |
-|---|---|---|---|---|
-| Keyboard + mouse | `WASD` / arrows | Mouse | `E` / click | `Esc` |
-| Gamepad | Left stick | Right stick | `A` | `Start` |
-| Touch | Left-thumb stick | Drag | Tap | Pause button |
+| Input | Move | Look | Visit / press | View mode | Pause |
+|---|---|---|---|---|---|
+| Keyboard + mouse | `WASD` / arrows | Mouse | `E` / click | `Ctrl` | `Esc` |
+| Gamepad | Left stick | Right stick | `A` | `R3` | `Start` |
+| Touch | Left-thumb stick | Drag | Tap | Eye button | Pause button |
 
 You can only trigger the panel or console control you are actually looking at and
-within range of.
+within range of. **View mode** is how you browse a live end wall: the `view?` pill
+(or `Ctrl`, `R3`, the glowing eye on touch) freezes walking and looking and hands
+your pointer to the page on the slab; the same press — or a click off the slab —
+releases everything and you walk again. Holding `Ctrl` reloads a live page that has
+trapped the pointer, and `Esc` always pauses, no matter what.
 
 ## Local development
 
@@ -217,6 +223,11 @@ layer; sun-lit dust motes drift up the corridor. A dynamic-resolution governor
 watches frame time and trades internal resolution for a locked frame rate, from iGPU
 laptops to phones. Loading cutscenes draw on a small strip plane that maps one-to-one
 to its screen pixels, so the barber-pole bar stays sharp at a fixed upload cost.
+The glass floor is a true planar reflector — blue-tinted, blurred, moving in real
+parallax — and a live end wall composites its page into that mirror as an evenly
+dimmed mirrored image riding the slab's own white bounce. The live slab itself is an
+extruded body in the early-iPad mold: a rim rising flush to the page in front, a
+rounded shoulder sweeping onto a flat inset panel behind.
 
 </details>
 
