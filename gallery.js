@@ -1410,10 +1410,12 @@ function buildGallery(font){
     u.visit.visible = false;
     // the slab stays IN the WebGL mirror passes on purpose: its screen wears the
     // wrapped screenshot (planarUV + fitPanelToImage, console-proportioned), so
-    // the glass floor reflects it through the real Reflector — depth-faded,
-    // blue-tinted, blurred — EXACTLY like the smaller panels' reflections. (A
-    // CSS3D mirrored-iframe reflection was tried and read as a flat sticker: a
-    // DOM layer can't sit in the mirror's light. Screenshot-in-the-mirror wins.)
+    // the glass floor reflects the 3D slab BODY through the real Reflector —
+    // rounded rim, glass tint, blur, true parallax — exactly like the smaller
+    // panels. The LIVE image is layered over that bounce by a mirrored iframe
+    // (see liveScreenFor): the WebGL bounce carries the body, the iframe the
+    // picture. (Each alone failed: iframe-only read as a flat sticker with no
+    // slab body; mirror-only could only ever show the stale screenshot.)
   }
   if (wallProjects.east){
     const f = makeFrame(wallProjects.east, 'auto', autoDelayForRow(0), LOAD_DUR);
@@ -3527,11 +3529,48 @@ function liveScreenFor(f){
   obj.scale.setScalar(k);
   L.scene.add(obj);
 
-  // (no CSS3D floor reflection here: the slab's own WebGL panel — wearing the
-  // wrapped screenshot — stays in the Reflector passes, so the glass floor
-  // bounces it exactly like the smaller panels. A second mirrored iframe was
-  // tried and read as a flat sticker outside the mirror's light.)
-  s = { obj, el, on: null };   // null → the gate's first pass always writes a real state
+  // ── live floor reflection: the WebGL bounce carries the BODY, this carries
+  // the IMAGE ──
+  // The slab's WebGL panel stays IN the Reflector passes (wrapped screenshot,
+  // rounded rim, glass tint, 5-tap blur, true parallax) — that bounce is the
+  // 3D look, and losing it was why a lone mirrored iframe read as a flat
+  // sticker. But the WebGL mirror can only ever show the fetched screenshot:
+  // it cannot sample a cross-origin iframe, so its image goes stale the moment
+  // the live page moves. This SECOND iframe of the same page lays the LIVE
+  // image over the reflected face — mirrored across the floor plane (y
+  // reflected, content flipped via scale.y<0), dimmed + blurred + depth-faded
+  // so it marries the WebGL bounce underneath: where it fades, the mirror's
+  // own reflection carries on. A separate instance (a randomiser shows a
+  // different face down there) that never takes input (pe:none, tabindex -1,
+  // allow='' so it can't echo the page's audio).
+  const FLOOR_Y = 0.004;                    // glass floor sits here (see buildCorridor)
+  const FADE  = 'linear-gradient(to top, #000 0%, #000 18%, transparent 84%)';   // depth mask: solid at the floor line → gone deep
+  const GLASS = 'linear-gradient(to top, rgba(150,196,221,0.42) 0%, rgba(150,196,221,0.12) 46%, rgba(150,196,221,0) 84%)';  // blue glass, same ramp
+  const rel = document.createElement('iframe');
+  rel.src = withProtocol(u.project.url);
+  rel.allow = '';                           // no autoplay → the reflection can't echo the page's sound
+  rel.tabIndex = -1; rel.setAttribute('aria-hidden', 'true');
+  Object.assign(rel.style, {
+    width: pw + 'px', height: ph + 'px', border:'0', background:'transparent', display:'block',
+    borderRadius: el.style.borderRadius,
+    pointerEvents:'none', opacity:'0.42', filter:'blur(1.4px) brightness(1.05)',
+    maskImage: FADE, WebkitMaskImage: FADE,     // fade the live image into the mirror's own bounce
+  });
+  const rwrap = document.createElement('div');
+  Object.assign(rwrap.style, {
+    width: pw + 'px', height: ph + 'px', pointerEvents:'none',
+    borderRadius: el.style.borderRadius, overflow:'hidden',
+    background: GLASS,                           // blue glass shows through the semi-transparent iframe, fading with depth
+  });
+  rwrap.appendChild(rel);
+  const robj = new CSS3DObject(rwrap);
+  rwrap.style.pointerEvents = 'none';       // re-assert over CSS3DObject's constructor force-auto
+  robj.position.set(obj.position.x, 2 * FLOOR_Y - obj.position.y, obj.position.z);
+  robj.rotation.y = obj.rotation.y;
+  robj.scale.set(k, -k, k);                 // reflected below the floor, flipped top-to-bottom
+  L.scene.add(robj);
+
+  s = { obj, el, on: null, robj, rel };   // null → the gate's first pass always writes a real state
   L.byFrame.set(f, s);
   return s;
 }
