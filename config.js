@@ -97,8 +97,14 @@ export const CONFIG = {
   // with any URL that allows iframe embedding, hosted in any repo — the
   // world does NOT need to live inside this one. A west live screen waits
   // while the console is on (the console owns that wall).
+  // The west slot ships HARDCODED to the template's own home — the calling
+  // card. The console seeds every design from these strings, and new designs
+  // default the builder OFF, so a published fork hangs a "Build a Gallery"
+  // panel on its far wall pointing back here — the loop that grows the place.
+  // Owners who keep the builder ON park this under the console instead (the
+  // strings survive); owners who want it gone just clear them in the console.
   walls: {
-    west: { on: true, name: "", url: "", live: false },
+    west: { on: true, name: "Build a Gallery", url: "https://frutiger-gallery.pages.dev/", live: false },
     east: { on: true, name: "Designer", url: "https://akilluminati47.pages.dev/", live: false },
   },
 
