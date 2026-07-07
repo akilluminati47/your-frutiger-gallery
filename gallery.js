@@ -2085,7 +2085,14 @@ function drawWorlds(cc, top){
       wallSet: v => { s.on = v; saveDraft(); ui.dirty = true; },
     };
   };
-  const conOwns = d.consoleOn || CON_ENABLED;
+  // the DRAFT decides whether the console owns the west wall — never this
+  // deployment's own CON_ENABLED. The design applies on the visitor's deploy:
+  // with the build-a-gallery toggle off (the seed default), BOTH west toggles
+  // are real and a typed link is valid — it hangs on the published gallery
+  // even while the console still stands in THIS hall. (Parking on CON_ENABLED
+  // made the hint below a lie on any console-enabled deployment — the template
+  // itself — where "hide it in atmosphere" could never un-park the row.)
+  const conOwns = d.consoleOn;
   wallRow('west',
     conOwns            ? 'west wall — the console lives here'
     : d.walls.west.live ? 'west wall — live screen'
@@ -2094,6 +2101,12 @@ function drawWorlds(cc, top){
   if (conOwns){
     cc.fillStyle = AERO.inkFaint; cFont(cc, 19); cc.textAlign = 'left'; cc.textBaseline = 'alphabetic';
     cc.fillText('parked under the console — hide it (atmosphere tab) and your west link hangs here instead: static panel, or big interactive screen with live on', 70, y - 30);
+    y += 26;
+  } else if (CON_ENABLED){
+    // this hall still shows its console (its own config), but the visitor's
+    // design has the builder off — say where their west link actually lands
+    cc.fillStyle = AERO.inkFaint; cFont(cc, 19); cc.textAlign = 'left'; cc.textBaseline = 'alphabetic';
+    cc.fillText('the console stands on this wall in THIS hall — on your deployed gallery (builder off) this west link hangs in its place', 70, y - 30);
     y += 26;
   }
   wallRow('east',
