@@ -53,7 +53,8 @@ to a Pages project (no build command, no output directory).
 | No build step | Plain `index.html` + `styles.css` + `gallery.js` + `config.js`. Serve the folder statically and it runs. |
 | One hall, every device | Every panel is the same wide 16:9 slab on phones, laptops, and ultra-wides alike. Captures render a desktop-laid-out screenful and stretch edge-to-edge, so a gallery looks like itself wherever it's opened. |
 | Self-scaling hall | Add or remove works freely: frames auto-arrange two per row and the glass floor, walls, and legs lengthen to fit. The end walls are independent slots that can hang a world each (00 west, 000 east) or stand as bare glass, and an odd count is always caught by a free end wall; no lonely half-rows. |
-| Live end walls | An end-wall slot with `live: true` wakes its world as a real interactive page on the Aero-Pad, a white hardware slab: engage view mode and browse it right there in the hall, floor reflection included. |
+| Live end walls | An end-wall slot with `live: true` wakes its world as a real interactive page on the Aero-Pad, a white hardware slab: engage view mode and browse it right there in the hall. The floor reflection is the same page painted twice — one browsing context, so even a fast animation stays frame-locked with its mirror. |
+| Directional live sound | The hall streams placement to each live page (`postMessage {type:'fg-audio', gain, pan}` at ~10 Hz): volume falls with distance, ducks behind your head, pans to the slab's ear, and follows the console volume slider. A hung page opts in by loading [`live-audio.js`](live-audio.js) early (or handling the message itself); pause silences it with everything else. |
 | In-world sign-ups | The back-wall console designs, forks, and hands off deployment: a complete registration pipeline inside the 3D scene. |
 | Fork-safe template | The repository ships anonymous. An owner's real branding lives in a Cloudflare secret or a committed `owner.config.json`, never in the template. |
 | Full input support | Keyboard + mouse, gamepad, and touch are auto-detected, with an adaptive on-screen hint. |
@@ -224,8 +225,10 @@ watches frame time and trades internal resolution for a locked frame rate, from 
 laptops to phones. Loading cutscenes draw on a small strip plane that maps one-to-one
 to its screen pixels, so the barber-pole bar stays sharp at a fixed upload cost.
 The glass floor is a true planar reflector — blue-tinted, blurred, moving in real
-parallax — and a live end wall composites its page into that mirror as an evenly
-dimmed mirrored image riding the slab's own white bounce. The live slab itself is the
+parallax — and a live end wall lays its page into that mirror by painting the face
+iframe's own pixels a second time (`-webkit-box-reflect`, evenly dimmed), riding the
+slab's white bounce: one browsing context rendered twice, so the reflection can never
+fall out of step with the page. The live slab itself is the
 Aero-Pad, an extruded body: a rim rising flush to the page in front, a rounded
 shoulder sweeping onto a flat inset panel behind.
 
