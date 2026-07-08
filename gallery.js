@@ -1433,8 +1433,9 @@ function buildGallery(font){
     // the slab stays IN the WebGL mirror passes: the glass floor bounces this
     // bare body through the real Reflector — glass tint, blur, true parallax —
     // and since the body carries no image, that bounce can never go stale. The
-    // live picture in the reflection rides a mirrored iframe laid over it (see
-    // liveScreenFor): bare bounce under, live image over, nothing to disagree.
+    // live picture in the reflection is the face iframe's own pixels painted a
+    // second time via box-reflect (see liveScreenFor): bare bounce under, live
+    // image over, and the two images are one page — nothing to disagree.
   }
   if (wallProjects.east){
     const f = makeFrame(wallProjects.east, 'auto', autoDelayForRow(0), LOAD_DUR);
@@ -2941,6 +2942,12 @@ function pollPad(dt){
    ════════════════════════════════════════════════════════════════ */
 const audio = (() => {
   let ctx, master;
+  // mirrored copy of the master gain — live pages play OUTSIDE our WebAudio
+  // graph (their own context, their own process), so the placement streamed
+  // to them (pagePlace) scales by this instead. Seeded here, not in init():
+  // the placement stream starts with the walk, the master with the first
+  // gesture, and the two must never disagree in between.
+  let vol = clamp(CONFIG.volume ?? 0.6, 0, 1);
   const SFX = {
     press:    'sfx/Windows User Account Control.wav',  // console widget clicked
     hover:    'sfx/Windows Information Bar.wav',       // console field/button highlight
@@ -2961,7 +2968,8 @@ const audio = (() => {
   function init(){
     if (ctx) { ctx.resume(); return; }
     ctx = new (window.AudioContext || window.webkitAudioContext)();
-    master = ctx.createGain(); master.gain.value = CONFIG.volume ?? 0.6;
+    vol = clamp(CONFIG.volume ?? 0.6, 0, 1);
+    master = ctx.createGain(); master.gain.value = vol;
     master.connect(ctx.destination);
     for (const k of Object.keys(raw))
       decoded[k] = raw[k].then(ab => ab ? ctx.decodeAudioData(ab) : null)
@@ -3014,10 +3022,31 @@ const audio = (() => {
     const t0 = performance.now();
     decoded[name]?.then(b => { if (b && performance.now() - t0 < 1200) start(b, pos, peak, name); });
   }
-  // console volume slider drives the master gain live
-  function setVolume(v){ if (master) master.gain.value = clamp(v, 0, 1); }
+  // ── live-page placement: place()'s continuous cousin for a page's own
+  // soundtrack. Same ear math, two differences: the falloff runs to true
+  // silence (a far slab's music is gone, not a faint bed like a one-shot
+  // ding), and a FACING factor joins the distance — a slab you look at plays
+  // full, one behind your head drops to a muffled third, so turning toward
+  // the music brings it up the way it would in a real hall. Scaled by the
+  // master volume because the page's audio never crosses our graph: the
+  // portal gate STREAMS this result into the iframe (postMessage 'fg-audio')
+  // for live-audio.js — or the page's own listener — to apply.
+  function pagePlace(pos){
+    if (!pos || !camera) return { gain: vol, pan: 0 };
+    camera.getWorldPosition(_ear);
+    _to.copy(pos).sub(_ear);
+    const dist = _to.length();
+    const fall = clamp(1 - (dist - 3) / 24, 0, 1);           // full ≤3 m → silent by ~27 m
+    camera.getWorldDirection(_fwd);
+    _right.crossVectors(_fwd, camera.up).normalize();
+    _to.divideScalar(Math.max(dist, 1e-4));
+    const face = 0.35 + 0.65 * (0.5 + 0.5 * _to.dot(_fwd));  // behind → 0.35, dead ahead → 1
+    return { gain: clamp(fall * face, 0, 1) * vol, pan: clamp(_to.dot(_right), -1, 1) * 0.8 };
+  }
+  // console volume slider drives the master gain live (and the pagePlace mirror)
+  function setVolume(v){ vol = clamp(v, 0, 1); if (master) master.gain.value = vol; }
   return {
-    init, setVolume,
+    init, setVolume, pagePlace,
     press:       ()  => playBuf('press', null, 0.9),
     hover:       ()  => playBuf('hover', null, 0.65),
     publish:     ()  => playBuf('publish', null, 0.9),
@@ -3433,7 +3462,7 @@ function toggleView(){
 // win by releasing our own, so it also resets whatever state the page grabbed.
 function refreshPortals(){
   if (live3d) for (const [, s] of live3d.byFrame){
-    try { s.el.src = s.el.src; if (s.rel) s.rel.src = s.rel.src; } catch {}   // face + its floor reflection
+    try { s.el.src = s.el.src; } catch {}   // the face — its box-reflect mirror follows by construction
   }
   exitView();
 }
@@ -3481,13 +3510,17 @@ function showViewHint(on){
    keyboard focus (Esc included) into the cross-origin page. The iframe
    survives everything short of leaving the page (or a Ctrl-hold reload)
    — a game on the wall keeps its state. Any URL that permits framing
-   works, whichever repo hosts it.
+   works, whichever repo hosts it. A page that also loads live-audio.js
+   (or listens for 'fg-audio' itself) gains DIRECTIONAL sound: the gate
+   loop streams {gain, pan} placement at ~10 Hz, so its soundtrack fades
+   with distance, ducks behind your head and pans to the slab's ear.
    ════════════════════════════════════════════════════════════════ */
 const PORTAL_RANGE    = 6.9;   // mouse-use reach of a live portal, in world units
 const PORTAL_DEADBAND = 1.2;   // inner no-mouse band: the face sits ~0.45 ahead of the
                                // frame origin, and a quad crossing the eye projects as garbage
 let live3d = null;       // lazy singleton: { container, renderer, scene, byFrame, shown }
 let hallCursor = null;   // last body.cursor-live state (null → first pass always writes)
+let portalAudioTick = 0; // frame counter for the ~10 Hz placement stream (gate loop)
 
 function liveLayerInit(){
   if (live3d) return live3d;
@@ -3555,46 +3588,31 @@ function liveScreenFor(f){
   obj.scale.setScalar(k);
   L.scene.add(obj);
 
-  // ── live floor reflection: bare bounce under, live image over ──
-  // The WebGL Reflector bounces the slab's bare body (glass tint, blur, true
-  // parallax) — imageless, so it can never go stale. This SECOND iframe of
-  // the same page lays the LIVE picture over that bounce, mirrored across the
-  // floor plane (y reflected, content flipped via scale.y<0), dimmed + blurred
-  // at ONE even strength edge to edge — no gradients here, not the blue-glass
-  // tint ramp nor the depth-fade mask that used to thin the image toward the
-  // deep end; the mirror pipeline's own glass colour is all the tint the
-  // bounce gets, and the flat opacity is all the dimming. Transparent
-  // background so the WebGL bounce reads through the page's clear areas —
-  // one merged reflection, and the earlier doubling is impossible because
-  // only THIS layer carries an image. (The mirror itself can never show the
-  // page: no web API reads a cross-origin iframe's pixels.) A separate
-  // instance — a randomiser shows a different face down there — that never
-  // takes input: pe:none, tabindex -1, allow='' so it can't echo the page's
-  // audio.
+  // ── live floor reflection: the SAME iframe, painted twice ──
+  // -webkit-box-reflect duplicates the wrapper's own painted pixels below its
+  // box: ONE browsing context, rendered twice by the compositor, so an
+  // animated page (the zoom quilt) is frame-locked with its own mirror by
+  // construction. The second-iframe copy this replaces never could be — a
+  // separate load runs its own clock (a randomiser even showed a different
+  // face down there). Chromium replicates cross-origin iframes into the
+  // reflection (verified, 3D-transformed wrappers included), and since the
+  // copy lives in the wrapper's plane, the CSS3D perspective transform lands
+  // it exactly on the mirrored geometry below the glass; the offset opens the
+  // bottom-edge→floor gap twice over (a face spanning [y0,y1] reflects to
+  // [-y1,-y0] about the floor plane). The gradient mask is the dimmer — flat
+  // 0.42, one even strength edge to edge, exactly the old opacity — and the
+  // WebGL Reflector's bare-body bounce (glass tint, blur, true parallax)
+  // still reads through under it; the mirror itself can never show the page
+  // (no web API reads a cross-origin iframe's pixels). A painted copy takes
+  // no input, holds no focus and plays no sound, so the old rel-iframe's
+  // pe:none / tabindex / allow='' guards retire with it.
   const FLOOR_Y = 0.004;                    // glass floor sits here (see buildCorridor)
-  const rel = document.createElement('iframe');
-  rel.src = withProtocol(u.project.url);
-  rel.allow = '';                           // no autoplay → the reflection can't echo the page's sound
-  rel.tabIndex = -1; rel.setAttribute('aria-hidden', 'true');
-  Object.assign(rel.style, {
-    width: pw + 'px', height: ph + 'px', border:'0', background:'transparent', display:'block',
-    borderRadius: el.style.borderRadius,
-    pointerEvents:'none', opacity:'0.42', filter:'blur(1.4px) brightness(1.05)',
-  });
-  const rwrap = document.createElement('div');
-  Object.assign(rwrap.style, {
-    width: pw + 'px', height: ph + 'px', pointerEvents:'none',
-    borderRadius: el.style.borderRadius, overflow:'hidden',   // no background — the WebGL bounce is the card
-  });
-  rwrap.appendChild(rel);
-  const robj = new CSS3DObject(rwrap);
-  rwrap.style.pointerEvents = 'none';       // re-assert over CSS3DObject's constructor force-auto
-  robj.position.set(obj.position.x, 2 * FLOOR_Y - obj.position.y, obj.position.z);
-  robj.rotation.y = obj.rotation.y;
-  robj.scale.set(k, -k, k);                 // reflected below the floor, flipped top-to-bottom
-  L.scene.add(robj);
+  const bottomY = obj.position.y - (ph * k) / 2;          // slab face's bottom edge, world
+  const gapPx = Math.max(0, 2 * (bottomY - FLOOR_Y) / k); // that gap, doubled, in element px
+  wrap.style.webkitBoxReflect =
+    `below ${gapPx.toFixed(1)}px linear-gradient(rgba(0,0,0,0.42), rgba(0,0,0,0.42))`;
 
-  s = { obj, el, on: null, robj, rel };   // null → the gate's first pass always writes a real state
+  s = { obj, el, on: null };   // null → the gate's first pass always writes a real state
   L.byFrame.set(f, s);
   return s;
 }
@@ -3735,6 +3753,14 @@ function animate(){
   // that held keyboard focus, focus comes home so Esc answers the gallery.
   if (live3d){
     camera.getWorldDirection(_portalFwd);
+    // ~10 Hz placement stream: the hall can't reach a cross-origin page's
+    // sound (no web API crosses that fence), so it TELLS the page where it
+    // hangs instead — {gain, pan} from distance + facing + master volume
+    // (audio.pagePlace), for live-audio.js or the page's own listener to
+    // apply. Paused/menu streams gain 0: Esc silences the walls with
+    // everything else. targetOrigin '*' — placement is public knowledge.
+    const sayAudio = (portalAudioTick++ % 6) === 0;
+    const playing  = state === 'play' || state === 'intro' || state === 'launching';
     for (const [f, s] of live3d.byFrame){
       const dx = f.userData.worldPos.x - _camWorld.x, dz = f.userData.worldPos.z - _camWorld.z;
       const d = Math.hypot(dx, dz);
@@ -3745,6 +3771,13 @@ function animate(){
         s.on = on;
         s.el.style.pointerEvents = on ? 'auto' : 'none';
         if (!on && document.activeElement === s.el){ s.el.blur(); window.focus(); }
+      }
+      if (sayAudio){
+        const sp = playing ? audio.pagePlace(f.userData.worldPos) : { gain: 0, pan: 0 };
+        try {
+          s.el.contentWindow?.postMessage(
+            { type:'fg-audio', v:1, gain:+sp.gain.toFixed(3), pan:+sp.pan.toFixed(3) }, '*');
+        } catch { /* the frame is mid-navigation — next tick reaches it */ }
       }
     }
   }
