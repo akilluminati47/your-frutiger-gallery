@@ -133,7 +133,7 @@ export const CONFIG = {
   //   "thumio"    – image.thum.io  (fast, honours width/height, good CORS)
   //   "mshots"    – WordPress mShots (free, can be slow on first hit)
   //   "microlink" – api.microlink.io (clean, rate-limited on free tier)
-  screenshotProvider: "thumio",
+  screenshotProvider: "microlink",
 
   // Next-gen post-processing (HDR bloom, filmic grade, dynamic resolution).
   // Leave true for the full look; set false only if a very old GPU struggles.

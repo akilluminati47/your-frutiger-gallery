@@ -67,10 +67,14 @@ const SHOT_H = Math.round(SHOT_W / ASPECT);
 
 function withProtocol(u){ return /^https?:\/\//i.test(u) ? u : 'https://' + u; }
 
-function screenshotURL(provider, url, w, h){
-  const maxAge = 86400;
+function screenshotURL(provider, url, w, h, freshKey = ''){
+  const maxAge = freshKey ? 0 : 86400;
   const full = withProtocol(url);
-  const enc  = encodeURIComponent(full);
+  const captureUrl = freshKey
+    ? `${full}${full.includes('?') ? '&' : '?'}fgfresh=${encodeURIComponent(freshKey)}`
+    : full;
+  const reqBust = freshKey ? `&fgfresh=${encodeURIComponent(freshKey)}` : '';
+  const enc  = encodeURIComponent(captureUrl);
   // w is both the render viewport width AND the output width, h the matching crop,
   // so the capture lands at the device/panel aspect (one screenful). Every provider
   // gets generous render time so the capture is fully painted (fonts + lazy images).
@@ -78,13 +82,13 @@ function screenshotURL(provider, url, w, h){
     case 'mshots':
       // mShots renders fresh server-side; vpw/vph pin the viewport so the crop is a
       // single device screen, not a tall slice with empty page below.
-      return `https://s.wordpress.com/mshots/v1/${enc}?w=${w}&h=${h}&vpw=${w}&vph=${h}`;
+      return `https://s.wordpress.com/mshots/v1/${enc}?w=${w}&h=${h}&vpw=${w}&vph=${h}${reqBust}`;
     case 'microlink':
       // networkidle0 + a settle delay → wait until the page is truly quiet (web
       // fonts swapped in, images decoded) instead of grabbing a half-painted frame.
       return `https://api.microlink.io/?url=${enc}&screenshot=true&embed=screenshot.url`
            + `&viewport.width=${w}&viewport.height=${h}&viewport.deviceScaleFactor=1`
-           + `&waitUntil=networkidle0&waitForTimeout=2500&meta=false`;
+           + `&waitUntil=networkidle0&waitForTimeout=2500&meta=false${reqBust}`;
     case 'thumio':
     default:
       // width == viewportWidth + crop/height → exactly the visitor's screen at the
@@ -98,8 +102,8 @@ function screenshotURL(provider, url, w, h){
 // Robust capture: try providers in order, first one that actually decodes wins.
 // Guards against a single provider rate-limiting, blocking a domain, or returning
 // a broken/empty image — the live fetch falls back instead of leaving a blank.
-const PROVIDERS = [...new Set([CONFIG.screenshotProvider, 'thumio', 'mshots', 'microlink'])];
-function fetchScreenshot(url, onImg, onFail){
+const PROVIDERS = [...new Set([CONFIG.screenshotProvider, 'microlink', 'mshots', 'thumio'].filter(Boolean))];
+function fetchScreenshot(url, onImg, onFail, freshKey = ''){
   let i = 0;
   const tryNext = async () => {
     if (i >= PROVIDERS.length){ onFail?.(); return; }
@@ -108,7 +112,7 @@ function fetchScreenshot(url, onImg, onFail){
       // fetch first so the HTTP status is visible: thum.io answers rate-limits
       // with a 403 that still carries a decodable "error" image, which would
       // sail through a plain <img> onload and paint a blank panel forever.
-      const res = await fetch(screenshotURL(prov, url, SHOT_W, SHOT_H), { mode: 'cors' });
+      const res = await fetch(screenshotURL(prov, url, SHOT_W, SHOT_H, freshKey), { mode: 'cors' });
       if (!res.ok) return tryNext();
       const blob = await res.blob();
       if (!blob.type.startsWith('image/')) return tryNext();
@@ -130,6 +134,27 @@ function fetchScreenshot(url, onImg, onFail){
    ════════════════════════════════════════════════════════════════ */
 // 'pending' | THREE.Texture | null (null = load failed, still reveal)
 const prefetchMap = new Map();
+
+function galleryScreenshotUrls(){
+  const walls = normWalls(CONFIG.walls);
+  const urls = new Set(CONFIG.projects.map(p => p.url));
+  for (const s of ['west', 'east'])
+    if (walls[s].on && walls[s].url.trim()) urls.add(walls[s].url.trim());
+  return urls;
+}
+
+function textureFromScreenshot(img){
+  const tex = new THREE.Texture(img);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.generateMipmaps = true;
+  tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  tex.needsUpdate = true;
+  renderer.initTexture(tex);
+  return tex;
+}
 
 function preFetchScreenshots(){
   // corridor worlds + the end-wall slots — the slots are independent strings
@@ -160,6 +185,62 @@ function preFetchScreenshots(){
 }
 // Fire immediately — renderer + FW are set up synchronously below, and every
 // onload callback is async so it sees the fully-initialised module.
+function applyFreshScreenshot(url, tex){
+  for (const f of frames){
+    const u = f.userData;
+    if (u.project.url !== url || u.liveWall) continue;
+    if (u.liveTexture && u.liveTexture !== tex) u.liveTexture.dispose?.();
+    u.liveTexture = tex;
+    u.imageReady = !!tex;
+    if (u.loadState === 'done'){
+      u.screenMat.map = tex || loadBackdropTex;
+      u.screenMat.needsUpdate = true;
+      if (tex) fitPanelToImage(u, tex);
+    }
+  }
+}
+
+// ── forced thumbnail refresh (hold R in the pause menu) ──
+// Re-captures every slab from a fresh cache key. The pause card's #refreshStatus
+// line reads "fetching thumbnails . . ." until the LAST capture resolves (success
+// or fail), then flashes "thumbnails updated" and clears. refreshInFlight guards
+// against a second hold re-arming the batch while one is still running.
+let refreshInFlight = 0, refreshStatusT = null;
+function setRefreshStatus(txt){
+  const el = $('refreshStatus');
+  if (!el) return;
+  if (txt){ el.textContent = txt; el.classList.remove('hidden'); }
+  else { el.textContent = ''; el.classList.add('hidden'); }
+}
+function refreshSlabPreviews(){
+  if (refreshInFlight > 0) return;             // a batch is already running
+  const urls = [...galleryScreenshotUrls()];
+  if (!urls.length) return;
+  clearTimeout(refreshStatusT);
+  refreshInFlight = urls.length;
+  setRefreshStatus('fetching thumbnails . . .');
+  const settle = () => {
+    if (--refreshInFlight > 0) return;
+    refreshInFlight = 0;
+    setRefreshStatus('thumbnails updated');
+    refreshStatusT = setTimeout(() => { if (refreshInFlight === 0) setRefreshStatus(''); }, 1800);
+  };
+  const freshKey = Date.now().toString(36);
+  for (const url of urls){
+    prefetchMap.set(url, 'pending');
+    fetchScreenshot(url,
+      (img) => {
+        const tex = textureFromScreenshot(img);
+        prefetchMap.set(url, tex);
+        applyFreshScreenshot(url, tex);
+        settle();
+      },
+      () => { prefetchMap.set(url, null); settle(); },
+      freshKey
+    );
+  }
+}
+
 preFetchScreenshots();
 
 /* ════════════════════════════════════════════════════════════════
@@ -2674,8 +2755,20 @@ const keys = {};
 // cancels both so the browser's own shortcuts still fire.
 const CTRL_HOLD_MS = 550;
 let ctrlDownAt = 0, ctrlHeld = false, ctrlHoldFired = false, ctrlCombo = false, ctrlHoldT = null;
+const DEBUG_REFRESH_HOLD_MS = 2000;
+let debugRefreshHeld = false, debugRefreshT = null;
 addEventListener('keydown', e => {
   if (consoleTypeKey(e)) return;      // a lit console field owns the keyboard
+  if (state === 'paused' && e.code === 'KeyR'){
+    if (!debugRefreshHeld && !e.repeat){
+      debugRefreshHeld = true;
+      clearTimeout(debugRefreshT);
+      debugRefreshT = setTimeout(() => {
+        if (debugRefreshHeld && state === 'paused') refreshSlabPreviews();
+      }, DEBUG_REFRESH_HOLD_MS);
+    }
+    return;
+  }
   if (e.code === 'ControlLeft' || e.code === 'ControlRight'){
     if (!ctrlHeld && !e.repeat){
       ctrlHeld = true; ctrlHoldFired = false; ctrlCombo = false; ctrlDownAt = performance.now();
@@ -2713,6 +2806,10 @@ addEventListener('keydown', e => {
 });
 addEventListener('keyup', e => {
   keys[e.code] = false;
+  if (e.code === 'KeyR'){
+    debugRefreshHeld = false;
+    clearTimeout(debugRefreshT); debugRefreshT = null;
+  }
   if (e.code === 'ControlLeft' || e.code === 'ControlRight'){
     clearTimeout(ctrlHoldT); ctrlHoldT = null;
     const heldMs = performance.now() - ctrlDownAt;
