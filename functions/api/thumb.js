@@ -29,7 +29,14 @@ const DAY_S   = 86400;
 const MAX_BYTES = 3_000_000;        // 3 MB cap per stored crop (KV allows up to 25 MB)
 const te = new TextEncoder();
 
+// Up to TWO crops live per world: the ACTIVE one under thumb:<url> (what the
+// gallery serves — same key as ever) and, when the world has been captured by
+// BOTH providers, the other provider's crop PARKED under alt:<url>. A PUT whose
+// prov differs from the active crop's parks the old one instead of erasing it,
+// and PUT ?swap=1 exchanges the two — the /thumbs Swap pill rides on that.
 const objKey = url => 'thumb:' + url;
+const altKey = url => 'alt:' + url;
+const provOf = m => m?.prov || 'microlink';   // legacy crops predate the tag; only microlink wins were ever uploaded
 const slotNow = () => Math.floor(Date.now() / (DAY_S * 1000));   // rotating 24h bucket
 
 async function token(secret, url, slot){
@@ -55,6 +62,7 @@ export async function onRequest({ request, env }){
           url: k.name.slice(6),                       // strip 'thumb:'
           ts: k.metadata?.ts || null,
           contentType: k.metadata?.contentType || null,
+          prov: provOf(k.metadata),                   // which provider captured the ACTIVE crop
           expiration: k.expiration || null,
         });
       }
@@ -83,10 +91,11 @@ export async function onRequest({ request, env }){
             'content-type': metadata?.contentType || 'image/png',
             'cache-control': 'public, max-age=300, stale-while-revalidate=600',
             'access-control-allow-origin': '*',
-            'access-control-expose-headers': 'x-thumb-ask',
+            'access-control-expose-headers': 'x-thumb-ask, x-thumb-age, x-thumb-prov',
             // still hand out a token so a forced refresh (hold-R) can overwrite
             'x-thumb-ask': await token(secret, target, slotNow()),
             'x-thumb-age': Math.floor(ageS).toString(),
+            'x-thumb-prov': provOf(metadata),
           },
         });
       }
@@ -112,15 +121,39 @@ export async function onRequest({ request, env }){
             || tok === await token(secret, target, slotNow() - 1);
     if (!ok) return new Response('bad token', { status: 403 });
 
+    // ── ?swap=1 (no body): exchange the active crop with the parked one ──
+    // The /thumbs Swap pill calls this first; a 404 (nothing parked) tells the
+    // client to capture the other provider's crop itself instead.
+    if (u.searchParams.get('swap')){
+      const [act, alt] = await Promise.all([
+        store.getWithMetadata(objKey(target), { type: 'arrayBuffer' }),
+        store.getWithMetadata(altKey(target), { type: 'arrayBuffer' }),
+      ]);
+      const hdrs = { 'content-type': 'application/json', 'access-control-allow-origin': '*', 'cache-control': 'no-store' };
+      if (!alt?.value) return new Response(JSON.stringify({ swapped: false }), { status: 404, headers: hdrs });
+      await store.put(objKey(target), alt.value, { expirationTtl: DAY_S, metadata: alt.metadata });
+      if (act?.value) await store.put(altKey(target), act.value, { expirationTtl: DAY_S, metadata: act.metadata });
+      else await store.delete(altKey(target));
+      return new Response(JSON.stringify({ swapped: true, active: provOf(alt.metadata) }), { headers: hdrs });
+    }
+
     const type = request.headers.get('content-type') || '';
     if (!type.startsWith('image/')) return new Response('not an image', { status: 415 });
     const buf = await request.arrayBuffer();
     if (buf.byteLength < 1500 || buf.byteLength > MAX_BYTES)
       return new Response('bad size', { status: 413 });
 
+    // which provider rendered this crop — the two-slot store is keyed on it
+    const prov = u.searchParams.get('prov') === 'thumio' ? 'thumio' : 'microlink';
+    // a DIFFERENT provider's crop is sitting active → park it instead of erasing
+    // it, so the world keeps one crop per provider (up to 2) and Swap can bounce
+    const cur = await store.getWithMetadata(objKey(target), { type: 'arrayBuffer' });
+    if (cur?.value && provOf(cur.metadata) !== prov)
+      await store.put(altKey(target), cur.value, { expirationTtl: DAY_S, metadata: cur.metadata });
+
     await store.put(objKey(target), buf, {
       expirationTtl: DAY_S,                                 // auto-refresh cycle
-      metadata: { contentType: type, ts: Date.now() },
+      metadata: { contentType: type, ts: Date.now(), prov },
     });
     return new Response('stored', { status: 200, headers: { 'access-control-allow-origin': '*' } });
   }
