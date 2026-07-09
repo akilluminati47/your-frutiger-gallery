@@ -126,7 +126,9 @@ function screenshotURL(provider, url, w, h, freshKey = ''){
 // everything through the proxy would 429 on Cloudflare's shared IP and give
 // everyone thum.io — hence own-IP first.) mShots isn't here: no CORS in the
 // browser; thum.io lives only inside the proxy as its deep last resort.
-const PROVIDERS = [...new Set([CONFIG.screenshotProvider, 'microlink', 'proxy'].filter(Boolean))];
+const PROVIDERS = CONFIG.screenshotProvider
+  ? [CONFIG.screenshotProvider, 'proxy']
+  : ['microlink', 'proxy'];
 function fetchScreenshot(url, onImg, onFail, freshKey = ''){
   let i = 0;
   const tryNext = async () => {
