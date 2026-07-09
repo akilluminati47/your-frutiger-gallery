@@ -3776,6 +3776,27 @@ function updateSunGaze(dt){
     if (lg){ lg.style.transition = `opacity ${TIPS_FADE}s ease`; lg.style.opacity = '0'; }
   }
 }
+
+// ── sun-glare bloom: a screen-blend DOM glow tracked to the sun's screen spot,
+//    layered above the CSS3D live panels so the flare spills onto an interactive
+//    slab instead of being clipped by it. Eases in as you turn toward the sun. ──
+const sunglowEl = $('sunglow');
+const _glowDir = new THREE.Vector3();
+const _sunNdc  = new THREE.Vector3();
+const _sunWorld = SUN_DIR.clone().multiplyScalar(460);   // sits on the flare / sky-shader sun
+function updateSunGlow(){
+  if (!sunglowEl) return;
+  if (state !== 'play' && state !== 'intro'){ sunglowEl.style.opacity = '0'; return; }
+  camera.getWorldDirection(_glowDir);
+  const facing = _glowDir.dot(SUN_DIR);          // 1 = looking straight at the sun, ≤0 = away
+  if (facing <= 0.12){ sunglowEl.style.opacity = '0'; return; }
+  _sunNdc.copy(_sunWorld).project(camera);       // world sun → normalised screen coords
+  const k = clamp((facing - 0.12) / 0.88, 0, 1), bloom = k * k;
+  sunglowEl.style.left = ((_sunNdc.x * 0.5 + 0.5) * innerWidth)  + 'px';
+  sunglowEl.style.top  = ((-_sunNdc.y * 0.5 + 0.5) * innerHeight) + 'px';
+  sunglowEl.style.transform = `translate(-50%,-50%) scale(${(0.55 + 1.05 * bloom).toFixed(3)})`;
+  sunglowEl.style.opacity = (0.2 + 0.62 * bloom).toFixed(3);
+}
 function animate(){
   const dt = Math.min(clock.getDelta(), 0.05);
   const t  = clock.elapsedTime;
@@ -3788,6 +3809,7 @@ function animate(){
   updateLoadingSystem(dt, t);
   updateConsole();             // back-wall console: aim, hover, repaint
   updateSunGaze(dt);
+  updateSunGlow();             // sun-glare bloom over the live panels
 
   // Name-plaque bloop-in: scale 0.01→1.22→1.0 with overshoot, opacity 0→1
   for (const f of frames){

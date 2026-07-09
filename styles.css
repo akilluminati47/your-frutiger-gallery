@@ -31,6 +31,22 @@ body.cursor-live{ cursor:default; }
 #scene{ position:fixed; inset:0; }
 #scene canvas{ display:block; }
 
+/* ── Sun-glare bloom over the live panels ────────────────────────
+   z-index 14 sits ABOVE the CSS3D live-panel layer (z 12) and below the HUD
+   (z 20); screen blend lifts darker panels (the flare "spills" onto them) while
+   barely touching the already-bright sky. gallery.js tracks left/top to the
+   sun's screen projection and eases opacity/scale by how directly you face it. */
+#sunglow{
+  position:fixed; left:50%; top:20%; z-index:14; pointer-events:none;
+  width:900px; height:900px; border-radius:50%;
+  transform:translate(-50%,-50%) scale(.6); opacity:0;
+  mix-blend-mode:screen; will-change:left,top,transform,opacity;
+  background:radial-gradient(circle,
+    rgba(255,247,224,.95) 0%, rgba(255,236,188,.55) 16%,
+    rgba(255,222,150,.24) 38%, rgba(255,214,150,.08) 58%, transparent 72%);
+}
+@media (prefers-reduced-motion: reduce){ #sunglow{ transition:none; } }
+
 /* ── White swoop / fade overlay ─────────────────────────────── */
 #fade{
   position:fixed; inset:0; z-index:40; pointer-events:none;

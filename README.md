@@ -283,7 +283,11 @@ iframe's own pixels a second time (`-webkit-box-reflect`, evenly dimmed), riding
 slab's white bounce: one browsing context rendered twice, so the reflection can never
 fall out of step with the page. The live slab itself is the
 Aero-Pad, an extruded body: a rim rising flush to the page in front, a rounded
-shoulder sweeping onto a flat inset panel behind.
+shoulder sweeping onto a flat inset panel behind. The sun's lens flare is a WebGL
+sprite, so it can't paint over the DOM/CSS3D live panels; a screen-blend glow div
+(`#sunglow`) is tracked to the sun's screen projection *above* the panel layer, so
+the glare spills onto an interactive slab instead of being clipped by it — easing
+in as you turn to face the sun.
 
 </details>
 
