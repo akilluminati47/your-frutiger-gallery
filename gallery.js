@@ -104,10 +104,13 @@ function screenshotURL(provider, url, w, h, freshKey = ''){
            + `&waitUntil=networkidle0&waitForTimeout=2500&meta=false${reqBust}`;
     case 'thumio':
     default:
-      // width == viewportWidth + crop/height → exactly the visitor's screen at the
-      // panel aspect. wait/18 lets slow sites pull webfonts + heavy/lazy assets; png
-      // keeps text crisp; maxAge serves a day-old cache so repeat visits stay fast.
-      return `https://image.thum.io/get/width/${w}/crop/${h}/viewportWidth/${w}`
+      // viewportWidth+viewportHeight pin the RENDER viewport to the panel aspect,
+      // so the shot is natively one 16:9 screenful — without viewportHeight thum.io
+      // renders taller and crop/ would guillotine the bottom of the real fold
+      // (bottom-anchored UI vanished). crop stays as a belt-and-braces trim. wait/18
+      // lets slow sites pull webfonts + heavy/lazy assets; png keeps text crisp;
+      // maxAge serves a day-old cache so repeat visits stay fast.
+      return `https://image.thum.io/get/width/${w}/crop/${h}/viewportWidth/${w}/viewportHeight/${h}`
            + `/wait/18/maxAge/${maxAge}/png/noanimate/${full}`;
   }
 }

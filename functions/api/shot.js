@@ -39,7 +39,9 @@ function providerURL(provider, target, w, h){
            + `&waitUntil=networkidle0&waitForTimeout=2500&meta=false`;
     }
     case 'thumio':
-      return `https://image.thum.io/get/width/${w}/crop/${h}/viewportWidth/${w}`
+      // viewportHeight pins the render viewport to the requested aspect — one true
+      // screenful, bottom edge included (crop alone would trim a taller render)
+      return `https://image.thum.io/get/width/${w}/crop/${h}/viewportWidth/${w}/viewportHeight/${h}`
            + `/wait/18/png/noanimate/${full}`;
   }
 }
