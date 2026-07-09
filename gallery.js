@@ -3724,8 +3724,24 @@ function liveScreenFor(f){
   // into the page natively — click, drag, mouseover, the page's own cursor — in
   // full perspective.
   const wrap = document.createElement('div');
-  Object.assign(wrap.style, { width: pw + 'px', height: ph + 'px' });
+  Object.assign(wrap.style, { width: pw + 'px', height: ph + 'px', position:'relative' });
   wrap.appendChild(el);
+  // sun-glare veil, local to this slab — a plain alpha overlay stacked INSIDE
+  // the same flat parent as the iframe. #sunglow (mix-blend-mode:screen) sits
+  // at a higher page-level z-index than this whole CSS3D layer, which reads
+  // right for every ordinary panel, but a cross-origin iframe renders on its
+  // own compositor surface that a blend mode can't reach across — so instead
+  // of the flare screening over the glass, the iframe's own paint just wins
+  // and cuts it off. A plain (non-blend) veil painted as this iframe's actual
+  // DOM sibling doesn't have that problem: it's normal same-surface alpha
+  // compositing, so it reliably sits on top. updateSunGlow() keeps it
+  // positioned/faded in lockstep with the real #sunglow every frame.
+  const glow = document.createElement('div');
+  Object.assign(glow.style, {
+    position:'absolute', inset:'0', pointerEvents:'none', opacity:'0',
+    background:'radial-gradient(circle at 50% 50%, rgba(255,247,224,.95) 0%, rgba(255,236,188,.55) 22%, rgba(255,222,150,.24) 45%, rgba(255,214,150,.08) 65%, transparent 78%)',
+  });
+  wrap.appendChild(glow);
   const obj = new CSS3DObject(wrap);
   wrap.style.pointerEvents = 'none';  // CSS3DObject's constructor force-sets 'auto' — the wrapper
                                       // must stay transparent; the gate drives the iframe alone
@@ -3763,7 +3779,7 @@ function liveScreenFor(f){
   wrap.style.webkitBoxReflect =
     `below ${gapPx.toFixed(1)}px linear-gradient(rgba(0,0,0,0.42), rgba(0,0,0,0.42))`;
 
-  s = { obj, el, on: null };   // null → the gate's first pass always writes a real state
+  s = { obj, el, wrap, glow, on: null };   // null → the gate's first pass always writes a real state
   L.byFrame.set(f, s);
   return s;
 }
@@ -3808,18 +3824,44 @@ const sunglowEl = $('sunglow');
 const _glowDir = new THREE.Vector3();
 const _sunNdc  = new THREE.Vector3();
 const _sunWorld = SUN_DIR.clone().multiplyScalar(460);   // sits on the flare / sky-shader sun
+function clearLiveGlows(){
+  if (live3d) for (const s of live3d.byFrame.values()) s.glow.style.opacity = '0';
+}
 function updateSunGlow(){
   if (!sunglowEl) return;
-  if (state !== 'play' && state !== 'intro'){ sunglowEl.style.opacity = '0'; return; }
+  if (state !== 'play' && state !== 'intro'){ sunglowEl.style.opacity = '0'; clearLiveGlows(); return; }
   camera.getWorldDirection(_glowDir);
   const facing = _glowDir.dot(SUN_DIR);          // 1 = looking straight at the sun, ≤0 = away
-  if (facing <= 0.12){ sunglowEl.style.opacity = '0'; return; }
+  if (facing <= 0.12){ sunglowEl.style.opacity = '0'; clearLiveGlows(); return; }
   _sunNdc.copy(_sunWorld).project(camera);       // world sun → normalised screen coords
   const k = clamp((facing - 0.12) / 0.88, 0, 1), bloom = k * k;
-  sunglowEl.style.left = ((_sunNdc.x * 0.5 + 0.5) * innerWidth)  + 'px';
-  sunglowEl.style.top  = ((-_sunNdc.y * 0.5 + 0.5) * innerHeight) + 'px';
+  const sx = (_sunNdc.x * 0.5 + 0.5) * innerWidth, sy = (-_sunNdc.y * 0.5 + 0.5) * innerHeight;
+  sunglowEl.style.left = sx + 'px';
+  sunglowEl.style.top  = sy + 'px';
   sunglowEl.style.transform = `translate(-50%,-50%) scale(${(0.55 + 1.05 * bloom).toFixed(3)})`;
-  sunglowEl.style.opacity = (0.2 + 0.62 * bloom).toFixed(3);
+  const op = 0.2 + 0.62 * bloom;
+  sunglowEl.style.opacity = op.toFixed(3);
+  // Mirror the same glare, in the same screen spot, onto every live portal's
+  // own in-panel veil (see liveScreenFor) — this is what actually lets the
+  // flare read as spilling over an interactive slab instead of being cut off
+  // by it, since #sunglow's blend can't reach across the iframe's own
+  // compositor surface. wrap.getBoundingClientRect() gives the slab's true
+  // projected screen box for free (the browser already resolved the CSS3D
+  // matrix), so the veil's hot-spot lands exactly under the real flare.
+  if (live3d) for (const s of live3d.byFrame.values()){
+    if (live3d.shown && s.wrap.isConnected){
+      const r = s.wrap.getBoundingClientRect();
+      if (r.width && r.height){
+        const lx = ((sx - r.left) / r.width  * 100).toFixed(1);
+        const ly = ((sy - r.top)  / r.height * 100).toFixed(1);
+        s.glow.style.background =
+          `radial-gradient(circle at ${lx}% ${ly}%, rgba(255,247,224,.95) 0%, rgba(255,236,188,.55) 22%, rgba(255,222,150,.24) 45%, rgba(255,214,150,.08) 65%, transparent 78%)`;
+        s.glow.style.opacity = op.toFixed(3);
+        continue;
+      }
+    }
+    s.glow.style.opacity = '0';
+  }
 }
 function animate(){
   const dt = Math.min(clock.getDelta(), 0.05);
