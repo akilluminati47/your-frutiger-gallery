@@ -126,7 +126,9 @@ function screenshotURL(provider, url, w, h, freshKey = ''){
 // everything through the proxy would 429 on Cloudflare's shared IP and give
 // everyone thum.io — hence own-IP first.) mShots isn't here: no CORS in the
 // browser; thum.io lives only inside the proxy as its deep last resort.
-const PROVIDERS = [...new Set([CONFIG.screenshotProvider, 'microlink', 'proxy'].filter(Boolean))];
+const PROVIDERS = CONFIG.screenshotProvider
+  ? [CONFIG.screenshotProvider, 'proxy']
+  : ['microlink', 'proxy'];
 function fetchScreenshot(url, onImg, onFail, freshKey = ''){
   let i = 0;
   const tryNext = async () => {
@@ -3724,8 +3726,26 @@ function liveScreenFor(f){
   // into the page natively — click, drag, mouseover, the page's own cursor — in
   // full perspective.
   const wrap = document.createElement('div');
-  Object.assign(wrap.style, { width: pw + 'px', height: ph + 'px' });
+  Object.assign(wrap.style, { width: pw + 'px', height: ph + 'px', position:'relative' });
   wrap.appendChild(el);
+  // sun-glare veil, local to this slab — a plain alpha overlay stacked INSIDE
+  // the same flat parent as the iframe. #sunglow (mix-blend-mode:screen) sits
+  // at a higher page-level z-index than this whole CSS3D layer, and the WebGL
+  // Lensflare's ghost train paints straight onto the #scene canvas below it —
+  // both read right over every ordinary (WebGL) panel, but NOT over a live
+  // portal: its iframe renders on its own compositor surface, which a blend
+  // mode can't reach across, and which is simply painted above the canvas
+  // regardless, so the flare's own pixels never got a chance to land here at
+  // all. A plain (non-blend) veil painted as the iframe's actual DOM sibling
+  // doesn't have that problem: ordinary same-surface alpha compositing, so it
+  // reliably sits on top. updateSunGlow() repaints it every frame with the
+  // exact same glow + ghost-train positions as the real flare (see the
+  // GHOST_SPECS list there), just localised to this slab's own screen rect.
+  const glow = document.createElement('div');
+  Object.assign(glow.style, {
+    position:'absolute', inset:'0', pointerEvents:'none', opacity:'0', background:'none',
+  });
+  wrap.appendChild(glow);
   const obj = new CSS3DObject(wrap);
   wrap.style.pointerEvents = 'none';  // CSS3DObject's constructor force-sets 'auto' — the wrapper
                                       // must stay transparent; the gate drives the iframe alone
@@ -3763,7 +3783,7 @@ function liveScreenFor(f){
   wrap.style.webkitBoxReflect =
     `below ${gapPx.toFixed(1)}px linear-gradient(rgba(0,0,0,0.42), rgba(0,0,0,0.42))`;
 
-  s = { obj, el, on: null };   // null → the gate's first pass always writes a real state
+  s = { obj, el, wrap, glow, on: null };   // null → the gate's first pass always writes a real state
   L.byFrame.set(f, s);
   return s;
 }
@@ -3808,18 +3828,79 @@ const sunglowEl = $('sunglow');
 const _glowDir = new THREE.Vector3();
 const _sunNdc  = new THREE.Vector3();
 const _sunWorld = SUN_DIR.clone().multiplyScalar(460);   // sits on the flare / sky-shader sun
+// Mirrors the WebGL Lensflare's own element list (see the sun-flare block in
+// section 3) one-for-one — same sizes, same normalised `distance` from the
+// light (0 = on the sun, 1 = mirrored through screen-centre) — so the in-panel
+// veil below traces the exact same ghost train, position for position, that
+// the canvas draws everywhere else. `ring` picks which of the two textures
+// (soft glow vs. the hollow "ghost" ring) that element uses.
+const GHOST_SPECS = [
+  { size: 340, distance: 0.00, ring: false },
+  { size: 46,  distance: 0.18, ring: true  },
+  { size: 72,  distance: 0.34, ring: true  },
+  { size: 120, distance: 0.50, ring: true  },
+  { size: 58,  distance: 0.64, ring: true  },
+  { size: 94,  distance: 0.80, ring: true  },
+  { size: 130, distance: 1.00, ring: false },
+];
+function ghostLayer(spec, lx, ly){
+  const r = Math.max(4, spec.size / 2).toFixed(0);
+  return spec.ring
+    ? `radial-gradient(circle ${r}px at ${lx}% ${ly}%, rgba(255,255,255,0) 0%, rgba(200,225,255,.5) 55%, rgba(170,210,255,.22) 82%, rgba(170,210,255,0) 100%)`
+    : `radial-gradient(circle ${r}px at ${lx}% ${ly}%, rgba(255,247,224,.95) 0%, rgba(255,236,188,.55) 22%, rgba(255,222,150,.24) 45%, rgba(255,214,150,.08) 65%, transparent 78%)`;
+}
+function clearLiveGlows(){
+  if (live3d) for (const s of live3d.byFrame.values()) s.glow.style.opacity = '0';
+}
 function updateSunGlow(){
   if (!sunglowEl) return;
-  if (state !== 'play' && state !== 'intro'){ sunglowEl.style.opacity = '0'; return; }
+  if (state !== 'play' && state !== 'intro'){ sunglowEl.style.opacity = '0'; clearLiveGlows(); return; }
   camera.getWorldDirection(_glowDir);
   const facing = _glowDir.dot(SUN_DIR);          // 1 = looking straight at the sun, ≤0 = away
-  if (facing <= 0.12){ sunglowEl.style.opacity = '0'; return; }
+  if (facing <= 0.12){ sunglowEl.style.opacity = '0'; clearLiveGlows(); return; }
   _sunNdc.copy(_sunWorld).project(camera);       // world sun → normalised screen coords
   const k = clamp((facing - 0.12) / 0.88, 0, 1), bloom = k * k;
   sunglowEl.style.left = ((_sunNdc.x * 0.5 + 0.5) * innerWidth)  + 'px';
   sunglowEl.style.top  = ((-_sunNdc.y * 0.5 + 0.5) * innerHeight) + 'px';
   sunglowEl.style.transform = `translate(-50%,-50%) scale(${(0.55 + 1.05 * bloom).toFixed(3)})`;
-  sunglowEl.style.opacity = (0.2 + 0.62 * bloom).toFixed(3);
+  const op = 0.2 + 0.62 * bloom;
+  sunglowEl.style.opacity = op.toFixed(3);
+  // Mirror the WHOLE ghost train (not just the single hot-spot) onto every
+  // live portal's own in-panel veil (see liveScreenFor) — this is what
+  // actually lets the flare read as spilling over an interactive slab instead
+  // of being cut off by it. Two separate problems, both solved the same way:
+  // (1) #sunglow's blend can't reach across the iframe's own compositor
+  // surface, and (2) the REST of the flare (the ghost train) is drawn by the
+  // WebGL Lensflare straight onto the #scene canvas, which always sits BELOW
+  // the CSS3D panel layer — so any ghost that happens to trail across a
+  // panel was simply painted underneath it and never seen. Recomputing each
+  // ghost's exact screen position with the same distance-from-sun formula
+  // the Lensflare itself uses (screenPos * (1 − 2·distance)) and painting it
+  // as a same-surface, non-blend layer inside the panel's own DOM sidesteps
+  // both: ordinary alpha compositing, not a screen blend, so it always shows;
+  // and it lives on the panel's own iframe-adjacent element, not the canvas
+  // underneath it. wrap.getBoundingClientRect() gives the slab's true
+  // projected screen box for free (the browser already resolved the CSS3D
+  // matrix), so every ghost's hot-spot lands exactly under its real one.
+  if (live3d) for (const s of live3d.byFrame.values()){
+    if (live3d.shown && s.wrap.isConnected){
+      const r = s.wrap.getBoundingClientRect();
+      if (r.width && r.height){
+        const layers = GHOST_SPECS.map(spec => {
+          const f = 1 - 2 * spec.distance;
+          const gx = (_sunNdc.x * f * 0.5 + 0.5) * innerWidth;
+          const gy = (-_sunNdc.y * f * 0.5 + 0.5) * innerHeight;
+          const lx = ((gx - r.left) / r.width  * 100).toFixed(1);
+          const ly = ((gy - r.top)  / r.height * 100).toFixed(1);
+          return ghostLayer(spec, lx, ly);
+        });
+        s.glow.style.background = layers.join(',');
+        s.glow.style.opacity = op.toFixed(3);
+        continue;
+      }
+    }
+    s.glow.style.opacity = '0';
+  }
 }
 function animate(){
   const dt = Math.min(clock.getDelta(), 0.05);
