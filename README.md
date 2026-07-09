@@ -113,7 +113,7 @@ an owner's real settings arrive through the handshake below.
 | `console` | object | `enabled: false` removes the sign-ups wall; `sourceRepo` is the template it forks |
 | `shuffleOrder` | bool | Shuffle the hall on every load |
 | `openInNewTab` | bool | Open chosen worlds in a new tab instead of the same-tab swoop |
-| `screenshotProvider` | string | `thumio`, `mshots`, or `microlink`; failures fall through the whole list |
+| `screenshotProvider` | string | `microlink`, `mshots`, or `thumio`; failures fall through in that order by default |
 | `postFX` | bool | HDR bloom, filmic grade, dynamic resolution; `false` is the low-end kill switch |
 | `movement` | object | Walk feel: `accel`, `friction`, `maxSpeed`, look sensitivities |
 | `volume` | number | Master volume for the SFX, 0..1 |
