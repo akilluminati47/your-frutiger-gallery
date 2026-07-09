@@ -85,8 +85,11 @@ body.cursor-live{ cursor:default; }
 .card.small h2{ margin-bottom:8px; }
 .card.small p{ margin-bottom:0; opacity:.82; }
 .card.small .aero-btn{ margin-top:26px; }
-/* the pause card's secondary Thumbnails pill sits snug under Resume, a touch smaller */
-#pause #thumbsBtn{ margin-top:12px; font-size:16px; padding:11px 26px; opacity:.94; }
+/* the pause card's pills stack vertically at ONE exact size: block + a shared
+   fixed width so "Resume" and "thumbs" render as identical pills, with a
+   breath of padding between them */
+#pause .aero-btn{ display:block; margin-left:auto; margin-right:auto; width:min(220px,100%); }
+#pause #thumbsBtn{ margin-top:14px; }
 
 /* ── configurable card lines ──
    gallery.js tags any line the owner blanks out ("" in CONFIG) with .gone,
