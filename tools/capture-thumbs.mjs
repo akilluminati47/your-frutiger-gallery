@@ -58,12 +58,16 @@ async function worlds(){
 }
 
 async function warmOne(url){
-  // current crop + upload token
-  let token = null, existing = null, existingType = 'image/png';
+  // current crop + upload token (+ which provider captured it, for a re-touch)
+  let token = null, existing = null, existingType = 'image/png', existingProv = 'microlink';
   try {
     const g = await fetch(`${SITE}/api/thumb?url=${encodeURIComponent(url)}`);
     token = g.headers.get('x-thumb-ask');
-    if (g.ok){ existing = Buffer.from(await g.arrayBuffer()); existingType = g.headers.get('content-type') || existingType; }
+    if (g.ok){
+      existing = Buffer.from(await g.arrayBuffer());
+      existingType = g.headers.get('content-type') || existingType;
+      existingProv = g.headers.get('x-thumb-prov') || existingProv;
+    }
   } catch {}
   if (!token){ return 'no-store'; }   // KV not bound on this deployment
 
@@ -79,9 +83,12 @@ async function warmOne(url){
 
   const body = fresh || existing;
   const type = fresh ? freshType : existingType;
+  // a fresh capture is always microlink's; a re-touch keeps the crop's own
+  // provider tag so the two-slot store never mislabels (or parks) it
+  const prov = fresh ? 'microlink' : existingProv;
   if (!body) return 'skip';           // 429 and nothing to keep alive
   try {
-    const p = await fetch(`${SITE}/api/thumb?url=${encodeURIComponent(url)}&t=${encodeURIComponent(token)}`,
+    const p = await fetch(`${SITE}/api/thumb?url=${encodeURIComponent(url)}&t=${encodeURIComponent(token)}&prov=${encodeURIComponent(prov)}`,
                           { method:'PUT', body, headers:{ 'content-type': type } });
     if (!p.ok) return 'put-' + p.status;
   } catch { return 'put-error'; }

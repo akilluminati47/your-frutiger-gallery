@@ -201,7 +201,9 @@ function texFromBlob(blob){
 // Fire-and-forget: hand a fresh own-IP microlink crop to the shared store so the
 // next visitor is served it from R2 instead of hitting microlink themselves.
 function uploadThumb(url, blob, tok){
-  fetch(`/api/thumb?url=${encodeURIComponent(url)}&t=${encodeURIComponent(tok)}`,
+  // prov=microlink: only microlink wins reach this call — the tag lets the
+  // two-slot store park a thum.io crop the owner swapped in rather than eat it
+  fetch(`/api/thumb?url=${encodeURIComponent(url)}&t=${encodeURIComponent(tok)}&prov=microlink`,
         { method: 'PUT', body: blob, headers: { 'content-type': blob.type } })
     .catch(() => {});
 }

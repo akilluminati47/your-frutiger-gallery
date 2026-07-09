@@ -153,7 +153,7 @@
   <div class="grid" id="grid"></div>
 
   <footer>
-    created by <a href="https://github.com/akilluminati47" style="color:inherit;font-weight:700;">@akilluminati47</a>
+    created by <a href="https://github.com/akilluminati47/your-frutiger-gallery" style="color:inherit;font-weight:700;">@akilluminati47</a>
   </footer>
 </div>
 
@@ -189,11 +189,12 @@ const microlinkURL = url =>
   `https://api.microlink.io/?url=${enc(freshTarget(url))}&screenshot=true&embed=screenshot.url`
   + `&viewport.width=${SHOT_W}&viewport.height=${SHOT_H}&viewport.deviceScaleFactor=1`
   + `&waitUntil=networkidle0&waitForTimeout=2500&meta=false`;
-// viewportWidth+viewportHeight pin thum.io's RENDER viewport to 16:9 — one true
-// screenful with the real bottom edge, nothing guillotined by crop/
+// thum.io rides through our own /api/shot proxy: its hotlink guard 403s a
+// cross-origin browser fetch(), but the proxy captures server-side (16:9-pinned
+// viewport, same as everywhere). The fgfresh-busted target defeats thum.io's
+// upstream cache; &fresh= skips the proxy's own edge cache the same way.
 const thumioURL = url =>
-  `https://image.thum.io/get/width/${SHOT_W}/crop/${SHOT_H}/viewportWidth/${SHOT_W}/viewportHeight/${SHOT_H}`
-  + `/wait/18/png/noanimate/${freshTarget(url)}`;
+  `/api/shot?url=${enc(freshTarget(url))}&w=${SHOT_W}&h=${SHOT_H}&prov=thumio&fresh=${Date.now().toString(36)}`;
 
 // ── per-world capture provider: microlink (sharp, 50/day per IP) ⇄ thum.io
 // (keyless, quota-free). Every flip writes localStorage IMMEDIATELY — there is
@@ -260,17 +261,14 @@ function render(){
     checkbox.addEventListener('change', () => el.classList.toggle('sel', checkbox.checked));
     el.querySelector('.act-fetch').addEventListener('click', () => doFetch(w.url));
     el.querySelector('.act-dl').addEventListener('click', () => download(w.url, slug(w.url)));
-    // swap which provider THIS world's Fetch captures with — persisted on the
-    // spot. The button just says Swap; the current source reads in the status
-    // line (and the tooltip) so the pill never crowds the row.
+    // Swap = show the OTHER provider's crop. The store parks up to one crop per
+    // provider, so this first asks the server to exchange active↔parked; if
+    // nothing is parked yet it captures the other provider's crop right here.
+    // Preference persists the moment it flips — no save step.
     const provBtn = el.querySelector('.act-prov');
     provBtn.textContent = '⇄ Swap';
     provBtn.title = 'captures via ' + provOf(w.url);
-    provBtn.addEventListener('click', () => {
-      setProv(w.url, provOf(w.url) === 'microlink' ? 'thumio' : 'microlink');
-      provBtn.title = 'captures via ' + provOf(w.url);
-      setStatus(`${w.name} now captures via ${provOf(w.url)}`);
-    });
+    provBtn.addEventListener('click', () => doSwap(w));
     // click the crop (not the checkbox) → expand it XXL; any click shrinks it back
     el.querySelector('.shot').addEventListener('click', e => {
       if (e.target.closest('.pick')) return;
@@ -283,12 +281,14 @@ function render(){
   $('#sub').textContent = `${worlds.length} worlds`;
 }
 
-function showCrop(url, ts){
+function showCrop(url, ts, prov){
   const c = cards.get(url); if (!c) return;
   c.img.hidden = false; c.empty.style.display = 'none';
   c.img.src = previewSrc(url);
-  c.tag.className = 'tag cached'; c.tag.textContent = 'cached';
+  c.tag.className = 'tag cached';
+  c.tag.textContent = prov ? (prov === 'thumio' ? 'thum.io' : 'microlink') : 'cached';
   c.age.textContent = ts ? 'captured ' + ago(ts) : 'stored';
+  if (prov){ c.activeProv = prov; if (c.provBtn) c.provBtn.title = 'showing ' + prov; }
 }
 function showEmpty(url){
   const c = cards.get(url); if (!c) return;
@@ -311,7 +311,8 @@ async function refreshList(){
   const byUrl = new Map((data.thumbs||[]).map(t => [t.url, t]));
   for (const w of worlds){
     const t = byUrl.get(/^https?:\/\//i.test(w.url) ? w.url : 'https://' + w.url) || byUrl.get(w.url);
-    if (t) showCrop(w.url, t.ts); else showEmpty(w.url);
+    if (t){ showCrop(w.url, t.ts, t.prov); if (t.prov) setProv(w.url, t.prov); }   // pref follows what's showing
+    else showEmpty(w.url);
   }
   const n = (data.thumbs||[]).length;
   setStatus(data.bound ? `${n} crop${n===1?'':'s'} in the store` : 'store not bound');
@@ -327,18 +328,48 @@ async function doFetch(url){
     const p = provOf(url);
     const tok = await getToken(url);
     const res = await fetch(captureURL(url), { mode:'cors' });
-    if (!res.ok) throw new Error(p + ' ' + res.status + (p === 'microlink' && res.status === 429 ? ' (IP quota spent — try cellular or ⇄ thum.io)' : ''));
+    if (!res.ok) throw new Error(p + ' ' + res.status + (p === 'microlink' && res.status === 429 ? ' (IP quota spent — try cellular or ⇄ Swap)' : ''));
     const blob = await res.blob();
     if (!blob.type.startsWith('image/')) throw new Error('not an image');
     if (!tok) throw new Error('no store bound');
-    const put = await fetch(`/api/thumb?url=${enc(url)}&t=${enc(tok)}`, { method:'PUT', body:blob, headers:{ 'content-type':blob.type } });
+    // prov rides along so the store can PARK a different provider's crop
+    // instead of erasing it — each world keeps up to one crop per provider
+    const put = await fetch(`/api/thumb?url=${enc(url)}&t=${enc(tok)}&prov=${p}`, { method:'PUT', body:blob, headers:{ 'content-type':blob.type } });
     if (!put.ok) throw new Error('store ' + put.status);
-    showCrop(url, Date.now()); setStatus('stored ' + url);
+    showCrop(url, Date.now(), p); setStatus('stored ' + url);
   } catch (e){
     if (c) { c.tag.className='tag none'; c.tag.textContent='failed'; }
     setStatus('✗ ' + url + ' — ' + e.message);
   }
 }
+// Swap: flip a world to the OTHER provider's crop. Server-side exchange first
+// (both crops stay stored — nothing is erased); when the other crop isn't
+// parked yet, auto-fetch it — that PUT parks the current one and the pair is
+// complete. Either way the preference lands in localStorage immediately.
+async function doSwap(w){
+  const c = cards.get(w.url);
+  const cur = c?.activeProv || provOf(w.url);
+  const want = cur === 'microlink' ? 'thumio' : 'microlink';
+  setProv(w.url, want);
+  if (c?.provBtn) c.provBtn.title = 'captures via ' + want;
+  try {
+    const tok = await getToken(w.url);
+    if (!tok) throw new Error('no store bound');
+    const r = await fetch(`/api/thumb?url=${enc(w.url)}&swap=1&t=${enc(tok)}`, { method:'PUT' });
+    if (r.ok){
+      const j = await r.json().catch(() => null);
+      const active = j?.active || want;
+      setProv(w.url, active);
+      showCrop(w.url, Date.now(), active);
+      setStatus(`${w.name} → ${active === 'thumio' ? 'thum.io' : 'microlink'} crop`);
+      return;
+    }
+    // nothing parked for the other side yet → capture it now (parks the old one)
+    setStatus(`${w.name}: no stored ${want} crop — fetching…`);
+    await doFetch(w.url);
+  } catch (e){ setStatus('✗ swap ' + w.url + ' — ' + e.message); }
+}
+
 async function download(url, name){
   try {
     const r = await fetch(`/api/thumb?url=${enc(url)}`);
@@ -365,14 +396,15 @@ $('#dlSel').addEventListener('click', async () => {
   const sel = selected(); if (!sel.length) return setStatus('nothing selected');
   for (const w of sel){ await download(w.url, slug(w.url)); await new Promise(r => setTimeout(r, 250)); }
 });
-// group switch: any selected on microlink → the whole group goes thum.io, else
-// back to microlink — two presses bounce a mixed group to either pole. Each
-// setProv writes localStorage immediately, same as the per-card button.
-$('#provSel').addEventListener('click', () => {
+// group swap: each selected world bounces to its own OTHER provider's crop,
+// sequentially (auto-fetches are kind to the burst limits). Every flip writes
+// localStorage immediately, same as the per-card pill.
+$('#provSel').addEventListener('click', async () => {
   const sel = selected(); if (!sel.length) return setStatus('nothing selected');
-  const p = sel.some(w => provOf(w.url) === 'microlink') ? 'thumio' : 'microlink';
-  for (const w of sel){ setProv(w.url, p); const c = cards.get(w.url); if (c?.provBtn) c.provBtn.title = 'captures via ' + p; }
-  setStatus(`${sel.length} selected now capture via ${p}`);
+  $('#provSel').disabled = true;
+  let i = 0;
+  for (const w of sel){ setStatus(`swapping ${++i}/${sel.length}…`); await doSwap(w); }
+  $('#provSel').disabled = false; setStatus(`done — swapped ${sel.length}`);
 });
 
 // ── click-to-expand lightbox: grow from the card's spot to XXL, click to shrink ──

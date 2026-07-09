@@ -77,7 +77,12 @@ export async function onRequestGet({ request, waitUntil }){
     if (hit) return hit;
   }
 
-  for (const provider of ['microlink', 'thumio']){
+  // ?prov=thumio pins the chain to thum.io alone — the /thumbs Swap pill wants
+  // SPECIFICALLY the other provider's render, not whichever answers first (and
+  // the browser can't fetch thum.io itself: its hotlink guard 403s cross-origin
+  // fetch() while a server-side request sails through).
+  const chain = u.searchParams.get('prov') === 'thumio' ? ['thumio'] : ['microlink', 'thumio'];
+  for (const provider of chain){
     const shot = await tryCapture(provider, target, w, h);
     if (!shot) continue;
     // A microlink (good) crop pins for a day; a thum.io fallback pins only
