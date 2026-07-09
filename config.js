@@ -27,7 +27,8 @@ export const CONFIG = {
 
   // ── PAUSE MENU ─────────────────────────────────────────────────────
   // Texts on the pause card. title/note accept "" to remove that line.
-  pause: { title: "Paused", note: "Take a breath.", resume: "Resume" },
+  // thumbs labels the pill that opens the /thumbs cache dashboard.
+  pause: { title: "Paused", note: "Take a breath.", resume: "Resume", thumbs: "Thumbs" },
 
   // ── ATMOSPHERE ─────────────────────────────────────────────────────
   // bubbles: count = how many drift around the platform (0 disables;
