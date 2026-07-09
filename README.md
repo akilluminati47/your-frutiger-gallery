@@ -295,8 +295,6 @@ in as you turn to face the sun.
 
 ## Credits
 
-Frutiger Aero gallery. Built with [three.js](https://threejs.org).
-Screenshots by [thum.io](https://www.thum.io), [mShots](https://developer.wordpress.com/docs/site-previews/), and [microlink](https://microlink.io).
-Sound effects from Microsoft Windows 7 (© Microsoft Corporation), drawn from the
-default and Garden sound schemes: the logon, balloon, notify, print-complete,
-pop-up-blocked, UAC, information-bar, and speech-disambiguation sounds in `sfx/`.
+[akilluminati47](https://github.com/akilluminati47) | Frutiger Aero Gallery. Built with [three.js](https://threejs.org).
+Screenshots by [thum.io](https://www.thum.io) and [microlink](https://microlink.io).
+Sound effects from Microsoft Windows 7 (© Microsoft Corporation).
