@@ -102,7 +102,7 @@ function screenshotURL(provider, url, w, h, freshKey = ''){
 // Robust capture: try providers in order, first one that actually decodes wins.
 // Guards against a single provider rate-limiting, blocking a domain, or returning
 // a broken/empty image — the live fetch falls back instead of leaving a blank.
-const PROVIDERS = [...new Set([CONFIG.screenshotProvider, 'thumio', 'mshots', 'microlink'])];
+const PROVIDERS = [...new Set([CONFIG.screenshotProvider, 'microlink', 'mshots', 'thumio'].filter(Boolean))];
 function fetchScreenshot(url, onImg, onFail, freshKey = ''){
   let i = 0;
   const tryNext = async () => {
