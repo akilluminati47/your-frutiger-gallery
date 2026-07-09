@@ -146,14 +146,14 @@
     <label class="cbx"><input type="checkbox" id="all" /> Select all</label>
     <button class="btn primary" id="fetchSel">⟳ Fetch selected</button>
     <button class="btn" id="dlSel">↓ Download selected</button>
+    <button class="btn" id="provSel">⇄ Swap selected</button>
     <span class="status" id="status"></span>
   </div>
 
   <div class="grid" id="grid"></div>
 
   <footer>
-    Crops are captured from <b>your current IP</b> and shared via <code>/api/thumb</code>.
-    Fetch from a fresh-quota network (phone on cellular) to seed the sharp microlink crops for everyone.
+    created by <a href="https://github.com/akilluminati47" style="color:inherit;font-weight:700;">@akilluminati47</a>
   </footer>
 </div>
 
@@ -177,17 +177,33 @@ for (let i = 0; i < 14; i++){
   bubbles.appendChild(b);
 }
 
-const microlinkURL = url => {
+// Fetch is the owner's deliberate re-capture, so a UNIQUE key rides the target:
+// providers cache their render per exact URL, and a bare URL would happily replay
+// a screenshot of the page as it USED to look (the stale-config poison) instead
+// of rendering it fresh. Costs one render per press — exactly what Fetch means.
+const freshTarget = url => {
   const full = /^https?:\/\//i.test(url) ? url : 'https://' + url;
-  // Fetch is the owner's deliberate re-capture, so a UNIQUE key rides the target:
-  // microlink caches its render per exact URL, and a bare URL would happily replay
-  // a screenshot of the page as it USED to look (the stale-config poison) instead
-  // of rendering it fresh. Costs one render per press — exactly what Fetch means.
-  const target = `${full}${full.includes('?') ? '&' : '?'}fgfresh=${Date.now().toString(36)}`;
-  return `https://api.microlink.io/?url=${enc(target)}&screenshot=true&embed=screenshot.url`
-       + `&viewport.width=${SHOT_W}&viewport.height=${SHOT_H}&viewport.deviceScaleFactor=1`
-       + `&waitUntil=networkidle0&waitForTimeout=2500&meta=false`;
+  return `${full}${full.includes('?') ? '&' : '?'}fgfresh=${Date.now().toString(36)}`;
 };
+const microlinkURL = url =>
+  `https://api.microlink.io/?url=${enc(freshTarget(url))}&screenshot=true&embed=screenshot.url`
+  + `&viewport.width=${SHOT_W}&viewport.height=${SHOT_H}&viewport.deviceScaleFactor=1`
+  + `&waitUntil=networkidle0&waitForTimeout=2500&meta=false`;
+// viewportWidth+viewportHeight pin thum.io's RENDER viewport to 16:9 — one true
+// screenful with the real bottom edge, nothing guillotined by crop/
+const thumioURL = url =>
+  `https://image.thum.io/get/width/${SHOT_W}/crop/${SHOT_H}/viewportWidth/${SHOT_W}/viewportHeight/${SHOT_H}`
+  + `/wait/18/png/noanimate/${freshTarget(url)}`;
+
+// ── per-world capture provider: microlink (sharp, 50/day per IP) ⇄ thum.io
+// (keyless, quota-free). Every flip writes localStorage IMMEDIATELY — there is
+// no save step, so a stray reload never loses a setting.
+const PROV_KEY = 'fg-thumb-provider';
+let prov = {};
+try { prov = JSON.parse(localStorage.getItem(PROV_KEY) || '{}') || {}; } catch {}
+const provOf  = url => prov[url] === 'thumio' ? 'thumio' : 'microlink';
+const setProv = (url, p) => { prov[url] = p; try { localStorage.setItem(PROV_KEY, JSON.stringify(prov)); } catch {} };
+const captureURL = url => provOf(url) === 'thumio' ? thumioURL(url) : microlinkURL(url);
 const ago = ts => {
   if (!ts) return '';
   const s = Math.max(0, (Date.now() - ts) / 1000);
@@ -232,6 +248,7 @@ function render(){
         <div class="row">
           <button class="btn mini act-fetch">⟳ Fetch</button>
           <button class="btn mini act-dl">↓ Save</button>
+          <button class="btn mini act-prov"></button>
         </div>
       </div>`;
     el.querySelector('.name').textContent = w.name;
@@ -243,13 +260,24 @@ function render(){
     checkbox.addEventListener('change', () => el.classList.toggle('sel', checkbox.checked));
     el.querySelector('.act-fetch').addEventListener('click', () => doFetch(w.url));
     el.querySelector('.act-dl').addEventListener('click', () => download(w.url, slug(w.url)));
+    // swap which provider THIS world's Fetch captures with — persisted on the
+    // spot. The button just says Swap; the current source reads in the status
+    // line (and the tooltip) so the pill never crowds the row.
+    const provBtn = el.querySelector('.act-prov');
+    provBtn.textContent = '⇄ Swap';
+    provBtn.title = 'captures via ' + provOf(w.url);
+    provBtn.addEventListener('click', () => {
+      setProv(w.url, provOf(w.url) === 'microlink' ? 'thumio' : 'microlink');
+      provBtn.title = 'captures via ' + provOf(w.url);
+      setStatus(`${w.name} now captures via ${provOf(w.url)}`);
+    });
     // click the crop (not the checkbox) → expand it XXL; any click shrinks it back
     el.querySelector('.shot').addEventListener('click', e => {
       if (e.target.closest('.pick')) return;
       if (!img.hidden && img.src) openZoom(img);
     });
 
-    cards.set(w.url, { el, img, empty, tag, age, checkbox });
+    cards.set(w.url, { el, img, empty, tag, age, checkbox, provBtn });
     grid.appendChild(el);
   }
   $('#sub').textContent = `${worlds.length} worlds`;
@@ -296,9 +324,10 @@ async function getToken(url){
 async function doFetch(url){
   const c = cards.get(url); if (c) { c.tag.className='tag none'; c.tag.textContent='fetching…'; }
   try {
+    const p = provOf(url);
     const tok = await getToken(url);
-    const res = await fetch(microlinkURL(url), { mode:'cors' });
-    if (!res.ok) throw new Error('microlink ' + res.status + (res.status===429 ? ' (IP quota spent — try cellular)' : ''));
+    const res = await fetch(captureURL(url), { mode:'cors' });
+    if (!res.ok) throw new Error(p + ' ' + res.status + (p === 'microlink' && res.status === 429 ? ' (IP quota spent — try cellular or ⇄ thum.io)' : ''));
     const blob = await res.blob();
     if (!blob.type.startsWith('image/')) throw new Error('not an image');
     if (!tok) throw new Error('no store bound');
@@ -335,6 +364,15 @@ $('#fetchSel').addEventListener('click', async () => {
 $('#dlSel').addEventListener('click', async () => {
   const sel = selected(); if (!sel.length) return setStatus('nothing selected');
   for (const w of sel){ await download(w.url, slug(w.url)); await new Promise(r => setTimeout(r, 250)); }
+});
+// group switch: any selected on microlink → the whole group goes thum.io, else
+// back to microlink — two presses bounce a mixed group to either pole. Each
+// setProv writes localStorage immediately, same as the per-card button.
+$('#provSel').addEventListener('click', () => {
+  const sel = selected(); if (!sel.length) return setStatus('nothing selected');
+  const p = sel.some(w => provOf(w.url) === 'microlink') ? 'thumio' : 'microlink';
+  for (const w of sel){ setProv(w.url, p); const c = cards.get(w.url); if (c?.provBtn) c.provBtn.title = 'captures via ' + p; }
+  setStatus(`${sel.length} selected now capture via ${p}`);
 });
 
 // ── click-to-expand lightbox: grow from the card's spot to XXL, click to shrink ──
