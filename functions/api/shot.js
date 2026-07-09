@@ -29,10 +29,15 @@ function providerURL(provider, target, w, h){
   const full = withProtocol(target);
   const enc  = encodeURIComponent(full);
   switch (provider){
-    case 'microlink':
-      return `https://api.microlink.io/?url=${enc}&screenshot=true&embed=screenshot.url`
+    case 'microlink': {
+      // Daily-rotating target key so microlink can't serve a render older than a
+      // day (it caches per URL; a since-fixed page would otherwise persist). One
+      // key per day = same-day requests still share its cache, no extra quota.
+      const mEnc = encodeURIComponent(`${full}${full.includes('?') ? '&' : '?'}fgday=${Math.floor(Date.now() / 864e5)}`);
+      return `https://api.microlink.io/?url=${mEnc}&screenshot=true&embed=screenshot.url`
            + `&viewport.width=${w}&viewport.height=${h}&viewport.deviceScaleFactor=1`
            + `&waitUntil=networkidle0&waitForTimeout=2500&meta=false`;
+    }
     case 'thumio':
       return `https://image.thum.io/get/width/${w}/crop/${h}/viewportWidth/${w}`
            + `/wait/18/png/noanimate/${full}`;

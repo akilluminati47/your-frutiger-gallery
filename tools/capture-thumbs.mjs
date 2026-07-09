@@ -18,10 +18,18 @@ if (!SITE){ console.log('SITE_URL not set — nothing to do.'); process.exit(0);
 
 const SHOT_W = 1600, SHOT_H = 900;
 const withProto = u => /^https?:\/\//i.test(u) ? u : 'https://' + u;
-const microlinkURL = url =>
-  `https://api.microlink.io/?url=${encodeURIComponent(withProto(url))}&screenshot=true&embed=screenshot.url`
-  + `&viewport.width=${SHOT_W}&viewport.height=${SHOT_H}&viewport.deviceScaleFactor=1`
-  + `&waitUntil=networkidle0&waitForTimeout=2500&meta=false`;
+const microlinkURL = url => {
+  // Daily-rotating target key (matches the /api/thumb 24h TTL): microlink caches
+  // its render per URL, so a bare URL would let a since-fixed page — e.g. the
+  // template back when it leaked the owner's config — sit in microlink's cache
+  // and get re-uploaded here as "fresh" every night. One key per day caps that
+  // at 24h and costs no extra quota (the site ignores the unknown param).
+  const full = withProto(url);
+  const target = `${full}${full.includes('?') ? '&' : '?'}fgday=${Math.floor(Date.now() / 864e5)}`;
+  return `https://api.microlink.io/?url=${encodeURIComponent(target)}&screenshot=true&embed=screenshot.url`
+    + `&viewport.width=${SHOT_W}&viewport.height=${SHOT_H}&viewport.deviceScaleFactor=1`
+    + `&waitUntil=networkidle0&waitForTimeout=2500&meta=false`;
+};
 
 // World list: prefer the site's own resolved owner config, else scrape config.js.
 async function worlds(){
