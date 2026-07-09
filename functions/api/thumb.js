@@ -42,6 +42,29 @@ export async function onRequest({ request, env }){
   const store  = env.THUMBS;                          // KV namespace binding (optional)
   const secret = env.THUMB_SIGN || 'fg-thumb-dev';    // HMAC secret for upload invites
   const u = new URL(request.url);
+
+  // ── list what's stored (for the /thumbs dashboard) ──
+  if (request.method === 'GET' && u.searchParams.has('list')){
+    if (!store) return Response.json({ bound: false, thumbs: [] });
+    const out = [];
+    let cursor;
+    do {
+      const page = await store.list({ prefix: 'thumb:', cursor });
+      for (const k of page.keys){
+        out.push({
+          url: k.name.slice(6),                       // strip 'thumb:'
+          ts: k.metadata?.ts || null,
+          contentType: k.metadata?.contentType || null,
+          expiration: k.expiration || null,
+        });
+      }
+      cursor = page.list_complete ? null : page.cursor;
+    } while (cursor);
+    return new Response(JSON.stringify({ bound: true, thumbs: out }), {
+      headers: { 'content-type': 'application/json', 'access-control-allow-origin': '*', 'cache-control': 'no-store' },
+    });
+  }
+
   const target = u.searchParams.get('url');
   if (!target) return new Response('missing url', { status: 400 });
 

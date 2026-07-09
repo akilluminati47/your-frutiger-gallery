@@ -241,6 +241,21 @@ Then redeploy. Seed it in one go by visiting your own gallery once from a
 world at full res and uploads them, and from then on all visitors are served
 those crops.
 
+**Dashboard — [`/thumbs`](https://akilluminati47.pages.dev/thumbs).** A flat
+Frutiger-Aero control panel that lists every world with its cached crop and its
+age. Per world you can **Fetch** (capture from the browser you're on — open it on
+cellular to seed the sharp crops), **Upload** your own image, or **Save** the
+cached one; tick the checkboxes for bulk fetch/download. It reads the live store
+via `GET /api/thumb?list`. The gallery never downgrades a sharp crop to a
+thum.io fallback on refresh — a weak fallback only fills a slot that has nothing.
+
+**Daily keep-warm (optional).** [`.github/workflows/thumbs-cron.yml`](.github/workflows/thumbs-cron.yml)
+runs [`tools/capture-thumbs.mjs`](tools/capture-thumbs.mjs) once a day to refresh
+each crop (best-effort microlink recapture from the runner's IP, otherwise it
+re-touches the stored crop so it never silently expires). Opt in by setting an
+Actions **repository variable** `SITE_URL` to your Pages URL; without it the job
+no-ops. Also runnable on demand from the Actions tab.
+
 </details>
 
 ## Rendering notes

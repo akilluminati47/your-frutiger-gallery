@@ -1,0 +1,32 @@
+# Daily keep-warm for the shared thumbnail store (/api/thumb).
+#
+# Opt-in per deployment: set a repository variable SITE_URL to your Pages URL
+# (Settings → Secrets and variables → Actions → Variables → New: SITE_URL =
+# https://your-site.pages.dev). Without it the job no-ops. Also runnable on
+# demand from the Actions tab. See tools/capture-thumbs.mjs for what it does.
+name: Warm thumbnails
+
+on:
+  schedule:
+    - cron: '17 8 * * *'      # daily ~08:17 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: warm-thumbnails
+  cancel-in-progress: false
+
+jobs:
+  warm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Warm the store
+        env:
+          SITE_URL: ${{ vars.SITE_URL }}
+        run: node tools/capture-thumbs.mjs

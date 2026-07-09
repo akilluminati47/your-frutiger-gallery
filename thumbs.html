@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Thumbnail Cache · Frutiger Gallery</title>
+<meta name="theme-color" content="#2aa9ff" />
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<link rel="icon" href="/favicon.ico" sizes="any" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Quicksand:wght@400;500;600;700&display=swap" />
+<style>
+  :root{
+    --ink:#0d3b66; --ink-soft:#3f6f9f; --line:rgba(31,120,175,.22);
+    --aqua1:#eafaff; --aqua2:#bfe9ff; --blue1:#4db4ff; --blue2:#1f8fe0;
+    --good:#2f9e44; --warn:#e8a13a; --bad:#d0495f;
+    --glass:rgba(255,255,255,.62); --glass-hi:rgba(255,255,255,.9);
+  }
+  *{ box-sizing:border-box; }
+  html,body{ margin:0; min-height:100%; }
+  body{
+    font-family:'Quicksand',"Segoe UI",system-ui,sans-serif; color:var(--ink);
+    background:
+      radial-gradient(120% 80% at 50% -10%, #eafcff 0%, #cfeeff 32%, #9fd8fb 62%, #62b8f0 100%) fixed;
+    -webkit-font-smoothing:antialiased;
+  }
+  /* drifting Aero bubbles, flat 2D */
+  .bubbles{ position:fixed; inset:0; overflow:hidden; pointer-events:none; z-index:0; }
+  .bubbles span{ position:absolute; bottom:-14vh; border-radius:50%;
+    background:radial-gradient(circle at 32% 28%, rgba(255,255,255,.9), rgba(255,255,255,.25) 42%, rgba(120,200,255,.12) 70%);
+    box-shadow:inset 0 0 12px rgba(255,255,255,.6); animation:rise linear infinite; opacity:.55; }
+  @keyframes rise{ to{ transform:translateY(-120vh) translateX(3vw); opacity:0; } }
+
+  .wrap{ position:relative; z-index:1; max-width:1160px; margin:0 auto; padding:22px 18px 70px; }
+
+  header.bar{
+    border-radius:16px; padding:16px 20px; margin-bottom:16px;
+    background:linear-gradient(180deg, var(--glass-hi), var(--glass) 55%, rgba(214,240,255,.7));
+    border:1px solid var(--line);
+    box-shadow:0 1px 0 rgba(255,255,255,.9) inset, 0 12px 34px rgba(20,80,140,.18);
+    display:flex; align-items:center; gap:14px; flex-wrap:wrap;
+  }
+  header.bar h1{ font-size:22px; margin:0; font-weight:700; letter-spacing:.2px; display:flex; align-items:center; gap:10px; }
+  header.bar .sheen{ width:34px; height:34px; border-radius:10px; flex:0 0 auto;
+    background:linear-gradient(160deg,#eafaff,#bfe9ff 45%,#4db4ff); box-shadow:inset 0 1px 2px #fff, 0 2px 6px rgba(30,120,190,.35);
+    display:grid; place-items:center; font-size:18px; }
+  header.bar .grow{ flex:1; }
+  header.bar p{ margin:0; font-size:13px; color:var(--ink-soft); }
+  a.home{ text-decoration:none; color:var(--ink); font-weight:600; font-size:13px;
+    background:var(--glass-hi); border:1px solid var(--line); padding:8px 14px; border-radius:999px;
+    box-shadow:0 1px 0 #fff inset, 0 4px 10px rgba(20,80,140,.14); }
+  a.home:hover{ background:#fff; }
+
+  .toolbar{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:16px; padding:0 4px; }
+  .toolbar .status{ margin-left:auto; font-size:13px; color:var(--ink-soft); min-height:18px; }
+  .banner{ border-radius:12px; padding:12px 16px; margin-bottom:14px; font-size:13.5px;
+    background:linear-gradient(180deg,#fff6e6,#ffe9c7); border:1px solid #f0cf8f; color:#8a5a12; display:none; }
+  .banner.show{ display:block; }
+
+  button.btn{ font-family:inherit; font-weight:600; font-size:13px; color:#0a3357; cursor:pointer;
+    border:1px solid rgba(31,120,175,.35); border-radius:999px; padding:9px 15px;
+    background:linear-gradient(180deg,#ffffff, #dff1ff 52%, #bfe4ff);
+    box-shadow:0 1px 0 #fff inset, 0 4px 10px rgba(20,90,150,.16); transition:filter .12s, transform .05s; }
+  button.btn:hover{ filter:brightness(1.05); }
+  button.btn:active{ transform:translateY(1px); }
+  button.btn.primary{ color:#fff; border-color:#1c78c0;
+    background:linear-gradient(180deg,#6fc2ff,#2f9be6 52%,#1f7ec9);
+    box-shadow:0 1px 0 rgba(255,255,255,.5) inset, 0 5px 12px rgba(20,90,150,.3); }
+  button.btn:disabled{ opacity:.5; cursor:default; filter:none; }
+
+  .cbx{ display:inline-flex; align-items:center; gap:7px; font-size:13px; color:var(--ink); cursor:pointer; user-select:none; }
+  .cbx input{ width:17px; height:17px; accent-color:#2f9be6; cursor:pointer; }
+
+  .grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(250px,1fr)); gap:15px; }
+  .card{ border-radius:15px; overflow:hidden; position:relative;
+    background:linear-gradient(180deg, var(--glass-hi), var(--glass));
+    border:1px solid var(--line); box-shadow:0 1px 0 #fff inset, 0 10px 26px rgba(20,80,140,.16); }
+  .card.sel{ outline:2px solid #2f9be6; outline-offset:-2px; }
+  .shot{ position:relative; aspect-ratio:16/9; background:
+      repeating-conic-gradient(#eaf6ff 0% 25%, #dcefff 0% 50%) 50%/18px 18px; display:block; }
+  .shot img{ width:100%; height:100%; object-fit:cover; display:block; }
+  .shot .empty{ position:absolute; inset:0; display:grid; place-items:center; color:#6f9ac2; font-size:13px; font-weight:600; }
+  .shot .pick{ position:absolute; top:8px; left:8px; z-index:2; background:rgba(255,255,255,.85);
+    border-radius:8px; padding:3px 6px; box-shadow:0 2px 6px rgba(20,80,140,.2); }
+  .shot .tag{ position:absolute; top:8px; right:8px; z-index:2; font-size:11px; font-weight:700; padding:3px 8px; border-radius:999px;
+    color:#fff; box-shadow:0 2px 6px rgba(0,0,0,.15); }
+  .tag.cached{ background:linear-gradient(180deg,#57c06e,#2f9e44); }
+  .tag.none{ background:linear-gradient(180deg,#9fb6c9,#7d95aa); }
+  .body{ padding:11px 13px 13px; }
+  .body .name{ font-weight:700; font-size:14.5px; margin:0 0 2px; }
+  .body .url{ font-size:11.5px; color:var(--ink-soft); word-break:break-all; margin:0 0 10px; }
+  .body .age{ font-size:11px; color:var(--ink-soft); }
+  .row{ display:flex; gap:7px; margin-top:9px; }
+  .row .btn{ flex:1; padding:8px 6px; font-size:12px; }
+  .mini{ font-size:11.5px; }
+  footer{ text-align:center; margin-top:26px; font-size:12px; color:var(--ink-soft); }
+  footer code{ background:rgba(255,255,255,.6); padding:1px 6px; border-radius:6px; }
+  @media (prefers-reduced-motion: reduce){ .bubbles span{ animation:none; display:none; } }
+</style>
+</head>
+<body>
+<div class="bubbles" id="bubbles"></div>
+<div class="wrap">
+  <header class="bar">
+    <span class="sheen">🖼️</span>
+    <div>
+      <h1>Thumbnail Cache</h1>
+      <p id="sub">Reading the shared store…</p>
+    </div>
+    <span class="grow"></span>
+    <a class="home" href="/">← back to the gallery</a>
+  </header>
+
+  <div class="banner" id="banner"></div>
+
+  <div class="toolbar">
+    <label class="cbx"><input type="checkbox" id="all" /> Select all</label>
+    <button class="btn primary" id="fetchSel">⟳ Fetch selected</button>
+    <button class="btn" id="dlSel">↓ Download selected</button>
+    <span class="status" id="status"></span>
+  </div>
+
+  <div class="grid" id="grid"></div>
+
+  <footer>
+    Crops are captured from <b>your current IP</b> and shared via <code>/api/thumb</code>.
+    Fetch from a fresh-quota network (phone on cellular) to seed the sharp microlink crops for everyone.
+  </footer>
+</div>
+
+<script type="module">
+import { CONFIG } from './config.js';
+
+const enc = encodeURIComponent;
+const SHOT_W = 1600, SHOT_H = 900;
+const $ = s => document.querySelector(s);
+
+// ── bubbles ──
+const bubbles = $('#bubbles');
+for (let i = 0; i < 14; i++){
+  const b = document.createElement('span');
+  const size = 20 + Math.random()*70;
+  b.style.cssText = `left:${Math.random()*100}%;width:${size}px;height:${size}px;
+    animation-duration:${16+Math.random()*22}s;animation-delay:${-Math.random()*30}s;`;
+  bubbles.appendChild(b);
+}
+
+const microlinkURL = url => {
+  const full = /^https?:\/\//i.test(url) ? url : 'https://' + url;
+  return `https://api.microlink.io/?url=${enc(full)}&screenshot=true&embed=screenshot.url`
+       + `&viewport.width=${SHOT_W}&viewport.height=${SHOT_H}&viewport.deviceScaleFactor=1`
+       + `&waitUntil=networkidle0&waitForTimeout=2500&meta=false`;
+};
+const ago = ts => {
+  if (!ts) return '';
+  const s = Math.max(0, (Date.now() - ts) / 1000);
+  if (s < 90) return 'just now';
+  if (s < 5400) return Math.round(s/60) + ' min ago';
+  if (s < 86400) return Math.round(s/3600) + ' h ago';
+  return Math.round(s/86400) + ' d ago';
+};
+
+// worlds = corridor projects + on, non-live end-wall slots (mirrors the gallery)
+const walls = CONFIG.walls || {};
+const worlds = [
+  ...(CONFIG.projects || []).map(p => ({ name: p.name, url: p.url })),
+  ...['west','east'].filter(s => walls[s]?.on && walls[s].url?.trim() && !walls[s].live)
+                    .map(s => ({ name: walls[s].name || s + ' wall', url: walls[s].url.trim() })),
+].filter((w, i, a) => a.findIndex(x => x.url === w.url) === i);   // dedupe by url
+
+const grid = $('#grid'), statusEl = $('#status');
+const setStatus = t => { statusEl.textContent = t || ''; };
+const cards = new Map();   // url -> {el, img, tag, age, checkbox}
+
+function slug(url){ return url.replace(/[^a-z0-9]+/gi,'-').replace(/^-+|-+$/g,'').slice(0,48) || 'thumb'; }
+const previewSrc = url => `/api/thumb?url=${enc(url)}&v=${Date.now()}`;
+
+function render(){
+  grid.innerHTML = '';
+  cards.clear();
+  for (const w of worlds){
+    const el = document.createElement('div');
+    el.className = 'card';
+    el.innerHTML = `
+      <div class="shot">
+        <label class="pick cbx"><input type="checkbox" /></label>
+        <span class="tag none">no crop</span>
+        <img alt="" hidden />
+        <div class="empty">— not cached —</div>
+      </div>
+      <div class="body">
+        <p class="name"></p>
+        <p class="url"></p>
+        <p class="age"></p>
+        <div class="row">
+          <button class="btn mini act-fetch">⟳ Fetch</button>
+          <button class="btn mini act-up">⤒ Upload</button>
+          <button class="btn mini act-dl">↓ Save</button>
+        </div>
+        <input type="file" accept="image/*" hidden />
+      </div>`;
+    el.querySelector('.name').textContent = w.name;
+    el.querySelector('.url').textContent = w.url;
+    const img = el.querySelector('img'), empty = el.querySelector('.empty');
+    const tag = el.querySelector('.tag'), age = el.querySelector('.age');
+    const checkbox = el.querySelector('.pick input');
+    const fileIn = el.querySelector('input[type=file]');
+
+    checkbox.addEventListener('change', () => el.classList.toggle('sel', checkbox.checked));
+    el.querySelector('.act-fetch').addEventListener('click', () => doFetch(w.url));
+    el.querySelector('.act-dl').addEventListener('click', () => download(w.url, slug(w.url)));
+    el.querySelector('.act-up').addEventListener('click', () => fileIn.click());
+    fileIn.addEventListener('change', () => fileIn.files[0] && doUpload(w.url, fileIn.files[0]));
+
+    cards.set(w.url, { el, img, empty, tag, age, checkbox });
+    grid.appendChild(el);
+  }
+  $('#sub').textContent = `${worlds.length} worlds`;
+}
+
+function showCrop(url, ts){
+  const c = cards.get(url); if (!c) return;
+  c.img.hidden = false; c.empty.style.display = 'none';
+  c.img.src = previewSrc(url);
+  c.tag.className = 'tag cached'; c.tag.textContent = 'cached';
+  c.age.textContent = ts ? 'captured ' + ago(ts) : 'stored';
+}
+function showEmpty(url){
+  const c = cards.get(url); if (!c) return;
+  c.img.hidden = true; c.empty.style.display = 'grid';
+  c.tag.className = 'tag none'; c.tag.textContent = 'no crop';
+  c.age.textContent = '';
+}
+
+async function refreshList(){
+  let data;
+  try { data = await (await fetch('/api/thumb?list', { cache:'no-store' })).json(); }
+  catch { data = { bound:false, thumbs:[] }; }
+  const banner = $('#banner');
+  if (!data.bound){
+    banner.className = 'banner show';
+    banner.innerHTML = 'This deployment has <b>no KV store bound</b> — crops can’t be shared here yet. '
+      + 'Bind a <code>THUMBS</code> KV namespace + set <code>THUMB_SIGN</code> (see the README). '
+      + 'You can still preview live captures below.';
+  } else { banner.className = 'banner'; }
+  const byUrl = new Map((data.thumbs||[]).map(t => [t.url, t]));
+  for (const w of worlds){
+    const t = byUrl.get(/^https?:\/\//i.test(w.url) ? w.url : 'https://' + w.url) || byUrl.get(w.url);
+    if (t) showCrop(w.url, t.ts); else showEmpty(w.url);
+  }
+  const n = (data.thumbs||[]).length;
+  setStatus(data.bound ? `${n} crop${n===1?'':'s'} in the store` : 'store not bound');
+}
+
+async function getToken(url){
+  const r = await fetch(`/api/thumb?url=${enc(url)}`, { cache:'no-store' });
+  return r.headers.get('x-thumb-ask');
+}
+async function doFetch(url){
+  const c = cards.get(url); if (c) { c.tag.className='tag none'; c.tag.textContent='fetching…'; }
+  try {
+    const tok = await getToken(url);
+    const res = await fetch(microlinkURL(url), { mode:'cors' });
+    if (!res.ok) throw new Error('microlink ' + res.status + (res.status===429 ? ' (IP quota spent — try cellular)' : ''));
+    const blob = await res.blob();
+    if (!blob.type.startsWith('image/')) throw new Error('not an image');
+    if (!tok) throw new Error('no store bound');
+    const put = await fetch(`/api/thumb?url=${enc(url)}&t=${enc(tok)}`, { method:'PUT', body:blob, headers:{ 'content-type':blob.type } });
+    if (!put.ok) throw new Error('store ' + put.status);
+    showCrop(url, Date.now()); setStatus('stored ' + url);
+  } catch (e){
+    if (c) { c.tag.className='tag none'; c.tag.textContent='failed'; }
+    setStatus('✗ ' + url + ' — ' + e.message);
+  }
+}
+async function doUpload(url, file){
+  try {
+    const tok = await getToken(url);
+    if (!tok) throw new Error('no store bound');
+    const put = await fetch(`/api/thumb?url=${enc(url)}&t=${enc(tok)}`, { method:'PUT', body:file, headers:{ 'content-type':file.type } });
+    if (!put.ok) throw new Error('store ' + put.status);
+    showCrop(url, Date.now()); setStatus('uploaded ' + file.name);
+  } catch (e){ setStatus('✗ upload — ' + e.message); }
+}
+async function download(url, name){
+  try {
+    const r = await fetch(`/api/thumb?url=${enc(url)}`);
+    if (!r.ok) { setStatus('nothing cached for ' + url); return; }
+    const blob = await r.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = name + '.png'; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  } catch (e){ setStatus('✗ download — ' + e.message); }
+}
+
+const selected = () => worlds.filter(w => cards.get(w.url)?.checkbox.checked);
+$('#all').addEventListener('change', e => {
+  for (const w of worlds){ const c = cards.get(w.url); if (c){ c.checkbox.checked = e.target.checked; c.el.classList.toggle('sel', e.target.checked); } }
+});
+$('#fetchSel').addEventListener('click', async () => {
+  const sel = selected(); if (!sel.length) return setStatus('nothing selected');
+  $('#fetchSel').disabled = true;
+  let i = 0;
+  for (const w of sel){ setStatus(`fetching ${++i}/${sel.length}…`); await doFetch(w.url); }   // sequential: kind to microlink's burst limit
+  $('#fetchSel').disabled = false; setStatus(`done — fetched ${sel.length}`);
+});
+$('#dlSel').addEventListener('click', async () => {
+  const sel = selected(); if (!sel.length) return setStatus('nothing selected');
+  for (const w of sel){ await download(w.url, slug(w.url)); await new Promise(r => setTimeout(r, 250)); }
+});
+
+render();
+refreshList();
+</script>
+</body>
+</html>
