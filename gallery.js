@@ -79,6 +79,12 @@ function screenshotURL(provider, url, w, h, freshKey = ''){
   // so the capture lands at the device/panel aspect (one screenful). Every provider
   // gets generous render time so the capture is fully painted (fonts + lazy images).
   switch (provider){
+    case 'proxy': {
+      // same-origin edge-cached capture proxy — pass the clean target + size, and
+      // the fresh key (if any) so a forced refresh re-captures and re-caches.
+      const p = `/api/shot?url=${encodeURIComponent(full)}&w=${w}&h=${h}`;
+      return freshKey ? `${p}&fresh=${encodeURIComponent(freshKey)}` : p;
+    }
     case 'mshots':
       // mShots renders fresh server-side; vpw/vph pin the viewport so the crop is a
       // single device screen, not a tall slice with empty page below.
@@ -102,7 +108,13 @@ function screenshotURL(provider, url, w, h, freshKey = ''){
 // Robust capture: try providers in order, first one that actually decodes wins.
 // Guards against a single provider rate-limiting, blocking a domain, or returning
 // a broken/empty image — the live fetch falls back instead of leaving a blank.
-const PROVIDERS = [...new Set([CONFIG.screenshotProvider, 'microlink', 'mshots', 'thumio'].filter(Boolean))];
+// 'proxy' (functions/api/shot.js) is tried FIRST: it captures server-side and
+// edge-caches the image, so microlink's free quota is shared across visitors
+// instead of burned per page load — the reason thum.io kept showing. If the
+// proxy is unreachable (local dev, or a 5xx) we fall back to hitting microlink
+// directly. mShots/thum.io aren't in the client chain — mShots has no CORS so it
+// never decodes in the browser, and thum.io lives only inside the proxy now.
+const PROVIDERS = [...new Set(['proxy', CONFIG.screenshotProvider, 'microlink'].filter(Boolean))];
 function fetchScreenshot(url, onImg, onFail, freshKey = ''){
   let i = 0;
   const tryNext = async () => {
