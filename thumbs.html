@@ -179,7 +179,12 @@ for (let i = 0; i < 14; i++){
 
 const microlinkURL = url => {
   const full = /^https?:\/\//i.test(url) ? url : 'https://' + url;
-  return `https://api.microlink.io/?url=${enc(full)}&screenshot=true&embed=screenshot.url`
+  // Fetch is the owner's deliberate re-capture, so a UNIQUE key rides the target:
+  // microlink caches its render per exact URL, and a bare URL would happily replay
+  // a screenshot of the page as it USED to look (the stale-config poison) instead
+  // of rendering it fresh. Costs one render per press — exactly what Fetch means.
+  const target = `${full}${full.includes('?') ? '&' : '?'}fgfresh=${Date.now().toString(36)}`;
+  return `https://api.microlink.io/?url=${enc(target)}&screenshot=true&embed=screenshot.url`
        + `&viewport.width=${SHOT_W}&viewport.height=${SHOT_H}&viewport.deviceScaleFactor=1`
        + `&waitUntil=networkidle0&waitForTimeout=2500&meta=false`;
 };

@@ -5,7 +5,7 @@
   "subtitle": "",
   "loadingNote": "",
   "readyNote": "",
-  "pause": { "title": "paused", "note": "done looking?", "resume": "explore" },
+  "pause": { "title": "paused", "note": "done looking?", "resume": "explore", "thumbs": "thumbs" },
   "console": { "enabled": false },
   "walls": {
     "west": { "on": true, "name": "Build Yours", "url": "https://frutiger-gallery.pages.dev/", "live": false },

@@ -1609,7 +1609,7 @@ function seedDraft(){
   return {
     creator: CONFIG.creator, title: CONFIG.title, tabTitle: CONFIG.tabTitle ?? '',
     subtitle: CONFIG.subtitle, loadingNote: CONFIG.loadingNote, readyNote: CONFIG.readyNote,
-    pause: { ...(CONFIG.pause || { title:'Paused', note:'Take a breath.', resume:'Resume' }) },
+    pause: { ...(CONFIG.pause || { title:'Paused', note:'Take a breath.', resume:'Resume', thumbs:'Thumbs' }) },
     bubbles: { ...(CONFIG.bubbles || { count:44, size:1, speed:1 }) },
     clouds:  { ...(CONFIG.clouds  || { cover:1, cirrus:0.35 }) },
     volume: CONFIG.volume ?? 0.6,
@@ -1637,6 +1637,7 @@ try {
   if (saved && typeof saved === 'object'){ draft = { ...draft, ...saved }; draftEdited = true; }
 } catch { /* corrupt draft → fresh seed */ }
 draft.walls = normWalls(draft.walls);   // heal pre-walls / legacy-boolean drafts
+draft.pause.thumbs ||= CONFIG.pause?.thumbs || 'Thumbs';   // heal drafts saved before the thumbs label existed
 let _saveT = null;
 function saveDraft(){
   draftEdited = true;
@@ -1697,6 +1698,7 @@ function applyDraftLive(){
   setLine('pauseTitle', draft.pause.title);
   setLine('pauseNote',  draft.pause.note);
   $('resumeBtn').textContent = draft.pause.resume || 'Resume';
+  $('thumbsBtn').textContent = draft.pause.thumbs || 'Thumbs';
   $('enterBtn').textContent = draft.creator;
   if (draft.tabTitle) document.title = draft.tabTitle;
   audio.setVolume(draft.volume);
@@ -2164,8 +2166,9 @@ function drawIdentity(cc, top){
   mk('f:ptitle', 'pause title', x2, y += 130, () => d.pause.title, v => { d.pause.title = v; }, 40);
   mk('f:pnote', 'pause note', x2, y += 130, () => d.pause.note, v => { d.pause.note = v; }, 60);
   mk('f:presume', 'resume button', x2, y += 130, () => d.pause.resume, v => { d.pause.resume = v; }, 30);
+  mk('f:pthumbs', 'thumbnails button', x2, y += 130, () => d.pause.thumbs, v => { d.pause.thumbs = v; }, 30);
   cc.fillStyle = AERO.inkFaint; cFont(cc, 22); cc.textAlign = 'left'; cc.textBaseline = 'alphabetic';
-  cc.fillText('everything here previews live — check the splash & pause card', x2 + 6, top + 40 + 3*130 + 130);
+  cc.fillText('everything here previews live — check the splash & pause card', x2 + 6, top + 40 + 4*130 + 130);
 }
 
 function drawWorlds(cc, top){
@@ -2861,6 +2864,9 @@ function setUiHover(el){
   if (uiHoverEl === target) return;
   uiHoverEl?.classList.remove('cursor-over');
   target?.classList.add('cursor-over');
+  // landing ON a pill pops a menu bubble (silent until the first gesture
+  // unlocks the AudioContext — the pointerdown unlock below section 7)
+  if (target) audio.pop();
   uiHoverEl = target;
 }
 const onUiScreen = () => state === 'menu' || state === 'paused';
@@ -2952,10 +2958,10 @@ function pollPad(dt){
         crosshairEl.classList.toggle('active', !!uiHoverEl);   // grow/glow over a live button
       }
       if (aBtn && !padVisitPrev){                 // A → activate the button under the cursor
-        if (over === $('resumeBtn')){ audio.init(); resumeGame(); }
+        if (over === $('resumeBtn')){ audio.init(); audio.hover(); resumeGame(); }
         // gamepad start needs no pointer lock (look is on the right stick), so begin
         // play directly rather than via controls.lock(), which a pad press can't grant
-        else if (over === $('enterBtn') && !over.disabled){ audio.init(); beginPlay(); }
+        else if (over === $('enterBtn') && !over.disabled){ audio.init(); audio.hover(); beginPlay(); }
         else if (over && !over.disabled) over.click();
       }
       if (state === 'paused' && (bBtn || startBtn) && !padBackPrev){ audio.init(); resumeGame(); }   // B / Start → leave
@@ -3191,6 +3197,12 @@ const audio = (() => {
 // unlock the AudioContext on the first user gesture so menu bubble-pops have sound
 // before the visitor ever clicks Enter (browsers gate audio behind a real gesture)
 addEventListener('pointerdown', () => audio.init(), { once:true });
+// every aero pill (handle / Resume / Thumbs) presses with the Information Bar
+// tick — the hover bubble-pop lives in setUiHover. Synthesised .click()s (the
+// gamepad path) land here too.
+document.addEventListener('click', e => {
+  if (e.target?.closest?.('.aero-btn:not(:disabled)')) audio.hover();
+});
 
 /* ════════════════════════════════════════════════════════════════
    8 · state machine: enter → intro swoop → play → launch swoop
@@ -4143,6 +4155,7 @@ setLine('loadnote',   CONFIG.loadingNote ?? 'Loading the world…');
 setLine('pauseTitle', CONFIG.pause?.title ?? 'Paused');
 setLine('pauseNote',  CONFIG.pause?.note  ?? 'Take a breath.');
 $('resumeBtn').textContent = CONFIG.pause?.resume || 'Resume';
+$('thumbsBtn').textContent = CONFIG.pause?.thumbs || 'Thumbs';
 // entrance button is just the owner's handle (CONFIG.creator) — the one breadcrumb
 // a new owner edits after cloning (or a future sign-up Worker writes)
 $('enterBtn').textContent = CONFIG.creator;
