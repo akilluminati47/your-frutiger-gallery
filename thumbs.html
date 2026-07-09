@@ -96,6 +96,21 @@
   footer{ text-align:center; margin-top:26px; font-size:12px; color:var(--ink-soft); }
   footer code{ background:rgba(255,255,255,.6); padding:1px 6px; border-radius:6px; }
   @media (prefers-reduced-motion: reduce){ .bubbles span{ animation:none; display:none; } }
+
+  /* click-to-expand lightbox (view only — no uploads) */
+  .shot img{ cursor:zoom-in; }
+  .zoom{ position:fixed; inset:0; z-index:60; background:rgba(10,44,86,.55);
+    -webkit-backdrop-filter:blur(4px); backdrop-filter:blur(4px);
+    opacity:0; pointer-events:none; transition:opacity .28s ease; cursor:zoom-out; }
+  .zoom.show{ opacity:1; pointer-events:auto; }
+  .zoom img{ position:fixed; margin:0; border-radius:14px; object-fit:contain; background:rgba(255,255,255,.06);
+    box-shadow:0 30px 90px rgba(8,40,80,.5), 0 0 0 3px rgba(255,255,255,.75);
+    transition:left .34s cubic-bezier(.2,.72,.2,1), top .34s cubic-bezier(.2,.72,.2,1),
+               width .34s cubic-bezier(.2,.72,.2,1), height .34s cubic-bezier(.2,.72,.2,1);
+    will-change:left,top,width,height; }
+  .zoom .hint{ position:fixed; bottom:20px; left:0; right:0; text-align:center; color:#fff;
+    font-size:13px; font-weight:600; text-shadow:0 1px 4px rgba(0,40,80,.6); opacity:.85; }
+  @media (prefers-reduced-motion: reduce){ .zoom img{ transition:none; } }
 </style>
 </head>
 <body>
@@ -127,6 +142,8 @@
     Fetch from a fresh-quota network (phone on cellular) to seed the sharp microlink crops for everyone.
   </footer>
 </div>
+
+<div class="zoom" id="zoom"><img alt="expanded thumbnail" /><div class="hint">click anywhere to close</div></div>
 
 <script type="module">
 import { CONFIG } from './config.js';
@@ -194,23 +211,23 @@ function render(){
         <p class="age"></p>
         <div class="row">
           <button class="btn mini act-fetch">⟳ Fetch</button>
-          <button class="btn mini act-up">⤒ Upload</button>
           <button class="btn mini act-dl">↓ Save</button>
         </div>
-        <input type="file" accept="image/*" hidden />
       </div>`;
     el.querySelector('.name').textContent = w.name;
     el.querySelector('.url').textContent = w.url;
     const img = el.querySelector('img'), empty = el.querySelector('.empty');
     const tag = el.querySelector('.tag'), age = el.querySelector('.age');
     const checkbox = el.querySelector('.pick input');
-    const fileIn = el.querySelector('input[type=file]');
 
     checkbox.addEventListener('change', () => el.classList.toggle('sel', checkbox.checked));
     el.querySelector('.act-fetch').addEventListener('click', () => doFetch(w.url));
     el.querySelector('.act-dl').addEventListener('click', () => download(w.url, slug(w.url)));
-    el.querySelector('.act-up').addEventListener('click', () => fileIn.click());
-    fileIn.addEventListener('change', () => fileIn.files[0] && doUpload(w.url, fileIn.files[0]));
+    // click the crop (not the checkbox) → expand it XXL; any click shrinks it back
+    el.querySelector('.shot').addEventListener('click', e => {
+      if (e.target.closest('.pick')) return;
+      if (!img.hidden && img.src) openZoom(img);
+    });
 
     cards.set(w.url, { el, img, empty, tag, age, checkbox });
     grid.appendChild(el);
@@ -273,15 +290,6 @@ async function doFetch(url){
     setStatus('✗ ' + url + ' — ' + e.message);
   }
 }
-async function doUpload(url, file){
-  try {
-    const tok = await getToken(url);
-    if (!tok) throw new Error('no store bound');
-    const put = await fetch(`/api/thumb?url=${enc(url)}&t=${enc(tok)}`, { method:'PUT', body:file, headers:{ 'content-type':file.type } });
-    if (!put.ok) throw new Error('store ' + put.status);
-    showCrop(url, Date.now()); setStatus('uploaded ' + file.name);
-  } catch (e){ setStatus('✗ upload — ' + e.message); }
-}
 async function download(url, name){
   try {
     const r = await fetch(`/api/thumb?url=${enc(url)}`);
@@ -308,6 +316,39 @@ $('#dlSel').addEventListener('click', async () => {
   const sel = selected(); if (!sel.length) return setStatus('nothing selected');
   for (const w of sel){ await download(w.url, slug(w.url)); await new Promise(r => setTimeout(r, 250)); }
 });
+
+// ── click-to-expand lightbox: grow from the card's spot to XXL, click to shrink ──
+const zoom = $('#zoom'), zoomImg = zoom.querySelector('img');
+let zoomState = null;
+const rectOf = el => { const r = el.getBoundingClientRect(); return { left:r.left, top:r.top, width:r.width, height:r.height }; };
+const place = r => { zoomImg.style.left=r.left+'px'; zoomImg.style.top=r.top+'px'; zoomImg.style.width=r.width+'px'; zoomImg.style.height=r.height+'px'; };
+function targetRect(nw, nh){
+  const maxW = innerWidth*0.94, maxH = innerHeight*0.9;
+  const ar = (nw && nh) ? nw/nh : 16/9;
+  let w = maxW, h = w/ar;
+  if (h > maxH){ h = maxH; w = h*ar; }
+  return { left:(innerWidth-w)/2, top:(innerHeight-h)/2, width:w, height:h };
+}
+function openZoom(srcImg){
+  if (zoomState) return;
+  const from = rectOf(srcImg);
+  zoomState = { from };
+  zoomImg.src = srcImg.src;
+  place(from);
+  zoom.classList.add('show');
+  const grow = () => requestAnimationFrame(() => place(targetRect(zoomImg.naturalWidth, zoomImg.naturalHeight)));
+  if (zoomImg.complete && zoomImg.naturalWidth) grow(); else zoomImg.onload = grow;
+}
+function closeZoom(){
+  if (!zoomState) return;
+  place(zoomState.from);                 // shrink back to the card spot
+  zoom.classList.remove('show');
+  const s = zoomState; zoomState = null;
+  setTimeout(() => { if (!zoomState) zoomImg.removeAttribute('src'); }, 360);
+}
+zoom.addEventListener('click', closeZoom);
+addEventListener('keydown', e => { if (e.key === 'Escape') closeZoom(); });
+addEventListener('resize', () => { if (zoomState) place(targetRect(zoomImg.naturalWidth, zoomImg.naturalHeight)); });
 
 render();
 refreshList();

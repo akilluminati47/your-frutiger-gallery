@@ -74,11 +74,14 @@ export async function onRequest({ request, env }){
       const { value, metadata } = await store.getWithMetadata(objKey(target), { type: 'arrayBuffer' });
       if (value){
         const ageS = Math.max(0, (Date.now() - (metadata?.ts || 0)) / 1000);
-        const remain = Math.max(60, Math.floor(DAY_S - ageS));   // cache until it goes stale
+        // Cache for MINUTES, not the whole TTL: an uploaded/refreshed crop should
+        // reach the gallery quickly, and re-reading KV costs nothing (it never
+        // touches microlink — the store existing is what protects the IP quota).
+        // stale-while-revalidate keeps it instant while the fresh copy loads.
         return new Response(value, {
           headers: {
             'content-type': metadata?.contentType || 'image/png',
-            'cache-control': `public, max-age=${remain}`,
+            'cache-control': 'public, max-age=300, stale-while-revalidate=600',
             'access-control-allow-origin': '*',
             'access-control-expose-headers': 'x-thumb-ask',
             // still hand out a token so a forced refresh (hold-R) can overwrite

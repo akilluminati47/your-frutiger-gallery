@@ -243,11 +243,15 @@ those crops.
 
 **Dashboard — [`/thumbs`](https://akilluminati47.pages.dev/thumbs).** A flat
 Frutiger-Aero control panel that lists every world with its cached crop and its
-age. Per world you can **Fetch** (capture from the browser you're on — open it on
-cellular to seed the sharp crops), **Upload** your own image, or **Save** the
-cached one; tick the checkboxes for bulk fetch/download. It reads the live store
-via `GET /api/thumb?list`. The gallery never downgrades a sharp crop to a
-thum.io fallback on refresh — a weak fallback only fills a slot that has nothing.
+age. **Click any crop to expand it XXL; click again to shrink** and keep
+browsing. Per world you can **Fetch** (capture from the browser you're on — open
+it on cellular to seed the sharp crops) or **Save** the cached one; tick the
+checkboxes for bulk fetch/download. It reads the live store via
+`GET /api/thumb?list`. There is deliberately **no upload button** — the store
+fills only from real captures (the gallery's own microlink grabs and the Fetch
+button), so a visitor can't push arbitrary images into it. The gallery never
+downgrades a sharp crop to a thum.io fallback on refresh — a weak fallback only
+fills a slot that has nothing.
 
 **Daily keep-warm (optional).** [`.github/workflows/thumbs-cron.yml`](.github/workflows/thumbs-cron.yml)
 runs [`tools/capture-thumbs.mjs`](tools/capture-thumbs.mjs) once a day to refresh
