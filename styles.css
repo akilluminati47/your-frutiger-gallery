@@ -31,25 +31,19 @@ body.cursor-live{ cursor:default; }
 #scene{ position:fixed; inset:0; }
 #scene canvas{ display:block; }
 
-/* ── Sun-glare bloom over the live panels ────────────────────────
-   z-index 25 sits ABOVE the CSS3D live-panel layer (z 12) and the HUD (z 20);
-   screen blend lifts darker panels (the flare "spills" onto them) while barely
-   touching the already-bright sky. gallery.js tracks left/top to the sun's
-   screen projection and eases opacity/scale by how directly you face it.
-   The z-order covers every ordinary (WebGL) panel, but NOT a live portal's
-   cross-origin iframe: it renders on its own compositor surface, and
-   mix-blend-mode can't reach across that to paint over it. Fixed by mirroring
-   this same glow onto a plain (non-blend) veil inside each live wrap, next to
-   its iframe (see liveScreenFor / updateSunGlow in gallery.js) — ordinary
-   same-surface alpha compositing, so it reliably sits on top. */
+/* ── Sun-glare bloom over everything ────────────────────────────
+   z-index 25 rides above the CSS3D live-panel layer (z 12) and the HUD
+   (z 20) so the flare and ghost train overlap the interactive slabs — the
+   whole effect clips through panels like a true 3D lens flare instead of
+   being clipped by them. gallery.js tracks position to the sun's screen
+   projection and builds the multi-ring background from GHOST_SPECS.
+   No mix-blend-mode: the plain alpha gradient composites natively across
+   every layer, including cross-origin iframes on their own surfaces. */
 #sunglow{
   position:fixed; left:50%; top:20%; z-index:25; pointer-events:none;
   width:900px; height:900px; border-radius:50%;
   transform:translate(-50%,-50%) scale(.6); opacity:0;
-  mix-blend-mode:screen; will-change:left,top,transform,opacity;
-  background:radial-gradient(circle,
-    rgba(255,247,224,.95) 0%, rgba(255,236,188,.55) 16%,
-    rgba(255,222,150,.24) 38%, rgba(255,214,150,.08) 58%, transparent 72%);
+  will-change:left,top,transform,opacity;
 }
 @media (prefers-reduced-motion: reduce){ #sunglow{ transition:none; } }
 
