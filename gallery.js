@@ -132,7 +132,9 @@ function fetchScreenshot(url, onImg, onFail, freshKey = ''){
       if (!blob.type.startsWith('image/')) return tryNext();
       const obj = URL.createObjectURL(blob);
       const img = new Image();
-      img.onload  = () => { URL.revokeObjectURL(obj); img.naturalWidth > 1 ? onImg(img) : tryNext(); };
+      // pass the raw blob + which provider won, so a fresh own-IP microlink crop
+      // can be uploaded to the shared store (never the proxy/thum.io fallback)
+      img.onload  = () => { URL.revokeObjectURL(obj); img.naturalWidth > 1 ? onImg(img, blob, prov) : tryNext(); };
       img.onerror = () => { URL.revokeObjectURL(obj); tryNext(); };
       img.src = obj;
     } catch { tryNext(); } // no CORS / network error → next provider
@@ -175,6 +177,58 @@ function textureFromScreenshot(img){
 // keeps just a few captures in flight at a time, so a visitor's own-IP quota
 // lands microlink crops on every slab instead of only the first handful.
 const CAPTURE_CONCURRENCY = 3;
+
+function texFromBlob(blob){
+  return new Promise(resolve => {
+    const obj = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload  = () => { URL.revokeObjectURL(obj); resolve(img.naturalWidth > 1 ? textureFromScreenshot(img) : null); };
+    img.onerror = () => { URL.revokeObjectURL(obj); resolve(null); };
+    img.src = obj;
+  });
+}
+
+// Fire-and-forget: hand a fresh own-IP microlink crop to the shared store so the
+// next visitor is served it from R2 instead of hitting microlink themselves.
+function uploadThumb(url, blob, tok){
+  fetch(`/api/thumb?url=${encodeURIComponent(url)}&t=${encodeURIComponent(tok)}`,
+        { method: 'PUT', body: blob, headers: { 'content-type': blob.type } })
+    .catch(() => {});
+}
+
+// One slab's capture, shared-store-first:
+//   1. GET /api/thumb — a fresh stored crop is served straight from R2 (no
+//      microlink call at all). Always yields an upload token for step 2.
+//   2. on a miss (or a forced refresh) capture from the visitor's OWN IP via the
+//      provider chain (microlink → proxy). A microlink win is uploaded back so
+//      the store fills for everyone; a proxy/thum.io fallback is never uploaded.
+async function captureThumb(url, freshKey){
+  let askToken = null;
+  try {
+    const r = await fetch(`/api/thumb?url=${encodeURIComponent(url)}`, { cache: freshKey ? 'no-store' : 'default' });
+    askToken = r.headers.get('x-thumb-ask');
+    if (r.ok && !freshKey){
+      const blob = await r.blob();
+      if (blob.type.startsWith('image/')){
+        const tex = await texFromBlob(blob);
+        if (tex) return tex;
+      }
+    }
+  } catch { /* store unreachable (local dev / fork w/o R2) → capture live */ }
+
+  return new Promise(resolve => {
+    fetchScreenshot(url,
+      (img, blob, prov) => {
+        const tex = textureFromScreenshot(img);
+        if (prov === 'microlink' && askToken && blob && blob.type.startsWith('image/'))
+          uploadThumb(url, blob, askToken);
+        resolve(tex);
+      },
+      () => resolve(null),
+      freshKey);
+  });
+}
+
 function runCaptureQueue(urls, onEach, freshKey = ''){
   const queue = [...urls];
   const total = queue.length;
@@ -187,10 +241,11 @@ function runCaptureQueue(urls, onEach, freshKey = ''){
         const url = queue.shift();
         active++;
         prefetchMap.set(url, 'pending');
-        fetchScreenshot(url,
-          (img) => { const tex = textureFromScreenshot(img); prefetchMap.set(url, tex); onEach(url, tex); finish(); },
-          ()    => { prefetchMap.set(url, null); onEach(url, null); finish(); },
-          freshKey);
+        captureThumb(url, freshKey).then(tex => {
+          prefetchMap.set(url, tex || null);
+          onEach(url, tex || null);
+          finish();
+        });
       }
     };
     pump();
