@@ -137,7 +137,7 @@
       <p id="sub">Reading the shared store…</p>
     </div>
     <span class="grow"></span>
-    <a class="home" href="/">← back to the gallery</a>
+    <a class="home" href="/" data-silent>← back to the gallery</a>
   </header>
 
   <div class="banner" id="banner"></div>
@@ -477,7 +477,7 @@ addEventListener('mousemove', e => {
   setHover(atPoint(e.clientX, e.clientY));
 }, { passive:true });
 document.addEventListener('mouseleave', () => { cross.classList.remove('show'); setHover(null); });
-addEventListener('click', e => { if (e.target.closest(INTERACTIVE)) sfx.press(); }, true);
+addEventListener('click', e => { if (e.target.closest(INTERACTIVE) && !e.target.closest('[data-silent]')) sfx.press(); }, true);
 
 // touch: a finger drives the circle; the native tap still fires the control
 addEventListener('touchstart', e => {
