@@ -200,17 +200,42 @@ function applyFreshScreenshot(url, tex){
   }
 }
 
+// ── forced thumbnail refresh (hold R in the pause menu) ──
+// Re-captures every slab from a fresh cache key. The pause card's #refreshStatus
+// line reads "fetching thumbnails . . ." until the LAST capture resolves (success
+// or fail), then flashes "thumbnails updated" and clears. refreshInFlight guards
+// against a second hold re-arming the batch while one is still running.
+let refreshInFlight = 0, refreshStatusT = null;
+function setRefreshStatus(txt){
+  const el = $('refreshStatus');
+  if (!el) return;
+  if (txt){ el.textContent = txt; el.classList.remove('hidden'); }
+  else { el.textContent = ''; el.classList.add('hidden'); }
+}
 function refreshSlabPreviews(){
+  if (refreshInFlight > 0) return;             // a batch is already running
+  const urls = [...galleryScreenshotUrls()];
+  if (!urls.length) return;
+  clearTimeout(refreshStatusT);
+  refreshInFlight = urls.length;
+  setRefreshStatus('fetching thumbnails . . .');
+  const settle = () => {
+    if (--refreshInFlight > 0) return;
+    refreshInFlight = 0;
+    setRefreshStatus('thumbnails updated');
+    refreshStatusT = setTimeout(() => { if (refreshInFlight === 0) setRefreshStatus(''); }, 1800);
+  };
   const freshKey = Date.now().toString(36);
-  for (const url of galleryScreenshotUrls()){
+  for (const url of urls){
     prefetchMap.set(url, 'pending');
     fetchScreenshot(url,
       (img) => {
         const tex = textureFromScreenshot(img);
         prefetchMap.set(url, tex);
         applyFreshScreenshot(url, tex);
+        settle();
       },
-      () => prefetchMap.set(url, null),
+      () => { prefetchMap.set(url, null); settle(); },
       freshKey
     );
   }
