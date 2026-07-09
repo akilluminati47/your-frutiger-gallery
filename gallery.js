@@ -196,12 +196,18 @@ function uploadThumb(url, blob, tok){
     .catch(() => {});
 }
 
-// One slab's capture, shared-store-first:
-//   1. GET /api/thumb — a fresh stored crop is served straight from R2 (no
-//      microlink call at all). Always yields an upload token for step 2.
+// Crop quality per url so a refresh never downgrades a sharp crop to a weak one:
+// 'good' = a stored (shared) or own-IP microlink crop; 'weak' = the proxy/thum.io
+// fallback, which we only ever show on a slab that has nothing yet.
+const thumbGrade = new Map();   // url -> 'good' | 'weak'
+
+// One slab's capture, shared-store-first. Returns { tex, grade }:
+//   1. GET /api/thumb — a stored crop is served straight from KV (no microlink
+//      call at all), graded 'good'. Always yields an upload token for step 2.
 //   2. on a miss (or a forced refresh) capture from the visitor's OWN IP via the
-//      provider chain (microlink → proxy). A microlink win is uploaded back so
-//      the store fills for everyone; a proxy/thum.io fallback is never uploaded.
+//      provider chain (microlink 'good' → proxy 'weak'). A microlink win is
+//      uploaded back so the store fills for everyone; the fallback is never
+//      uploaded (the KV store only ever holds sharp crops).
 async function captureThumb(url, freshKey){
   let askToken = null;
   try {
@@ -211,20 +217,21 @@ async function captureThumb(url, freshKey){
       const blob = await r.blob();
       if (blob.type.startsWith('image/')){
         const tex = await texFromBlob(blob);
-        if (tex) return tex;
+        if (tex) return { tex, grade: 'good' };   // stored crops are microlink-quality
       }
     }
-  } catch { /* store unreachable (local dev / fork w/o R2) → capture live */ }
+  } catch { /* store unreachable (local dev / fork w/o KV) → capture live */ }
 
   return new Promise(resolve => {
     fetchScreenshot(url,
       (img, blob, prov) => {
         const tex = textureFromScreenshot(img);
+        const grade = prov === 'microlink' ? 'good' : 'weak';
         if (prov === 'microlink' && askToken && blob && blob.type.startsWith('image/'))
           uploadThumb(url, blob, askToken);
-        resolve(tex);
+        resolve({ tex, grade });
       },
-      () => resolve(null),
+      () => resolve({ tex: null, grade: null }),
       freshKey);
   });
 }
@@ -240,10 +247,20 @@ function runCaptureQueue(urls, onEach, freshKey = ''){
       while (active < CAPTURE_CONCURRENCY && queue.length){
         const url = queue.shift();
         active++;
-        prefetchMap.set(url, 'pending');
-        captureThumb(url, freshKey).then(tex => {
-          prefetchMap.set(url, tex || null);
-          onEach(url, tex || null);
+        if (!prefetchMap.has(url)) prefetchMap.set(url, 'pending');
+        captureThumb(url, freshKey).then(({ tex, grade }) => {
+          const haveGood = thumbGrade.get(url) === 'good';
+          // apply only if the new crop is good, or the slot has no good crop yet —
+          // never overwrite a sharp crop with a weak (thum.io) one on a refresh
+          if (tex && (grade === 'good' || !haveGood)){
+            prefetchMap.set(url, tex);
+            thumbGrade.set(url, grade);
+            onEach(url, tex);
+          } else if (!tex && !thumbGrade.has(url)){
+            prefetchMap.set(url, null);       // nothing captured, nothing before → mark failed
+            onEach(url, null);
+          }
+          if (prefetchMap.get(url) === 'pending') prefetchMap.set(url, null);   // never leave it stuck pending
           finish();
         });
       }
