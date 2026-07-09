@@ -3800,11 +3800,11 @@ function updateSunGaze(dt){
   }
 }
 
-// ── sun-glare bloom: the full ghost train rendered on a single DOM element
-//    above everything (z-index 25) so the flare overlaps CSS3D panels, live
-//    iframes, and the WebGL canvas alike — no mix-blend-mode, plain alpha
-//    gradients composite across every layer. Eases in as you turn toward the
-//    sun with an ease-out curve so it fades and expands smoothly. ──
+// ── sun-glare bloom: the full ghost train on a full-viewport overlay
+//    at z-index 25. Each ring is a radial-gradient at its absolute screen
+//    position — no clipping, no mix-blend-mode. Continuous fade from zero
+//    using facing^2.5, so there is no pop-in threshold; rings and opacity
+//    both start near-invisible and swell smoothly as you turn to the sun. ──
 const sunglowEl = $('sunglow');
 const _glowDir = new THREE.Vector3();
 const _sunNdc  = new THREE.Vector3();
@@ -3818,11 +3818,12 @@ const GHOST_SPECS = [
   { size: 94,  distance: 0.80, ring: true  },
   { size: 130, distance: 1.00, ring: false },
 ];
-function ghostLayer(spec, lx, ly){
-  const r = Math.max(4, spec.size / 2).toFixed(0);
+function ghostLayer(spec, lx, ly, bloom){
+  const baseR = Math.max(2, spec.size / 2);
+  const r = Math.max(4, baseR * (0.15 + 0.85 * Math.min(1, bloom * 1.8))).toFixed(0);
   return spec.ring
     ? `radial-gradient(circle ${r}px at ${lx}% ${ly}%, rgba(255,255,255,0) 0%, rgba(200,225,255,.5) 55%, rgba(170,210,255,.22) 82%, rgba(170,210,255,0) 100%)`
-    : `radial-gradient(circle ${r}px at ${lx}% ${ly}%, rgba(255,247,224,.95) 0%, rgba(255,236,188,.55) 22%, rgba(255,222,150,.24) 45%, rgba(255,214,150,.08) 65%, transparent 78%)`;
+    : `radial-gradient(circle ${r}px at ${lx}% ${ly}%, rgba(255,247,224,.95) 0%, rgba(255,236,188,.62) 22%, rgba(255,222,150,.28) 45%, rgba(255,214,150,.10) 65%, transparent 78%)`;
 }
 function clearLiveGlows(){}
 function updateSunGlow(){
@@ -3830,28 +3831,20 @@ function updateSunGlow(){
   if (state !== 'play' && state !== 'intro'){ sunglowEl.style.opacity = '0'; return; }
   camera.getWorldDirection(_glowDir);
   const facing = _glowDir.dot(SUN_DIR);
-  if (facing <= 0.12){ sunglowEl.style.opacity = '0'; return; }
+  // Continuous rise from zero — no hard cutoff
+  if (facing < 0.001){ sunglowEl.style.opacity = '0'; return; }
+  const bloom = Math.pow(Math.min(1, facing), 2.5);
   _sunNdc.copy(_sunWorld).project(camera);
-  const k = clamp((facing - 0.12) / 0.88, 0, 1);
-  const bloom = 1 - Math.pow(1 - k, 3);   // ease-out cubic — smooth fade and expansion
-  const sx = (_sunNdc.x * 0.5 + 0.5) * innerWidth;
-  const sy = (-_sunNdc.y * 0.5 + 0.5) * innerHeight;
-  sunglowEl.style.left = sx + 'px';
-  sunglowEl.style.top  = sy + 'px';
-  sunglowEl.style.transform = `translate(-50%,-50%) scale(${(0.15 + 1.45 * bloom).toFixed(3)})`;
-  const op = 0.82 * bloom;
-  sunglowEl.style.opacity = op.toFixed(3);
-  // Paint every ghost ring as a background layer on #sunglow, offset from its
-  // centre by the same formula the WebGL Lensflare uses for its ghost train.
-  // Plain alpha compositing (no mix-blend-mode) works across every layer
-  // including cross-origin iframe compositor surfaces.
+  const sw = innerWidth, sh = innerHeight;
+  // Build each ghost at its true screen position in viewport percentages
   const layers = GHOST_SPECS.map(spec => {
-    const d = spec.distance;
-    const lx = (50 - _sunNdc.x * d * innerWidth  * 100 / 900).toFixed(1);
-    const ly = (50 + _sunNdc.y * d * innerHeight * 100 / 900).toFixed(1);
-    return ghostLayer(spec, lx, ly);
+    const f = 1 - 2 * spec.distance;
+    const gx = (_sunNdc.x * f * 0.5 + 0.5) * sw;
+    const gy = (-_sunNdc.y * f * 0.5 + 0.5) * sh;
+    return ghostLayer(spec, (gx / sw * 100).toFixed(1), (gy / sh * 100).toFixed(1), bloom);
   });
   sunglowEl.style.background = layers.join(',');
+  sunglowEl.style.opacity = (0.88 * bloom).toFixed(3);
 }
 function animate(){
   const dt = Math.min(clock.getDelta(), 0.05);
