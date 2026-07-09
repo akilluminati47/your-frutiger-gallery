@@ -208,6 +208,26 @@ Pages Functions under [`functions/api/`](functions/api/):
 | `/api/gh/fork` | POST | Forks the template, optional `{name}` for the custom-name toggle, waits for the fork to materialize |
 | `/api/gh/commit` | POST | Writes `owner.config.json` into the fork; refuses any repo the connected account does not own |
 | `/api/owner-config` | GET | Serves the `OWNER_CONFIG` secret to the handshake above |
+| `/api/shot` | GET | Server-side capture proxy with a day-long edge cache — the fallback when a visitor's own IP can't reach microlink |
+| `/api/thumb` | GET/PUT | The shared thumbnail store (below) — serves a stored crop, or invites the client to capture and upload one |
+
+### Shared thumbnail cache (optional, recommended)
+
+Microlink's free screenshot tier is **50/day per IP**, so the gallery captures
+each slab from the **visitor's own** browser IP — a fresh visitor has ample
+quota. To stop every visitor re-capturing the same worlds, bind an **R2 bucket**
+and the gallery becomes self-caching: the first guest to see a world captures it
+from their IP and uploads the crop to R2 (`PUT /api/thumb`, token-guarded); every
+later visitor is served that stored crop straight from the edge (`GET /api/thumb`)
+and never touches microlink. Each crop auto-refreshes 24 h later when the next
+guest returns, and hold-R forces a refresh from the owner's own IP. Forks that
+don't set this up simply capture live each visit — nothing breaks.
+
+To enable it on a deployment:
+
+1. Create an R2 bucket (e.g. `frutiger-thumbs`) — Dashboard → R2.
+2. Pages project → Settings → Functions → **R2 bindings**: add `THUMBS` → that bucket.
+3. Pages project → Settings → Environment variables: add secret **`THUMB_SIGN`** = any long random string (signs the upload invites so only crops this site invited can be stored).
 
 </details>
 
