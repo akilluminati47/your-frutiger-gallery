@@ -40,6 +40,11 @@ Cloudflare account; the console handles the rest.
    your whole design committed inside, then hands you off to Cloudflare Pages:
    connect the fork, accept the defaults, deploy. Every push to `main` redeploys.
 
+*Optional — sharper, shared previews.* Bind a **free** Workers KV namespace as
+`THUMBS` (three clicks, no card) so your visitors collectively keep a shared
+high-res thumbnail cache warm instead of each re-capturing. See
+[Shared thumbnail cache](#shared-thumbnail-cache-optional-recommended).
+
 Prefer files over the console?
 [Use this template](https://github.com/akilluminati47/your-frutiger-gallery/generate)
 or [fork the repo](https://github.com/akilluminati47/your-frutiger-gallery/fork),
@@ -215,19 +220,26 @@ Pages Functions under [`functions/api/`](functions/api/):
 
 Microlink's free screenshot tier is **50/day per IP**, so the gallery captures
 each slab from the **visitor's own** browser IP — a fresh visitor has ample
-quota. To stop every visitor re-capturing the same worlds, bind an **R2 bucket**
-and the gallery becomes self-caching: the first guest to see a world captures it
-from their IP and uploads the crop to R2 (`PUT /api/thumb`, token-guarded); every
-later visitor is served that stored crop straight from the edge (`GET /api/thumb`)
-and never touches microlink. Each crop auto-refreshes 24 h later when the next
-guest returns, and hold-R forces a refresh from the owner's own IP. Forks that
-don't set this up simply capture live each visit — nothing breaks.
+quota. To stop every visitor re-capturing the same worlds, bind a **Workers KV
+namespace** and the gallery becomes self-caching: the first guest to see a world
+captures it from their IP and uploads the crop (`PUT /api/thumb`, token-guarded);
+every later visitor is served that stored crop straight from the edge
+(`GET /api/thumb`) and never touches microlink. KV's 24 h TTL is the refresh
+cycle — a crop auto-expires after a day and the next returning guest re-captures
+it — and hold-R forces a refresh from the owner's own IP. Forks that don't set
+this up simply capture live each visit — nothing breaks.
 
-To enable it on a deployment:
+KV is on the **free** Workers plan (no card, unlike R2) and a set of ~15–80 KB
+crops is a rounding error against its limits. To enable it on a deployment:
 
-1. Create an R2 bucket (e.g. `frutiger-thumbs`) — Dashboard → R2.
-2. Pages project → Settings → Functions → **R2 bindings**: add `THUMBS` → that bucket.
+1. Create a KV namespace (e.g. `frutiger-thumbs`) — Dashboard → Storage & Databases → **KV** → *Create*.
+2. Pages project → Settings → Functions → **KV namespace bindings**: add `THUMBS` → that namespace.
 3. Pages project → Settings → Environment variables: add secret **`THUMB_SIGN`** = any long random string (signs the upload invites so only crops this site invited can be stored).
+
+Then redeploy. Seed it in one go by visiting your own gallery once from a
+**fresh-quota IP** (your phone on cellular, say): your browser captures every
+world at full res and uploads them, and from then on all visitors are served
+those crops.
 
 </details>
 
