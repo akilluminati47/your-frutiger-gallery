@@ -216,18 +216,20 @@ Pages Functions under [`functions/api/`](functions/api/):
 | `/api/shot` | GET | Server-side capture proxy with a day-long edge cache — the fallback when a visitor's own IP can't reach microlink |
 | `/api/thumb` | GET/PUT | The shared thumbnail store (below) — serves a stored crop, or invites the client to capture and upload one |
 
-### Shared thumbnail cache (optional, recommended)
+### Shared thumbnail cache (optional)
 
-Microlink's free screenshot tier is **50/day per IP**, so the gallery captures
-each slab from the **visitor's own** browser IP — a fresh visitor has ample
-quota. To stop every visitor re-capturing the same worlds, bind a **Workers KV
-namespace** and the gallery becomes self-caching: the first guest to see a world
-captures it from their IP and uploads the crop (`PUT /api/thumb`, token-guarded);
-every later visitor is served that stored crop straight from the edge
-(`GET /api/thumb`) and never touches microlink. KV's 24 h TTL is the refresh
-cycle — a crop auto-expires after a day and the next returning guest re-captures
-it — and hold-R forces a refresh from the owner's own IP. Forks that don't set
-this up simply capture live each visit — nothing breaks.
+Microlink's free tier is **50/day per IP**, so every visitor captures a world
+from their **own** browser. Bind a **Workers KV namespace** and the gallery
+caches crops at the edge: one visitor captures once, everyone else gets the
+stored crop. KV's 24 h TTL auto-expires each crop — the next returning guest
+re-captures it. You don't need to do anything; your thumbnails appear fresh
+each day on their own.
+
+Forks without KV work fine — every visitor captures live, nothing breaks.
+
+Each world can use **microlink** or **thum.io** individually, swapped from the
+[`/thumbs`](#dashboard---thumbs) dashboard (or the pause menu's Thumbnails
+button). The choice sticks per world across refreshes.
 
 KV is on the **free** Workers plan (no card, unlike R2) and a set of ~15–80 KB
 crops is a rounding error against its limits. To enable it on a deployment:
