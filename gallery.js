@@ -108,13 +108,15 @@ function screenshotURL(provider, url, w, h, freshKey = ''){
 // Robust capture: try providers in order, first one that actually decodes wins.
 // Guards against a single provider rate-limiting, blocking a domain, or returning
 // a broken/empty image — the live fetch falls back instead of leaving a blank.
-// 'proxy' (functions/api/shot.js) is tried FIRST: it captures server-side and
-// edge-caches the image, so microlink's free quota is shared across visitors
-// instead of burned per page load — the reason thum.io kept showing. If the
-// proxy is unreachable (local dev, or a 5xx) we fall back to hitting microlink
-// directly. mShots/thum.io aren't in the client chain — mShots has no CORS so it
-// never decodes in the browser, and thum.io lives only inside the proxy now.
-const PROVIDERS = [...new Set(['proxy', CONFIG.screenshotProvider, 'microlink'].filter(Boolean))];
+// microlink is tried FIRST, straight from the visitor's OWN IP — its free tier
+// is 50/day PER IP, so a real visitor has ample quota to capture every slab in
+// sharp crops. The 'proxy' (functions/api/shot.js) is the fallback: when a
+// visitor's own IP is tapped out (e.g. the owner after heavy testing), the
+// proxy serves an edge-cached capture so the slab is never blank. (Routing
+// everything through the proxy would 429 on Cloudflare's shared IP and give
+// everyone thum.io — hence own-IP first.) mShots isn't here: no CORS in the
+// browser; thum.io lives only inside the proxy as its deep last resort.
+const PROVIDERS = [...new Set([CONFIG.screenshotProvider, 'microlink', 'proxy'].filter(Boolean))];
 function fetchScreenshot(url, onImg, onFail, freshKey = ''){
   let i = 0;
   const tryNext = async () => {
@@ -168,32 +170,38 @@ function textureFromScreenshot(img){
   return tex;
 }
 
+// microlink's free tier limits CONCURRENCY, so firing every slab's capture at
+// once trips a burst 429 and drops good crops to the fallback. This little queue
+// keeps just a few captures in flight at a time, so a visitor's own-IP quota
+// lands microlink crops on every slab instead of only the first handful.
+const CAPTURE_CONCURRENCY = 3;
+function runCaptureQueue(urls, onEach, freshKey = ''){
+  const queue = [...urls];
+  const total = queue.length;
+  let active = 0, done = 0;
+  return new Promise(resolve => {
+    if (!total) return resolve();
+    const finish = () => { active--; (++done >= total) ? resolve() : pump(); };
+    const pump = () => {
+      while (active < CAPTURE_CONCURRENCY && queue.length){
+        const url = queue.shift();
+        active++;
+        prefetchMap.set(url, 'pending');
+        fetchScreenshot(url,
+          (img) => { const tex = textureFromScreenshot(img); prefetchMap.set(url, tex); onEach(url, tex); finish(); },
+          ()    => { prefetchMap.set(url, null); onEach(url, null); finish(); },
+          freshKey);
+      }
+    };
+    pump();
+  });
+}
+
 function preFetchScreenshots(){
-  // corridor worlds + the end-wall slots — the slots are independent strings
-  // that live OUTSIDE projects (see planWalls), so they queue here too. The
-  // frames key the cache by their (trimmed) slot url, hence the trim.
-  const walls = normWalls(CONFIG.walls);
-  const urls = new Set(CONFIG.projects.map(p => p.url));
-  for (const s of ['west', 'east'])
-    if (walls[s].on && walls[s].url.trim()) urls.add(walls[s].url.trim());
-  for (const url of urls){
-    prefetchMap.set(url, 'pending');
-    fetchScreenshot(url,
-      (img) => {
-        const tex = new THREE.Texture(img);
-        tex.colorSpace = THREE.SRGBColorSpace;
-        tex.minFilter = THREE.LinearMipmapLinearFilter;
-        tex.magFilter = THREE.LinearFilter;
-        tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
-        tex.generateMipmaps = true;
-        tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
-        tex.needsUpdate = true;           // no crop — the panel snaps to this image's aspect on reveal
-        renderer.initTexture(tex);        // upload to the GPU NOW (menu idle) — a reveal is a zero-hitch map swap
-        prefetchMap.set(url, tex);
-      },
-      () => prefetchMap.set(url, null)
-    );
-  }
+  // corridor worlds + the end-wall slots (independent strings outside projects,
+  // keyed by their trimmed url) — all queued through the concurrency limiter so
+  // the GPU upload happens while the menu idles: a reveal is a zero-hitch swap.
+  runCaptureQueue([...galleryScreenshotUrls()], () => {});
 }
 // Fire immediately — renderer + FW are set up synchronously below, and every
 // onload callback is async so it sees the fully-initialised module.
@@ -229,28 +237,15 @@ function refreshSlabPreviews(){
   const urls = [...galleryScreenshotUrls()];
   if (!urls.length) return;
   clearTimeout(refreshStatusT);
-  refreshInFlight = urls.length;
+  refreshInFlight = 1;                          // busy flag; the queue tracks real completion
   setRefreshStatus('fetching thumbnails . . .');
-  const settle = () => {
-    if (--refreshInFlight > 0) return;
-    refreshInFlight = 0;
-    setRefreshStatus('thumbnails updated');
-    refreshStatusT = setTimeout(() => { if (refreshInFlight === 0) setRefreshStatus(''); }, 1800);
-  };
   const freshKey = Date.now().toString(36);
-  for (const url of urls){
-    prefetchMap.set(url, 'pending');
-    fetchScreenshot(url,
-      (img) => {
-        const tex = textureFromScreenshot(img);
-        prefetchMap.set(url, tex);
-        applyFreshScreenshot(url, tex);
-        settle();
-      },
-      () => { prefetchMap.set(url, null); settle(); },
-      freshKey
-    );
-  }
+  runCaptureQueue(urls, (url, tex) => { if (tex) applyFreshScreenshot(url, tex); }, freshKey)
+    .then(() => {
+      refreshInFlight = 0;
+      setRefreshStatus('thumbnails updated');
+      refreshStatusT = setTimeout(() => { if (refreshInFlight === 0) setRefreshStatus(''); }, 1800);
+    });
 }
 
 preFetchScreenshots();
