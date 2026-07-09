@@ -277,48 +277,8 @@ function preFetchScreenshots(){
 }
 // Fire immediately — renderer + FW are set up synchronously below, and every
 // onload callback is async so it sees the fully-initialised module.
-function applyFreshScreenshot(url, tex){
-  for (const f of frames){
-    const u = f.userData;
-    if (u.project.url !== url || u.liveWall) continue;
-    if (u.liveTexture && u.liveTexture !== tex) u.liveTexture.dispose?.();
-    u.liveTexture = tex;
-    u.imageReady = !!tex;
-    if (u.loadState === 'done'){
-      u.screenMat.map = tex || loadBackdropTex;
-      u.screenMat.needsUpdate = true;
-      if (tex) fitPanelToImage(u, tex);
-    }
-  }
-}
-
-// ── forced thumbnail refresh (hold R in the pause menu) ──
-// Re-captures every slab from a fresh cache key. The pause card's #refreshStatus
-// line reads "fetching thumbnails . . ." until the LAST capture resolves (success
-// or fail), then flashes "thumbnails updated" and clears. refreshInFlight guards
-// against a second hold re-arming the batch while one is still running.
-let refreshInFlight = 0, refreshStatusT = null;
-function setRefreshStatus(txt){
-  const el = $('refreshStatus');
-  if (!el) return;
-  if (txt){ el.textContent = txt; el.classList.remove('hidden'); }
-  else { el.textContent = ''; el.classList.add('hidden'); }
-}
-function refreshSlabPreviews(){
-  if (refreshInFlight > 0) return;             // a batch is already running
-  const urls = [...galleryScreenshotUrls()];
-  if (!urls.length) return;
-  clearTimeout(refreshStatusT);
-  refreshInFlight = 1;                          // busy flag; the queue tracks real completion
-  setRefreshStatus('fetching thumbnails . . .');
-  const freshKey = Date.now().toString(36);
-  runCaptureQueue(urls, (url, tex) => { if (tex) applyFreshScreenshot(url, tex); }, freshKey)
-    .then(() => {
-      refreshInFlight = 0;
-      setRefreshStatus('thumbnails updated');
-      refreshStatusT = setTimeout(() => { if (refreshInFlight === 0) setRefreshStatus(''); }, 1800);
-    });
-}
+// Thumbnails are refreshed from the /thumbs dashboard now (a pause-menu button
+// opens it), so the old hidden hold-R re-capture + its status line are gone.
 
 preFetchScreenshots();
 
@@ -2834,20 +2794,8 @@ const keys = {};
 // cancels both so the browser's own shortcuts still fire.
 const CTRL_HOLD_MS = 550;
 let ctrlDownAt = 0, ctrlHeld = false, ctrlHoldFired = false, ctrlCombo = false, ctrlHoldT = null;
-const DEBUG_REFRESH_HOLD_MS = 2000;
-let debugRefreshHeld = false, debugRefreshT = null;
 addEventListener('keydown', e => {
   if (consoleTypeKey(e)) return;      // a lit console field owns the keyboard
-  if (state === 'paused' && e.code === 'KeyR'){
-    if (!debugRefreshHeld && !e.repeat){
-      debugRefreshHeld = true;
-      clearTimeout(debugRefreshT);
-      debugRefreshT = setTimeout(() => {
-        if (debugRefreshHeld && state === 'paused') refreshSlabPreviews();
-      }, DEBUG_REFRESH_HOLD_MS);
-    }
-    return;
-  }
   if (e.code === 'ControlLeft' || e.code === 'ControlRight'){
     if (!ctrlHeld && !e.repeat){
       ctrlHeld = true; ctrlHoldFired = false; ctrlCombo = false; ctrlDownAt = performance.now();
@@ -2885,10 +2833,6 @@ addEventListener('keydown', e => {
 });
 addEventListener('keyup', e => {
   keys[e.code] = false;
-  if (e.code === 'KeyR'){
-    debugRefreshHeld = false;
-    clearTimeout(debugRefreshT); debugRefreshT = null;
-  }
   if (e.code === 'ControlLeft' || e.code === 'ControlRight'){
     clearTimeout(ctrlHoldT); ctrlHoldT = null;
     const heldMs = performance.now() - ctrlDownAt;
@@ -3492,6 +3436,13 @@ $('resumeBtn').addEventListener('click', () => {
   audio.init();
   resumeGame();                             // snap the menu shut + interrupt the open chime NOW
   if (!isTouch) relockLook();               // re-acquire mouse-look as soon as the browser allows
+});
+// pause-menu → the /thumbs cache dashboard. New tab keeps the hall behind you;
+// a gamepad-synthesised click can't pop a window, so fall back to same-tab nav.
+$('thumbsBtn')?.addEventListener('click', () => {
+  audio.init();
+  const w = window.open('/thumbs', '_blank', 'noopener');
+  if (!w) location.href = '/thumbs';
 });
 $('pauseBtn')?.addEventListener('click', e => { e.preventDefault(); togglePause(); });
 // touch view-lock eye — the finger-friendly twin of Ctrl / gamepad R3

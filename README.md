@@ -243,8 +243,10 @@ those crops.
 
 **Dashboard — [`/thumbs`](https://akilluminati47.pages.dev/thumbs).** A flat
 Frutiger-Aero control panel that lists every world with its cached crop and its
-age. **Click any crop to expand it XXL; click again to shrink** and keep
-browsing. Per world you can **Fetch** (capture from the browser you're on — open
+age — reachable from the in-gallery **pause menu** (Thumbnails button), and it
+carries the hall's glowing circle cursor + console click/hover SFX with mouse,
+gamepad, and touch support. **Click any crop to expand it XXL; click again to
+shrink** and keep browsing. Per world you can **Fetch** (capture from the browser you're on — open
 it on cellular to seed the sharp crops) or **Save** the cached one; tick the
 checkboxes for bulk fetch/download. It reads the live store via
 `GET /api/thumb?list`. There is deliberately **no upload button** — the store
