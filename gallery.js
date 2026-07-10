@@ -2114,7 +2114,7 @@ function drawConsole(){
   else drawPublish(cc, top);
   // footer hint
   cc.fillStyle = AERO.inkFaint; cFont(cc, 24); cc.textAlign = 'center'; cc.textBaseline = 'alphabetic';
-  cc.fillText(isTouch ? 'aim by dragging · tap to press fields & buttons'
+  cc.fillText(isTouch ? 'aim by dragging · tap to press · tap a field and the glass keys rise'
                       : 'aim with your view · click / E to press · type to fill the lit field · drag / double-click selects · ctrl+C / V',
               LW/2, LH - 28);
   // toast
@@ -2652,6 +2652,123 @@ addEventListener('mouseup',   () => { held.mouse = false; conSel.drag = false; }
 addEventListener('dblclick',  () => { if (!conDesk) consoleSelectAll(); });
 
 /* ════════════════════════════════════════════════════════════════
+   5d · the touch keyboard — a Frutiger Aero glass deck for the console
+   A phone has no keyboard to lend the console's fields, and summoning the
+   OS one means a focus-stealing hidden <input> and a viewport that jumps.
+   So the gallery brings its OWN: a flat glass deck of glossy aqua bubble
+   keys (Quicksand, same face as the console strings) that slides up from
+   the bottom of the scene whenever a console field lights on touch. Every
+   key feeds consoleTypeKey with a synthetic event — the exact pipeline a
+   physical keyboard drives, caret/selection/sanitisers and all. It hides
+   four honest ways: the big ⌄ tab (always in view, so it can never trap
+   anyone), ↵ done, walking back past the console's cursor range, or
+   turning away — the last two ride ui.cursor.on, the same gate that aims
+   the console, polled per frame in updateVkb.
+   ════════════════════════════════════════════════════════════════ */
+let vkb = null, vkbDeck = null, vkbShown = false;
+let vkbShift = 0;            // 0 off · 1 one-shot (next letter) · 2 locked
+let vkbSym = false;          // symbol layer for the url punctuation
+let vkbRepT = null, vkbRepI = null;   // ⌫ hold-to-repeat timers
+const VKB_ROWS = {
+  abc: [
+    ['1','2','3','4','5','6','7','8','9','0'],
+    ['q','w','e','r','t','y','u','i','o','p'],
+    ['a','s','d','f','g','h','j','k','l'],
+    ['⇧','z','x','c','v','b','n','m','⌫'],
+    ['?123','.','␣','/','↵'],
+  ],
+  sym: [
+    ['1','2','3','4','5','6','7','8','9','0'],
+    ['@','#','&','_','-','+','(',')',':',';'],
+    ['!','?','\'','"','=','*','%','~',','],
+    ['^','<','>','[',']','{','}','\\','⌫'],
+    ['abc','.','␣','/','↵'],
+  ],
+};
+const VKB_WIDE = new Set(['⇧','⌫','?123','abc','↵']);   // flex-widened control keys
+function vkbRender(){
+  if (!vkbDeck) return;
+  vkbDeck.textContent = '';
+  for (const row of (vkbSym ? VKB_ROWS.sym : VKB_ROWS.abc)){
+    const r = document.createElement('div'); r.className = 'vkb-row';
+    for (const k of row){
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'vkb-key'; b.dataset.k = k;
+      if (VKB_WIDE.has(k)) b.classList.add('alt');
+      if (k === '␣') b.classList.add('space');
+      else b.textContent = (vkbShift && /^[a-z]$/.test(k)) ? k.toUpperCase() : k;
+      if (k === '⇧'){
+        if (vkbShift === 1) b.classList.add('armed');
+        if (vkbShift === 2) b.classList.add('locked');
+      }
+      r.appendChild(b);
+    }
+    vkbDeck.appendChild(r);
+  }
+}
+// synthetic key event: everything consoleTypeKey reads off a real one
+const vkbFake = key => ({ key, ctrlKey:false, metaKey:false, altKey:false, shiftKey:false, preventDefault(){} });
+function vkbPress(k){
+  audio.init();
+  if (k === '⇧'){           // off → one-shot → locked → off
+    vkbShift = vkbShift === 0 ? 1 : vkbShift === 1 ? 2 : 0;
+    vkbRender(); audio.pop(); return;
+  }
+  if (k === '?123' || k === 'abc'){ vkbSym = !vkbSym; vkbRender(); audio.pop(); return; }
+  if (k === '⌫'){ consoleTypeKey(vkbFake('Backspace')); audio.pop(); return; }
+  if (k === '↵'){ consoleTypeKey(vkbFake('Enter')); audio.press(); return; }   // blurs → the deck slides away
+  let ch = k === '␣' ? ' ' : k;
+  if (vkbShift && /^[a-z]$/.test(ch)){
+    ch = ch.toUpperCase();
+    if (vkbShift === 1){ vkbShift = 0; vkbRender(); }   // one-shot spent
+  }
+  consoleTypeKey(vkbFake(ch));
+  audio.pop();
+}
+function vkbStopRepeat(){ clearTimeout(vkbRepT); clearInterval(vkbRepI); vkbRepT = vkbRepI = null; }
+function vkbBuild(){
+  vkb = document.createElement('div');
+  vkb.id = 'vkb';
+  const hide = document.createElement('button');
+  hide.id = 'vkbHide'; hide.type = 'button';
+  hide.textContent = '⌄  hide';
+  hide.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    audio.press();
+    ui.focus = null; ui.dirty = true;      // blur the field — updateVkb slides the deck away
+  });
+  const bub = document.createElement('div'); bub.className = 'vkb-bubbles';
+  vkbDeck = document.createElement('div'); vkbDeck.className = 'vkb-deck';
+  vkb.append(hide, bub, vkbDeck);
+  // one delegated pointerdown drives every key: buttons never take focus, and
+  // preventDefault keeps the tap from doubling into mouse-compat events
+  vkbDeck.addEventListener('pointerdown', e => {
+    const b = e.target.closest?.('.vkb-key'); if (!b) return;
+    e.preventDefault();
+    b.classList.add('pressed'); setTimeout(() => b.classList.remove('pressed'), 140);
+    vkbPress(b.dataset.k);
+    if (b.dataset.k === '⌫'){              // hold ⌫ → repeat, like the real thing
+      vkbStopRepeat();
+      vkbRepT = setTimeout(() => { vkbRepI = setInterval(() => vkbPress('⌫'), 64); }, 430);
+    }
+  });
+  addEventListener('pointerup', vkbStopRepeat);
+  addEventListener('pointercancel', vkbStopRepeat);
+  document.body.appendChild(vkb);
+  vkbRender();
+}
+function updateVkb(){
+  if (!isTouch) return;
+  const want = !conDesk && conBoot.s === 'done' && !!ui.focus && ui.cursor.on &&
+               (state === 'play' || state === 'intro');
+  if (want && !vkb) vkbBuild();            // lazy: desktop / console-off never builds it
+  if (want === vkbShown || !vkb) return;
+  vkbShown = want;
+  vkb.classList.toggle('show', want);
+  if (!want){ vkbShift = 0; vkbSym = false; vkbStopRepeat(); vkbRender(); }   // next summon starts clean
+}
+
+/* ════════════════════════════════════════════════════════════════
    6 · controls — pointer-lock mouse + gamepad + touch, all smoothed
    ════════════════════════════════════════════════════════════════ */
 controls = new PointerLockControls(camera, renderer.domElement);
@@ -2969,21 +3086,29 @@ function pollPad(dt){
   let lookId = null, lookLX = 0, lookLY = 0, lookStart = 0, lookMoved = 0;
   let uiTouchId = null;                       // a finger acting as the menu cursor
   const joyEl = $('joy'), knobEl = $('joyKnob');
-  const inJoyZone = (x, y) => x < innerWidth * 0.5 && y > innerHeight * 0.45;
 
-  // ── ghost stick: the L-thumb never fully disappears any more ──
-  // Released, the stick drifts slowly back to a home spot in the joy zone and
-  // fades to a faint translucent ghost (styles.css #joy.ghost carries the slow
-  // left/top/opacity transitions); a touch snaps it to the finger at full
-  // strength (#joy.on — no position transition, fast fade-in). The ghost marks
-  // where the stick lives without ever covering the hall.
+  // ── the L-thumb is ANCHORED: it never appears under a stray touch ──
+  // The stick lives at ONE home spot — a faint translucent ghost while idle
+  // (styles.css #joy.ghost, never fully out) — and only a touch landing ON it
+  // (a generous radius) grabs it; every other touch is just look-drag. Grabbed
+  // it wakes to full strength (#joy.on) and the knob follows the finger,
+  // deflection measured from the stick's own centre; released it fades back to
+  // the ghost in place, the knob easing home.
   const joyHome = () => ({ x: 96, y: innerHeight - 138 });
+  const nearJoy = (x, y) => { const h = joyHome(); return Math.hypot(x - h.x, y - h.y) <= JOY_R * 1.75; };
   function joyToHome(){
     if (!joyEl) return;
     joyEl.classList.remove('on'); joyEl.classList.add('ghost');
     const h = joyHome();
     joyEl.style.left = h.x + 'px'; joyEl.style.top = h.y + 'px';
     if (knobEl) knobEl.style.transform = 'translate(-50%,-50%)';
+  }
+  function joyDrag(x, y){
+    const dx = x - joyCX, dy = y - joyCY;
+    const d = Math.hypot(dx, dy), m = Math.min(d, JOY_R), a = Math.atan2(dy, dx);
+    const kx = Math.cos(a)*m, ky = Math.sin(a)*m;
+    if (knobEl) knobEl.style.transform = `translate(calc(-50% + ${kx}px), calc(-50% + ${ky}px))`;
+    touchMove.x = kx / JOY_R; touchMove.y = -ky / JOY_R;
   }
   if (isTouch){
     joyToHome();
@@ -3007,19 +3132,16 @@ function pollPad(dt){
   addEventListener('touchstart', e => {
     setInputMode('touch');
     for (const t of e.changedTouches){
-      if (t.target?.closest?.('.touch-btn')) continue;   // let buttons handle their own taps
+      if (t.target?.closest?.('.touch-btn, #vkb')) continue;   // buttons + the glass keyboard own their taps
       if (onUiScreen()){                                 // menus: finger = cursor, never the camera
         if (uiTouchId === null){ uiTouchId = t.identifier; driveTouchCursor(t.clientX, t.clientY); }
         continue;
       }
-      if (joyId === null && inJoyZone(t.clientX, t.clientY)){
-        joyId = t.identifier; joyCX = t.clientX; joyCY = t.clientY;
-        if (joyEl){
-          joyEl.classList.remove('ghost');           // drop the slow drift-home transition first…
-          joyEl.style.left = joyCX+'px'; joyEl.style.top = joyCY+'px';   // …so this SNAPS to the finger
-          joyEl.classList.add('on');
-        }
-        if (knobEl) knobEl.style.transform = 'translate(-50%,-50%)';
+      if (joyId === null && nearJoy(t.clientX, t.clientY)){
+        const h = joyHome();
+        joyId = t.identifier; joyCX = h.x; joyCY = h.y;   // deflection measures from HOME, not the finger
+        if (joyEl){ joyEl.classList.remove('ghost'); joyEl.classList.add('on'); }
+        joyDrag(t.clientX, t.clientY);                    // a grab off-centre starts already deflected
       } else if (lookId === null){
         lookId = t.identifier; lookLX = t.clientX; lookLY = t.clientY;
         lookStart = performance.now(); lookMoved = 0;
@@ -3033,11 +3155,7 @@ function pollPad(dt){
     for (const t of e.changedTouches){
       if (t.identifier === uiTouchId){ driveTouchCursor(t.clientX, t.clientY); continue; }
       if (t.identifier === joyId){
-        const dx = t.clientX - joyCX, dy = t.clientY - joyCY;
-        const d = Math.hypot(dx, dy), m = Math.min(d, JOY_R), a = Math.atan2(dy, dx);
-        const kx = Math.cos(a)*m, ky = Math.sin(a)*m;
-        if (knobEl) knobEl.style.transform = `translate(calc(-50% + ${kx}px), calc(-50% + ${ky}px))`;
-        touchMove.x = kx / JOY_R; touchMove.y = -ky / JOY_R;
+        joyDrag(t.clientX, t.clientY);
       } else if (t.identifier === lookId){
         const dx = t.clientX - lookLX, dy = t.clientY - lookLY;
         lookLX = t.clientX; lookLY = t.clientY; lookMoved += Math.abs(dx) + Math.abs(dy);
@@ -3247,7 +3365,7 @@ function pauseGame(){
   if (state !== 'play' && state !== 'intro') return;
   // pausing drops view mode too, so Resume returns you to the walk (not a freeze);
   // the slabs disarm on the next gate pass (viewMode off)
-  viewMode = false; viewGlide = null; setEyeGlow(false);
+  viewMode = false; viewGlide = null; setEyeGlow(false); setSlabGlow(null);
   pausedFrom = state;
   if (performance.now() > pauseHushUntil) audio.pauseOpen();
   state = 'paused';                         // freezes movement (loop skips intro/play)
@@ -3403,7 +3521,7 @@ function resetToMenu(){
   // (their pages keep state for the next entry)
   liveHide();
   launch = null; state = 'menu'; started = false;
-  viewMode = false; viewGlide = null; setEyeGlow(false);   // clear any view-lock on the way out
+  viewMode = false; viewGlide = null; setEyeGlow(false); setSlabGlow(null);   // clear any view-lock on the way out
   padCursor.ready = false;                    // gamepad cursor re-centres on the splash
   $('fade').style.opacity = '0';
   $('enter').classList.remove('hidden');
@@ -3591,6 +3709,7 @@ function engageView(f){
   viewGlide = null;
   if (controls.isLocked){ panelHandoff = true; controls.unlock(); }   // free the OS cursor for the slab
   setEyeGlow(true);
+  setSlabGlow(f);                           // the viewed slab breathes a slow white halo
   showViewHint(true);
   if (f) audio.ping(f.userData.worldPos);   // the slab is yours — same ding as a reveal
 }
@@ -3598,6 +3717,7 @@ function exitView(){
   if (!viewMode && !viewGlide) return;
   viewMode = false; viewGlide = null;
   setEyeGlow(false);
+  setSlabGlow(null);
   showViewHint(false);
   // moveAndInteract froze while view mode was on, so its affordance memory is
   // stale — clear it so the "view?"/"visit?" pill recomputes and re-shows the
@@ -3650,7 +3770,10 @@ function tapWalk(f){
   audio.launch();
 }
 function touchTap(x, y){
-  if (state === 'play' && !viewMode && !viewGlide && !launch){
+  // never tap-walk while the console is aimed (ui.cursor.on): a tap near the
+  // slab's edge could ray through to a side panel far behind it and stroll a
+  // typing visitor away mid-field — those taps are console presses, full stop
+  if (state === 'play' && !viewMode && !viewGlide && !launch && !ui.cursor.on){
     const f = frameAtScreen(x, y);
     if (f && f !== activeFrame){ tapWalk(f); return; }   // not armed yet → walk to it
   }
@@ -3667,6 +3790,13 @@ function refreshPortals(){
   exitView();
 }
 function setEyeGlow(on){ $('viewBtn')?.classList.toggle('active', on); }
+// view mode's proof on the slab itself: a slow white pulse breathing around the
+// armed page (styles.css .view-glow — the box-reflect floor copy mirrors it for
+// free). Pass the viewed frame, or null to clear every slab.
+function setSlabGlow(f){
+  if (!live3d) return;
+  for (const [k, s] of live3d.byFrame) s.el.classList.toggle('view-glow', !!f && k === f);
+}
 // touch has the glowing eye as its proof; desktop/gamepad get a quiet line
 // carrying the same "you're in view mode, here's the way out"
 let viewHintFadeT = null;
@@ -4006,6 +4136,7 @@ function animate(){
   pollPad(dt);                 // every frame — also drives the pause‑menu cursor
   updateLoadingSystem(dt, t);
   updateConsole();             // back-wall console: aim, hover, repaint
+  updateVkb();                 // touch keyboard: rises with a lit field, bows out past range
   updateSunGaze(dt);
   updateSunGlow(dt);           // sun glare + ghost train over the live panels
 
@@ -4375,6 +4506,8 @@ function fatal(msg){
 window.__realm = {
   renderer, composer, scene, camera, clock, frames,
   step: animate,               // drive one frame by hand (headless checks, no rAF)
+  enter: beginPlay,            // start play without pointer lock (headless can't grant it)
+  toggleView,                  // drive view mode by hand (Ctrl/R3 need real input events)
   get resScale(){ return resScale; },
   renderOnce(){
     if (skyMat) skyMat.uniforms.uTime.value = clock.elapsedTime;

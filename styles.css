@@ -217,12 +217,12 @@ h2{ font-size:26px; letter-spacing:.05em; margin-bottom:6px; color:var(--aqua-d)
   backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px);
   opacity:0; pointer-events:none;
 }
-/* ghost: released — the stick drifts slowly back to its home spot while fading
-   down to a faint resting state. It never fades fully out any more, so the
-   thumb always knows where the stick lives. */
+/* ghost: released — the stick (anchored at its home spot; it never chases a
+   touch) fades slowly down to a faint resting state. It never fades fully
+   out, so the thumb always knows where the stick lives. */
 #joy.ghost{
   opacity:.32;
-  transition:left 1.2s cubic-bezier(.22,.61,.36,1), top 1.2s cubic-bezier(.22,.61,.36,1), opacity 1.2s ease;
+  transition:opacity 1.2s ease;
 }
 #joy.ghost #joyKnob{ transition:transform .7s ease; }   /* knob eases home too */
 /* in use: snapped to the finger (no left/top transition), quick fade to full */
@@ -255,4 +255,105 @@ h2{ font-size:26px; letter-spacing:.05em; margin-bottom:6px; color:var(--aqua-d)
 @keyframes viewGlow{
   0%,100%{ box-shadow:0 8px 20px rgba(10,90,200,.45), inset 0 2px 2px rgba(255,255,255,.85), 0 0 0 rgba(120,210,255,0); }
   50%    { box-shadow:0 8px 24px rgba(10,90,200,.55), inset 0 2px 2px rgba(255,255,255,.9), 0 0 26px 6px rgba(120,225,255,.85); }
+}
+
+/* ── view mode: the armed slab breathes ─────────────────────────
+   While view mode holds a live slab, its iframe wears a slow white pulse —
+   the halo rides the element's own plane through the CSS3D perspective, and
+   the box-reflect floor copy mirrors it for free. gallery.js setSlabGlow
+   toggles it on engage/exit (and pause/menu resets). */
+@keyframes viewSlabPulse{
+  0%,100%{ box-shadow:0 0 18px 4px rgba(255,255,255,.22), 0 0 52px 14px rgba(255,255,255,.10); }
+  50%    { box-shadow:0 0 30px 9px rgba(255,255,255,.72), 0 0 84px 26px rgba(255,255,255,.30); }
+}
+.view-glow{ animation:viewSlabPulse 3.4s ease-in-out infinite; }
+
+/* ── Frutiger Aero touch keyboard ───────────────────────────────
+   Summoned by gallery.js updateVkb when a console field lights on touch: a
+   flat glass deck across the bottom of the scene, glossy aqua bubble keys in
+   the console's own Quicksand. The ⌄ tab always rides above the deck (never
+   hidden, never stuck); the deck auto-hides when the console slips out of
+   cursor range or the visitor turns away. */
+#vkb{
+  position:fixed; left:0; right:0; bottom:0; z-index:30;
+  padding:12px 10px calc(12px + env(safe-area-inset-bottom, 0px));
+  transform:translateY(112%); pointer-events:none;
+  transition:transform .42s cubic-bezier(.3,1.18,.32,1);
+  background:
+    radial-gradient(140% 130% at 50% -20%,
+      rgba(255,255,255,.60), rgba(198,236,255,.40) 40%,
+      rgba(130,196,255,.30) 70%, rgba(96,164,238,.36) 100%);
+  border-top:1px solid rgba(255,255,255,.8);
+  backdrop-filter:blur(16px) saturate(1.5);
+  -webkit-backdrop-filter:blur(16px) saturate(1.5);
+  box-shadow:0 -14px 44px rgba(10,70,140,.35), inset 0 1px 0 rgba(255,255,255,.9);
+}
+#vkb.show{ transform:none; pointer-events:auto; }
+/* drifting glass bubbles baked into the deck — rings with a top glint, aero style */
+.vkb-bubbles{
+  position:absolute; inset:0; pointer-events:none; overflow:hidden;
+  background:
+    radial-gradient(circle 44px at 7% 26%,  transparent 56%, rgba(255,255,255,.30) 62%, rgba(255,255,255,.08) 68%, transparent 74%),
+    radial-gradient(circle 14px at 5.5% 21%, rgba(255,255,255,.55), rgba(255,255,255,0) 70%),
+    radial-gradient(circle 30px at 92% 68%, transparent 54%, rgba(255,255,255,.26) 62%, rgba(255,255,255,.06) 70%, transparent 76%),
+    radial-gradient(circle 10px at 91% 63%, rgba(255,255,255,.5), rgba(255,255,255,0) 70%),
+    radial-gradient(circle 60px at 82% 4%,  transparent 58%, rgba(255,255,255,.22) 64%, rgba(255,255,255,.05) 70%, transparent 76%),
+    radial-gradient(circle 18px at 26% 88%, transparent 50%, rgba(255,255,255,.24) 60%, transparent 72%);
+}
+/* the hide tab: a glass lip riding the deck's top edge, always visible with it */
+#vkbHide{
+  position:absolute; top:-31px; left:50%; transform:translateX(-50%);
+  width:132px; height:32px; border:1px solid rgba(255,255,255,.8); border-bottom:none;
+  border-radius:16px 16px 0 0;
+  font-family:inherit; font-weight:700; font-size:15px; letter-spacing:.06em;
+  color:var(--ink); text-shadow:0 1px 0 rgba(255,255,255,.7);
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.85), rgba(210,240,255,.55) 60%, rgba(170,220,255,.45));
+  backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);
+  box-shadow:0 -8px 20px rgba(10,70,140,.25), inset 0 1px 0 rgba(255,255,255,.95);
+  -webkit-tap-highlight-color:transparent;
+}
+.vkb-deck{ position:relative; max-width:760px; margin:0 auto; }
+.vkb-row{ display:flex; gap:7px; margin-top:7px; }
+.vkb-row:first-child{ margin-top:0; }
+/* the keys: little glass bubbles — bright gloss cap over an aqua-tinted body,
+   a watery inner shadow at the base, Quicksand like the console strings */
+.vkb-key{
+  flex:1 1 0; min-width:0; height:clamp(38px, 6.2vh, 54px);
+  border:1px solid rgba(255,255,255,.85); border-radius:14px;
+  font-family:inherit; font-weight:600; font-size:clamp(15px, 2.8vh, 21px);
+  color:var(--ink); text-shadow:0 1px 0 rgba(255,255,255,.7);
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.95) 0%, rgba(255,255,255,.55) 44%, rgba(214,241,255,.38) 52%, rgba(178,224,255,.55) 100%);
+  box-shadow:
+    0 4px 10px rgba(10,80,170,.30),
+    inset 0 1px 0 rgba(255,255,255,.95),
+    inset 0 -7px 12px rgba(110,185,255,.35);
+  -webkit-tap-highlight-color:transparent;
+  transition:transform .1s ease, filter .12s ease;
+}
+/* control keys (shift, backspace, layers, done): deeper aqua, white ink */
+.vkb-key.alt{
+  flex-grow:1.5;
+  color:#fff; text-shadow:0 1px 2px rgba(4,46,104,.5);
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.7) 0%, rgba(255,255,255,.16) 40%, rgba(255,255,255,0) 54%),
+    linear-gradient(180deg, #9fdcff 0%, #4fb6ff 45%, var(--aqua) 70%, var(--aqua-d) 100%);
+  box-shadow:
+    0 5px 12px rgba(10,90,200,.42),
+    inset 0 1px 2px rgba(255,255,255,.9),
+    inset 0 -8px 14px rgba(0,60,140,.42);
+}
+.vkb-key.space{ flex-grow:4.4; }
+.vkb-key.pressed{ transform:scale(.92) translateY(1px); filter:brightness(1.14); }
+/* shift states: one-shot glows, locked burns steady */
+.vkb-key.armed{
+  filter:brightness(1.1);
+  box-shadow:0 5px 12px rgba(10,90,200,.42), inset 0 1px 2px rgba(255,255,255,.9),
+             inset 0 -8px 14px rgba(0,60,140,.42), 0 0 16px 3px rgba(140,230,255,.75);
+}
+.vkb-key.locked{
+  filter:brightness(1.2) saturate(1.2);
+  box-shadow:0 5px 12px rgba(10,90,200,.5), inset 0 1px 2px rgba(255,255,255,.95),
+             inset 0 -8px 14px rgba(0,60,140,.42), 0 0 22px 6px rgba(140,230,255,.95);
 }
