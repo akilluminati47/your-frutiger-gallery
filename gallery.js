@@ -3788,6 +3788,7 @@ const _sunNdc  = new THREE.Vector3();
 const _sunWorld = SUN_DIR.clone().multiplyScalar(460);   // sits on the sky-shader sun
 const _sunRay = new THREE.Raycaster();                   // camera → sun: is a slab in the way?
 let sunVis = 1;                                          // occlusion, eased 0..1 over time
+let ghostVis = 1;                                        // ghost train, eased out in view mode
 // five fixed sample directions — the sun's centre + a ~2.5° halo around the
 // disk — so a slab edge covering half the sun grades the glare to half,
 // instead of one all-or-nothing ray snapping it
@@ -3836,6 +3837,10 @@ function updateSunGlow(dt){
     if (!_visitTargets.length || _sunRay.intersectObjects(_visitTargets, false).length === 0) open++;
   }
   sunVis += (open / _sunSamples.length - sunVis) * Math.min(1, dt * 7);
+  // view mode (and the glide into it): the ghost train bows out on the same
+  // ease, so no ring lies over the page being read — the warm glare stays,
+  // it's the sun itself, not a lens artifact of where you point a camera
+  ghostVis += ((viewMode || viewGlide ? 0 : 1) - ghostVis) * Math.min(1, dt * 7);
   const op = 0.9 * bloom * sunVis;
   if (op < 0.002){ sunglowEl.style.opacity = '0'; return; }
   _sunNdc.copy(_sunWorld).project(camera);       // world sun → normalised device coords
@@ -3849,7 +3854,7 @@ function updateSunGlow(dt){
     // train melts into the glare instead of the plain-alpha layers stacking
     // into a blue blob ON the sun, and it sweeps back out — far ghosts
     // first — as the sun slides off-centre
-    const a = spec.kind === 'core' ? 1 : Math.min(1, 2 * spec.distance * off * 1.5);
+    const a = spec.kind === 'core' ? 1 : Math.min(1, 2 * spec.distance * off * 1.5) * ghostVis;
     return ghostLayer(spec, lx, ly, a);
   });
   sunglowEl.style.background = layers.join(',');
