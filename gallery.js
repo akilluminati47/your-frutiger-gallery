@@ -1517,6 +1517,10 @@ function buildGallery(font){
     // no FX colour lift — lighting + ACES own the tone.
     const liveMat = new THREE.MeshStandardMaterial({
       color: 0xffffff, roughness: 0.35, metalness: 0, envMapIntensity: 0.8,
+      // white emissive baked into the program from birth: view mode's breath
+      // (setSlabGlow → animate loop) only writes emissiveIntensity — a uniform
+      // update, never a recompile, and never a DOM repaint of the face
+      emissive: 0xffffff, emissiveIntensity: 0,
     });
     u.panel.material.dispose();           // the basic screen material (its whiteTex dies at reveal)
     u.panel.material = liveMat;
@@ -2810,6 +2814,7 @@ const touchMove = { x:0, y:0 };       // on-screen joystick
 // mode engages (set by the "view?" affordance; null once seated / off).
 let viewMode  = false;
 let viewGlide = null;
+let glowFrame = null;   // the viewed slab breathing white (animate loop pulses its body's emissive)
 
 // apply a look delta the same way PointerLockControls does (so they compose)
 const _PI2 = Math.PI/2;
@@ -3807,12 +3812,18 @@ function refreshPortals(){
   exitView();
 }
 function setEyeGlow(on){ $('viewBtn')?.classList.toggle('active', on); }
-// view mode's proof on the slab itself: a slow white pulse breathing around the
-// armed page (styles.css .view-glow — the box-reflect floor copy mirrors it for
-// free). Pass the viewed frame, or null to clear every slab.
+// view mode's proof on the slab itself: the white prism BODY breathes (the
+// animate loop pulses its emissive — a uniform write, nothing repaints).
+// This deliberately lives in WebGL, not on the DOM face: the old .view-glow
+// animated box-shadow ON the iframe, and every animation frame re-painted
+// the wrapper's fused box-reflect surface — a huge 3D-transformed raster
+// that showed as tearing tiles and, when the GPU surface allocation missed,
+// whole-panel BLACK flashes. With the pulse on the body, the face's painted
+// pixels never change after load; the compositor only re-transforms them,
+// so the panel stays solid. The glass floor's Reflector mirrors the
+// breathing body for free. Pass the viewed frame, or null to clear.
 function setSlabGlow(f){
-  if (!live3d) return;
-  for (const [k, s] of live3d.byFrame) s.el.classList.toggle('view-glow', !!f && k === f);
+  glowFrame = f;
 }
 // touch has the glowing eye as its proof; desktop/gamepad get a quiet line
 // carrying the same "you're in view mode, here's the way out"
@@ -4301,6 +4312,17 @@ function animate(){
   const pulse = 0.5 + 0.5*Math.sin(t*2.2);   // calm ~2.9s breath (3.4 blinked)
   for (const f of frames){
     const u = f.userData;
+
+    // the viewed slab breathes white through its BODY's emissive — the DOM
+    // face never repaints for the effect (see setSlabGlow for why the old
+    // box-shadow pulse tore the panel). Peak clears the bloom threshold
+    // (1.2) with FX for a soft halo at the crest; the trough keeps a
+    // whisper, like the old glow's resting rim. Eased at the same pace as
+    // every other frame animation so engage/exit never pops.
+    if (u.liveSlab && u.screenMat && u.screenMat.emissive){
+      const want = (f === glowFrame) ? 0.10 + (FX ? 1.25 : 0.55) * pulse : 0;
+      u.screenMat.emissiveIntensity = lerp(u.screenMat.emissiveIntensity, want, 1 - Math.pow(0.001, dt));
+    }
     // "visit?" / "view?" shows for the frame under your gaze — but a live slab's
     // "view?" shrinks away the instant you commit (glide-in or seated in view
     // mode), the same way "visit?" bows out under the launch swoop

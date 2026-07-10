@@ -257,16 +257,11 @@ h2{ font-size:26px; letter-spacing:.05em; margin-bottom:6px; color:var(--aqua-d)
   50%    { box-shadow:0 8px 24px rgba(10,90,200,.55), inset 0 2px 2px rgba(255,255,255,.9), 0 0 26px 6px rgba(120,225,255,.85); }
 }
 
-/* ── view mode: the armed slab breathes ─────────────────────────
-   While view mode holds a live slab, its iframe wears a slow white pulse —
-   the halo rides the element's own plane through the CSS3D perspective, and
-   the box-reflect floor copy mirrors it for free. gallery.js setSlabGlow
-   toggles it on engage/exit (and pause/menu resets). */
-@keyframes viewSlabPulse{
-  0%,100%{ box-shadow:0 0 18px 4px rgba(255,255,255,.22), 0 0 52px 14px rgba(255,255,255,.10); }
-  50%    { box-shadow:0 0 30px 9px rgba(255,255,255,.72), 0 0 84px 26px rgba(255,255,255,.30); }
-}
-.view-glow{ animation:viewSlabPulse 3.4s ease-in-out infinite; }
+/* (view mode's slab glow retired from CSS: an animated box-shadow on the
+   iframe re-painted the fused box-reflect surface every frame — the panel
+   tore and flashed black under the churn. The breath now lives on the WebGL
+   slab body's emissive — gallery.js setSlabGlow — so the DOM face's pixels
+   never change after load and the panel stays solid.) */
 
 /* ── Frutiger Aero touch keyboard ───────────────────────────────
    Summoned by gallery.js updateVkb when a console field lights on touch: a
