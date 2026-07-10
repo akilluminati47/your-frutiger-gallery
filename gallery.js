@@ -4,7 +4,6 @@ import { Reflector } from 'three/addons/objects/Reflector.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { FontLoader } from 'three/addons/loaders/FontLoader.js';
 import { mergeGeometries, toCreasedNormals } from 'three/addons/utils/BufferGeometryUtils.js';
-import { Lensflare, LensflareElement } from 'three/addons/objects/Lensflare.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
@@ -352,15 +351,12 @@ const pmrem = new THREE.PMREMGenerator(renderer);
 /* ── HDR post pipeline: scene → UnrealBloom (HDR) → ACES/sRGB → filmic grade ──
    The scene is rendered into a half-float, multisampled target (real MSAA inside
    the composer — crisp edges, no FXAA smear). UnrealBloomPass runs on the HDR
-   values so only genuinely bright things glow: the sun disk, the lens flare,
-   white panel screens. OutputPass then applies ACES + the sRGB transform, and a
+   values so only genuinely bright things glow: the sun disk and the white
+   panel screens. OutputPass then applies ACES + the sRGB transform, and a
    final grade pass adds the subtle film-camera artifacts (vignette, animated
    grain, a touch of saturation) that make real-time output read as
    "engine-rendered" rather than flat rasterisation. */
 let composer = null, gradePass = null, bloomPass = null;
-// overlay scene for the lens flare — rendered directly to the canvas after the
-// composer (see the flare block in section 3 for why it can't live in-scene)
-const flareScene = FX ? new THREE.Scene() : null;
 const GradeShader = {
   uniforms: {
     tDiffuse: { value: null },
@@ -741,39 +737,10 @@ sun.target.position.set(0, 1, DESK_CZ);
 scene.add(sun.target);
 scene.add(sun);
 
-// dynamic lens flare streaming from the sun — ghosts track across the view
-// as you turn, and fade out when the sun is hidden behind glass/hills/frames
-{
-  function flareTex(stops){
-    const c = document.createElement('canvas'); c.width = c.height = 128;
-    const x = c.getContext('2d');
-    const g = x.createRadialGradient(64,64,0,64,64,64);
-    for (const [o, col] of stops) g.addColorStop(o, col);
-    x.fillStyle = g; x.fillRect(0,0,128,128);
-    const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
-  }
-  const texGlow  = flareTex([[0,'rgba(255,255,255,1)'],[0.18,'rgba(255,244,214,0.92)'],[0.5,'rgba(255,224,170,0.32)'],[1,'rgba(255,210,150,0)']]);
-  const texGhost = flareTex([[0,'rgba(255,255,255,0)'],[0.55,'rgba(200,225,255,0.26)'],[0.82,'rgba(170,210,255,0.12)'],[1,'rgba(170,210,255,0)']]);
-  // (no anamorphic streak on the disk: the flat cyan line read as a smear ON
-  // the sun itself — the warm glow + the ghost train carry the lens feel)
-
-  const lf = new Lensflare();
-  lf.addElement(new LensflareElement(texGlow, 340, 0,    new THREE.Color(0xfff0cf)));
-  lf.addElement(new LensflareElement(texGhost, 46, 0.18));
-  lf.addElement(new LensflareElement(texGhost, 72, 0.34));
-  lf.addElement(new LensflareElement(texGhost, 120, 0.5));
-  lf.addElement(new LensflareElement(texGhost, 58, 0.64));
-  lf.addElement(new LensflareElement(texGhost, 94, 0.8));
-  lf.addElement(new LensflareElement(texGlow, 130, 1.0,  new THREE.Color(0xcfe6ff)));
-  lf.position.copy(SUN_DIR.clone().multiplyScalar(460));   // sit on the sky-shader sun
-  // Lensflare tests occlusion by copying a tiny framebuffer patch — that readback
-  // is illegal from the composer's multisampled HDR target (it leaves a dark box
-  // on the sun). So under FX the flare lives in its own overlay scene, rendered
-  // straight to the canvas AFTER the composer — lens artifacts belong on top of
-  // the graded image anyway, exactly where a real camera would add them.
-  if (flareScene){ flareScene.add(lf); }
-  else { scene.add(lf); noReflect.push(lf); }               // FX off: classic in-scene flare
-}
+// (the sun's lens flare — warm glare + ghost train — is NOT drawn here: it
+// lives entirely on the #sunglow DOM overlay, see updateSunGlow in section 9.
+// A canvas flare paints BELOW the CSS3D live panels and pops at hard seams —
+// the viewport edge, the occlusion readback — that a lens artifact shouldn't)
 
 // rolling green "Bliss" hills — ringed around the perimeter, never on the platform.
 // One InstancedMesh (a single draw call for all of them) with per-hill colour.
@@ -3800,51 +3767,93 @@ function updateSunGaze(dt){
   }
 }
 
-// ── sun-glare bloom: the full ghost train on a full-viewport overlay
-//    at z-index 25. Each ring is a radial-gradient at its absolute screen
-//    position — no clipping, no mix-blend-mode. Continuous fade from zero
-//    using facing^2.5, so there is no pop-in threshold; rings and opacity
-//    both start near-invisible and swell smoothly as you turn to the sun. ──
+// ── sun lens flare: the warm glare AND the ghost train, painted together as
+//    radial-gradient layers on the full-viewport #sunglow overlay at z 25.
+//    Plain alpha, no blend mode, so it composites over everything on the
+//    page — live-portal iframes included, which the WebGL canvas can never
+//    paint above. Every layer has a FIXED radius at its true flare position
+//    (screen-pos mirrored through centre by its `distance`, the classic
+//    lensflare formula); only opacity moves, and every input to it is
+//    continuous: facing^2.5 rises from exactly zero, each ghost grades by
+//    how far it sits from the sun on screen, and slab occlusion is a single
+//    ray eased over time — nothing pops, nothing inflates, no viewport-edge
+//    cutoff (an off-screen gradient still bleeds into frame, like real
+//    glare). This replaced the WebGL Lensflare, whose two hard seams — it
+//    skips rendering until the sun's centre enters the viewport, and its
+//    GPU occlusion readback is near-binary at slab edges — made the sun
+//    jump no matter how the DOM half was tuned. ──
 const sunglowEl = $('sunglow');
 const _glowDir = new THREE.Vector3();
 const _sunNdc  = new THREE.Vector3();
-const _sunWorld = SUN_DIR.clone().multiplyScalar(460);
+const _sunWorld = SUN_DIR.clone().multiplyScalar(460);   // sits on the sky-shader sun
+const _sunRay = new THREE.Raycaster();                   // camera → sun: is a slab in the way?
+let sunVis = 1;                                          // occlusion, eased 0..1 over time
+// five fixed sample directions — the sun's centre + a ~2.5° halo around the
+// disk — so a slab edge covering half the sun grades the glare to half,
+// instead of one all-or-nothing ray snapping it
+const _sunSamples = (() => {
+  const u = new THREE.Vector3(0, 1, 0).cross(SUN_DIR).normalize();
+  const v = SUN_DIR.clone().cross(u).normalize(), R = 0.044;
+  return [ SUN_DIR.clone(),
+    SUN_DIR.clone().addScaledVector(u,  R).normalize(),
+    SUN_DIR.clone().addScaledVector(u, -R).normalize(),
+    SUN_DIR.clone().addScaledVector(v,  R).normalize(),
+    SUN_DIR.clone().addScaledVector(v, -R).normalize() ];
+})();
+// same sizes + normalised sun distances as the retired Lensflare's elements
 const GHOST_SPECS = [
-  { size: 340, distance: 0.00, ring: false },
-  { size: 46,  distance: 0.18, ring: true  },
-  { size: 72,  distance: 0.34, ring: true  },
-  { size: 120, distance: 0.50, ring: true  },
-  { size: 58,  distance: 0.64, ring: true  },
-  { size: 94,  distance: 0.80, ring: true  },
-  { size: 130, distance: 1.00, ring: false },
+  { size: 460, distance: 0.00, kind: 'core' },   // warm glare on the sun itself
+  { size: 46,  distance: 0.18, kind: 'ring' },
+  { size: 72,  distance: 0.34, kind: 'ring' },
+  { size: 120, distance: 0.50, kind: 'ring' },
+  { size: 58,  distance: 0.64, kind: 'ring' },
+  { size: 94,  distance: 0.80, kind: 'ring' },
+  { size: 130, distance: 1.00, kind: 'glow' },   // cool counter-glow mirrored through centre
 ];
-function ghostLayer(spec, lx, ly, bloom){
-  const baseR = Math.max(2, spec.size / 2);
-  const r = Math.max(4, baseR * (0.15 + 0.85 * Math.min(1, bloom * 1.8))).toFixed(0);
-  return spec.ring
-    ? `radial-gradient(circle ${r}px at ${lx}% ${ly}%, rgba(255,255,255,0) 0%, rgba(200,225,255,.5) 55%, rgba(170,210,255,.22) 82%, rgba(170,210,255,0) 100%)`
-    : `radial-gradient(circle ${r}px at ${lx}% ${ly}%, rgba(255,247,224,.95) 0%, rgba(255,236,188,.62) 22%, rgba(255,222,150,.28) 45%, rgba(255,214,150,.10) 65%, transparent 78%)`;
+function ghostLayer(spec, lx, ly, a){
+  const r = (spec.size / 2).toFixed(0), at = `circle ${r}px at ${lx}% ${ly}%`;
+  if (spec.kind === 'core')
+    return `radial-gradient(${at}, rgba(255,247,224,${(0.85*a).toFixed(3)}) 0%, rgba(255,236,188,${(0.5*a).toFixed(3)}) 25%, rgba(255,222,150,${(0.22*a).toFixed(3)}) 48%, rgba(255,214,150,${(0.07*a).toFixed(3)}) 66%, transparent 78%)`;
+  if (spec.kind === 'ring')
+    return `radial-gradient(${at}, rgba(255,255,255,0) 0%, rgba(200,225,255,${(0.45*a).toFixed(3)}) 55%, rgba(170,210,255,${(0.2*a).toFixed(3)}) 82%, rgba(170,210,255,0) 100%)`;
+  return `radial-gradient(${at}, rgba(207,230,255,${(0.5*a).toFixed(3)}) 0%, rgba(190,220,255,${(0.22*a).toFixed(3)}) 45%, rgba(170,210,255,0) 72%)`;
 }
-function clearLiveGlows(){}
-function updateSunGlow(){
+function updateSunGlow(dt){
   if (!sunglowEl) return;
-  if (state !== 'play' && state !== 'intro'){ sunglowEl.style.opacity = '0'; return; }
   camera.getWorldDirection(_glowDir);
-  const facing = _glowDir.dot(SUN_DIR);
-  // Continuous rise from zero — no hard cutoff
-  if (facing < 0.001){ sunglowEl.style.opacity = '0'; return; }
-  const bloom = Math.pow(Math.min(1, facing), 2.5);
-  _sunNdc.copy(_sunWorld).project(camera);
-  const sw = innerWidth, sh = innerHeight;
-  // Build each ghost at its true screen position in viewport percentages
+  const facing = _glowDir.dot(SUN_DIR);          // 1 = looking straight at the sun, ≤0 = away
+  const bloom = (state === 'play' || state === 'intro') && facing > 0
+    ? Math.pow(Math.min(1, facing), 2.5) : 0;
+  if (bloom < 0.002){ sunglowEl.style.opacity = '0'; return; }   // invisible → skip the repaint
+  // slab occlusion: five rays across the sun's disk against the visit
+  // cursor's panel cache (the slabs are exactly the occluders that matter),
+  // graded by how many get through and eased over ~0.15 s — the glare melts
+  // away behind a slab and swells back out, the smooth stand-in for the
+  // Lensflare's popping depth readback.
+  let open = 0;
+  for (const d of _sunSamples){
+    _sunRay.set(camera.position, d);
+    if (!_visitTargets.length || _sunRay.intersectObjects(_visitTargets, false).length === 0) open++;
+  }
+  sunVis += (open / _sunSamples.length - sunVis) * Math.min(1, dt * 7);
+  const op = 0.9 * bloom * sunVis;
+  if (op < 0.002){ sunglowEl.style.opacity = '0'; return; }
+  _sunNdc.copy(_sunWorld).project(camera);       // world sun → normalised device coords
+  const off = Math.hypot(_sunNdc.x, _sunNdc.y);  // sun's own distance off screen-centre
   const layers = GHOST_SPECS.map(spec => {
-    const f = 1 - 2 * spec.distance;
-    const gx = (_sunNdc.x * f * 0.5 + 0.5) * sw;
-    const gy = (-_sunNdc.y * f * 0.5 + 0.5) * sh;
-    return ghostLayer(spec, (gx / sw * 100).toFixed(1), (gy / sh * 100).toFixed(1), bloom);
+    const f = 1 - 2 * spec.distance;             // 0 = on the sun, 1 = mirrored through centre
+    const lx = ((_sunNdc.x * f * 0.5 + 0.5) * 100).toFixed(1);
+    const ly = ((-_sunNdc.y * f * 0.5 + 0.5) * 100).toFixed(1);
+    // the core rides every angle at full strength; each ghost fades by ITS
+    // OWN screen distance from the sun (2·d·off), so looking dead-on the
+    // train melts into the glare instead of the plain-alpha layers stacking
+    // into a blue blob ON the sun, and it sweeps back out — far ghosts
+    // first — as the sun slides off-centre
+    const a = spec.kind === 'core' ? 1 : Math.min(1, 2 * spec.distance * off * 1.5);
+    return ghostLayer(spec, lx, ly, a);
   });
   sunglowEl.style.background = layers.join(',');
-  sunglowEl.style.opacity = (0.88 * bloom).toFixed(3);
+  sunglowEl.style.opacity = op.toFixed(3);
 }
 function animate(){
   const dt = Math.min(clock.getDelta(), 0.05);
@@ -3858,7 +3867,7 @@ function animate(){
   updateLoadingSystem(dt, t);
   updateConsole();             // back-wall console: aim, hover, repaint
   updateSunGaze(dt);
-  updateSunGlow();             // sun-glare bloom over the live panels
+  updateSunGlow(dt);           // sun glare + ghost train over the live panels
 
   // Name-plaque bloop-in: scale 0.01→1.22→1.0 with overshoot, opacity 0→1
   for (const f of frames){
@@ -4042,15 +4051,7 @@ function animate(){
     }
   }
 
-  if (composer){
-    composer.render();
-    if (flareScene){                       // flare on top of the graded frame
-      renderer.autoClear = false;
-      renderer.clearDepth();               // grade pass wrote depth; reset so the
-      renderer.render(flareScene, camera); // flare's occlusion quad isn't culled
-      renderer.autoClear = true;
-    }
-  }
+  if (composer) composer.render();
   else renderer.render(scene, camera);
   // the live portals track the same camera every frame — glued to their slabs
   // while you walk, kept in step even across resizes
@@ -4232,12 +4233,11 @@ function fatal(msg){
 // tiny inspection handle for devtools/tooling (everything above is module-scoped)
 window.__realm = {
   renderer, composer, scene, camera, clock, frames,
+  step: animate,               // drive one frame by hand (headless checks, no rAF)
   get resScale(){ return resScale; },
   renderOnce(){
     if (skyMat) skyMat.uniforms.uTime.value = clock.elapsedTime;
-    if (composer){
-      composer.render();
-      if (flareScene){ renderer.autoClear = false; renderer.clearDepth(); renderer.render(flareScene, camera); renderer.autoClear = true; }
-    } else renderer.render(scene, camera);
+    if (composer) composer.render();
+    else renderer.render(scene, camera);
   },
 };

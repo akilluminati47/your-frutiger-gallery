@@ -59,9 +59,10 @@
   <!-- WebGL canvas gets appended here -->
   <div id="scene"></div>
 
-  <!-- Sun-glare bloom: a screen-blend DOM glow tracked to the sun's screen
-       position, layered ABOVE the CSS3D live panels so the flare spills over an
-       interactive slab instead of being cut off by it (WebGL flare can't). -->
+  <!-- Sun lens flare (warm glare + ghost train): a full-viewport DOM overlay
+       layered ABOVE the CSS3D live panels, so the flare sweeps over an
+       interactive slab instead of being cut off by it (the WebGL canvas
+       paints below those panels). -->
   <div id="sunglow"></div>
 
   <!-- White "swoop" overlay used for the fade-in / fade-out transitions -->

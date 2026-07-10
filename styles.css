@@ -31,17 +31,18 @@ body.cursor-live{ cursor:default; }
 #scene{ position:fixed; inset:0; }
 #scene canvas{ display:block; }
 
-/* ── Sun-glare bloom over everything ────────────────────────────
-   Full-viewport overlay at z-index 25 — above CSS3D panels (z 12) and
-   HUD (z 20) — so the flare and ghost train overlap interactive slabs
-   like a true 3D lens flare. gallery.js paints every ghost ring as a
-   radial-gradient background layer at its absolute screen position.
-   No mix-blend-mode: plain alpha composites across all layers. */
+/* ── Sun lens flare: warm glare + ghost train ───────────────────
+   Full-viewport overlay at z-index 25 — above the CSS3D live panels (z 12)
+   and the HUD (z 20) — so the flare sweeps over interactive slabs instead
+   of being cut off by them (the WebGL canvas always paints below those
+   panels). gallery.js repaints the glare and each ghost as fixed-size
+   radial-gradient background layers at their screen positions every frame.
+   No mix-blend-mode: a blend can't reach across a cross-origin iframe's
+   compositor surface, but plain alpha composites over everything. */
 #sunglow{
   position:fixed; inset:0; z-index:25; pointer-events:none;
-  opacity:0; will-change:opacity,background;
+  opacity:0; will-change:opacity;
 }
-@media (prefers-reduced-motion: reduce){ #sunglow{ transition:none; } }
 
 /* ── White swoop / fade overlay ─────────────────────────────── */
 #fade{
