@@ -257,11 +257,11 @@ h2{ font-size:26px; letter-spacing:.05em; margin-bottom:6px; color:var(--aqua-d)
   50%    { box-shadow:0 8px 24px rgba(10,90,200,.55), inset 0 2px 2px rgba(255,255,255,.9), 0 0 26px 6px rgba(120,225,255,.85); }
 }
 
-/* (view mode's slab glow retired from CSS: an animated box-shadow on the
+/* (view mode's slab glow retired for good: an animated box-shadow on the
    iframe re-painted the fused box-reflect surface every frame — the panel
-   tore and flashed black under the churn. The breath now lives on the WebGL
-   slab body's emissive — gallery.js setSlabGlow — so the DOM face's pixels
-   never change after load and the panel stays solid.) */
+   tore and flashed black under the churn. The breath was always meant for
+   the touch eye — #viewBtn.active above — and lives only there now; the
+   slab's painted pixels never change after load, so the panel stays solid.) */
 
 /* ── Frutiger Aero touch keyboard ───────────────────────────────
    Summoned by gallery.js updateVkb when a console field lights on touch: a
