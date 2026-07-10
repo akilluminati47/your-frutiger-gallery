@@ -1540,13 +1540,18 @@ function buildGallery(font){
   }
   if (wallProjects.east){
     const f = makeFrame(wallProjects.east, 'auto', autoDelayForRow(0), LOAD_DUR);
-    f.userData.liveWall = !!wallProjects.east.live;   // { live:true } slot → wakes as the real page (8c)
+    // { live:true } slot → wakes as the real page (8c). NOT on touch: a phone
+    // has no pointer to hand a portal, so the wall hangs as a normal captured
+    // world there — the builder console alone stays fully interactive on touch.
+    f.userData.liveWall = !!wallProjects.east.live && !isTouch;
     if (f.userData.liveWall) makeLiveSlab(f);
     placeFrame(f, 0, PLAT_Z0 + 0.4 + 0.12, 0);
   }
   if (wallProjects.west){
     const f = makeFrame(wallProjects.west, 'gaze', Infinity, GAZE_LOAD_DUR);
-    f.userData.liveWall = !!wallProjects.west.live;   // only hangs console-off, so live never fights the console
+    // only hangs console-off, so live never fights the console; touch demotes
+    // it to a normal captured world too (see the east wall note above)
+    f.userData.liveWall = !!wallProjects.west.live && !isTouch;
     if (f.userData.liveWall) makeLiveSlab(f);
     placeFrame(f, 0, PLAT_Z1 - 0.4 - 0.12, Math.PI);
   }
@@ -2762,7 +2767,7 @@ function setInputMode(mode){
   const L = {
     keyboard: '<b>WASD</b> / arrows move &nbsp;·&nbsp; <b>mouse</b> look &nbsp;·&nbsp; <b>E</b> / click visit &nbsp;·&nbsp; <b>Ctrl</b> view lock &nbsp;·&nbsp; <b>Esc</b> pause',
     gamepad:  '<b>L‑stick</b> move &nbsp;·&nbsp; <b>R‑stick</b> look &nbsp;·&nbsp; <b>A</b> visit &nbsp;·&nbsp; <b>R3</b> view lock &nbsp;·&nbsp; <b>Start</b> pause',
-    touch:    '<b>left stick</b> move &nbsp;·&nbsp; <b>drag</b> look &nbsp;·&nbsp; <b>tap</b> visit &nbsp;·&nbsp; <b>👁</b> view lock',
+    touch:    '<b>left stick</b> move &nbsp;·&nbsp; <b>drag</b> look &nbsp;·&nbsp; <b>tap</b> a world to walk up & visit',
   };
   const legend = $('legend'); if (legend) legend.innerHTML = L[mode] || L.keyboard;
   $('touch')?.classList.toggle('hidden', !(mode === 'touch' && started));
@@ -2966,6 +2971,25 @@ function pollPad(dt){
   const joyEl = $('joy'), knobEl = $('joyKnob');
   const inJoyZone = (x, y) => x < innerWidth * 0.5 && y > innerHeight * 0.45;
 
+  // ── ghost stick: the L-thumb never fully disappears any more ──
+  // Released, the stick drifts slowly back to a home spot in the joy zone and
+  // fades to a faint translucent ghost (styles.css #joy.ghost carries the slow
+  // left/top/opacity transitions); a touch snaps it to the finger at full
+  // strength (#joy.on — no position transition, fast fade-in). The ghost marks
+  // where the stick lives without ever covering the hall.
+  const joyHome = () => ({ x: 96, y: innerHeight - 138 });
+  function joyToHome(){
+    if (!joyEl) return;
+    joyEl.classList.remove('on'); joyEl.classList.add('ghost');
+    const h = joyHome();
+    joyEl.style.left = h.x + 'px'; joyEl.style.top = h.y + 'px';
+    if (knobEl) knobEl.style.transform = 'translate(-50%,-50%)';
+  }
+  if (isTouch){
+    joyToHome();
+    addEventListener('resize', () => { if (joyId === null) joyToHome(); });
+  }
+
   // On the menu/pause screens a finger drives the custom crosshair cursor (so it can
   // pop bubbles + light/tap the aero buttons) exactly like the mouse/gamepad cursor —
   // the camera is NOT steered there. (In-world, drag still looks around, see below.)
@@ -2990,7 +3014,11 @@ function pollPad(dt){
       }
       if (joyId === null && inJoyZone(t.clientX, t.clientY)){
         joyId = t.identifier; joyCX = t.clientX; joyCY = t.clientY;
-        if (joyEl){ joyEl.style.left = joyCX+'px'; joyEl.style.top = joyCY+'px'; joyEl.classList.add('on'); }
+        if (joyEl){
+          joyEl.classList.remove('ghost');           // drop the slow drift-home transition first…
+          joyEl.style.left = joyCX+'px'; joyEl.style.top = joyCY+'px';   // …so this SNAPS to the finger
+          joyEl.classList.add('on');
+        }
         if (knobEl) knobEl.style.transform = 'translate(-50%,-50%)';
       } else if (lookId === null){
         lookId = t.identifier; lookLX = t.clientX; lookLY = t.clientY;
@@ -3029,11 +3057,11 @@ function pollPad(dt){
       }
       if (t.identifier === joyId){
         joyId = null; touchMove.x = 0; touchMove.y = 0;
-        joyEl?.classList.remove('on');
-        if (knobEl) knobEl.style.transform = 'translate(-50%,-50%)';
+        joyToHome();   // drift back to the resting spot, fading to the ghost — never fully out
       } else if (t.identifier === lookId){
         held.touchLook = false;
-        if (performance.now() - lookStart < 250 && lookMoved < 10) tryLaunch();   // quick tap = visit
+        // quick tap = visit the armed panel, or auto-walk to a far one (8·)
+        if (performance.now() - lookStart < 250 && lookMoved < 10) touchTap(t.clientX, t.clientY);
         lookId = null;
       }
     }
@@ -3435,8 +3463,11 @@ $('thumbsBtn')?.addEventListener('click', () => {
   if (!w) location.href = '/thumbs';
 });
 $('pauseBtn')?.addEventListener('click', e => { e.preventDefault(); togglePause(); });
-// touch view-lock eye — the finger-friendly twin of Ctrl / gamepad R3
+// touch view-lock eye — the finger-friendly twin of Ctrl / gamepad R3. With
+// live portals demoted to normal worlds on touch there is nothing left for the
+// eye to lock, so it retires there entirely — tap-to-walk covers the approach.
 $('viewBtn')?.addEventListener('click', e => { e.preventDefault(); toggleView(); });
+if (isTouch) $('viewBtn')?.classList.add('hidden');
 
 // desktop click inside the world = visit the active frame. If a gamepad/touch
 // session started us without pointer lock, the first click instead engages
@@ -3541,12 +3572,19 @@ function enterView(f){
   audio.launch();
 }
 function updateViewGlide(dt){
-  viewGlide.t = Math.min(1, viewGlide.t + dt/0.9);
+  viewGlide.t = Math.min(1, viewGlide.t + dt/(viewGlide.dur || 0.9));
   const e = easeIO(viewGlide.t);
   player.position.lerpVectors(viewGlide.fromPos, viewGlide.toPos, e);
   camera.quaternion.slerpQuaternions(viewGlide.fromQuat, viewGlide.toQuat, e);
   camera.position.y = eyeHeight;
-  if (viewGlide.t >= 1){ const f = viewGlide.frame; viewGlide = null; engageView(f); }
+  if (viewGlide.t >= 1){
+    const g = viewGlide; viewGlide = null;
+    // a walk-only glide (touch tap-to-walk) just seats you and hands the walk
+    // back — no view mode, no locks; clear the affordance memory so the 3D
+    // "visit?" / the pill recompute for the panel now filling your view
+    if (g.walkOnly){ lastActive = null; lastCanVisit = false; }
+    else engageView(g.frame);
+  }
 }
 function engageView(f){
   viewMode = true;
@@ -3572,6 +3610,51 @@ function exitView(){
 function toggleView(){
   if (viewMode || viewGlide) exitView();
   else enterView(activeFrame && activeFrame.userData.liveWall ? activeFrame : null);
+}
+
+/* ── touch tap-to-walk: tap a world from ANY distance ──
+   A quick tap raycasts from the FINGER (not the screen centre): landing on a
+   panel that isn't already armed auto-walks you into its viewing pose — the
+   same eased glide the live slabs use, but walk-only: it seats you facing the
+   panel and releases every control again. Tapping the armed panel (or its
+   floating "visit?") still visits, exactly as before. */
+function frameAtScreen(x, y){
+  if (!_visitTargets.length) return null;
+  _visitRay.setFromCamera({ x: (x / innerWidth) * 2 - 1, y: -(y / innerHeight) * 2 + 1 }, camera);
+  const hit = _visitRay.intersectObjects(_visitTargets, false)[0];
+  return hit ? hit.object.userData.frame : null;
+}
+function tapWalk(f){
+  if (viewMode || viewGlide || state !== 'play') return;
+  // stand-off along the panel's normal: the live-slab pose for the XXL slabs
+  // (desktop-only, but kept general), a closer frame-filling pose for the
+  // normal panels — inside the 4.20 visit reach so the next tap can launch
+  const dir = new THREE.Vector3(Math.sin(f.rotation.y), 0, Math.cos(f.rotation.y));
+  const toPos = f.position.clone().add(dir.multiplyScalar(f.userData.liveSlab ? VIEW_PAD_DIST : 3.4));
+  toPos.y = eyeHeight;
+  toPos.x = clamp(toPos.x, -(WALL_X-0.7), WALL_X-0.7);
+  toPos.z = clamp(toPos.z, PLAT_Z0+1, PLAT_Z1-1);
+  // camera-style aim (Matrix4.lookAt — Object3D.lookAt flips 180°, see enterView)
+  const aimY = f.userData.liveSlab ? CON_SLAB_Y : eyeHeight;
+  const lookM = new THREE.Matrix4().lookAt(toPos, new THREE.Vector3(f.position.x, aimY, f.position.z), camera.up);
+  const toQuat = new THREE.Quaternion().setFromRotationMatrix(lookM);
+  velocity.set(0, 0, 0);
+  viewGlide = {
+    frame: f, t: 0, walkOnly: true,
+    // pace scales with the trip so a far wall isn't a whip-pan and a nearby
+    // panel isn't a crawl
+    dur: clamp(player.position.distanceTo(toPos) * 0.11, 0.7, 2.2),
+    fromPos: player.position.clone(), toPos,
+    fromQuat: camera.quaternion.clone(), toQuat,
+  };
+  audio.launch();
+}
+function touchTap(x, y){
+  if (state === 'play' && !viewMode && !viewGlide && !launch){
+    const f = frameAtScreen(x, y);
+    if (f && f !== activeFrame){ tapWalk(f); return; }   // not armed yet → walk to it
+  }
+  tryLaunch();   // armed panel / floating "visit?" / console press — as before
 }
 // Ctrl-HOLD panic escape: reload the live slab(s) to shake a page that trapped
 // the pointer/keyboard, and drop back to the walk. Re-assigning src forces a
