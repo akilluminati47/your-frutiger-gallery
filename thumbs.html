@@ -214,11 +214,15 @@ const ago = ts => {
   return Math.round(s/86400) + ' d ago';
 };
 
-// worlds = corridor projects + on, non-live end-wall slots (mirrors the gallery)
+// worlds = corridor projects + every toggled-on end-wall slot, LIVE ones
+// included: an interactive wall never shows its own crop on desktop, but its
+// two static choices still matter — touch demotes live walls to normal
+// captured worlds, and a design with the live toggle off hangs the capture —
+// so the store needs entries for them like any other world.
 const walls = CONFIG.walls || {};
 const worlds = [
   ...(CONFIG.projects || []).map(p => ({ name: p.name, url: p.url })),
-  ...['west','east'].filter(s => walls[s]?.on && walls[s].url?.trim() && !walls[s].live)
+  ...['west','east'].filter(s => walls[s]?.on && walls[s].url?.trim())
                     .map(s => ({ name: walls[s].name || s + ' wall', url: walls[s].url.trim() })),
 ].filter((w, i, a) => a.findIndex(x => x.url === w.url) === i);   // dedupe by url
 

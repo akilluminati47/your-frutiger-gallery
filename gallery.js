@@ -3137,7 +3137,12 @@ function pollPad(dt){
         if (uiTouchId === null){ uiTouchId = t.identifier; driveTouchCursor(t.clientX, t.clientY); }
         continue;
       }
-      if (joyId === null && nearJoy(t.clientX, t.clientY)){
+      // a world panel showing through the stick's region outranks the stick:
+      // the touch falls through to the look/tap finger, so a quick tap there
+      // auto-walks to that world instead of twitching the knob
+      const panelUnder = state === 'play' && !viewMode && !viewGlide && !ui.cursor.on
+                      && frameAtScreen(t.clientX, t.clientY);
+      if (joyId === null && nearJoy(t.clientX, t.clientY) && !panelUnder){
         const h = joyHome();
         joyId = t.identifier; joyCX = h.x; joyCY = h.y;   // deflection measures from HOME, not the finger
         if (joyEl){ joyEl.classList.remove('ghost'); joyEl.classList.add('on'); }
@@ -3624,7 +3629,18 @@ renderer.domElement.addEventListener('auxclick', e => {
 function tryLaunch(forceTab = false){
   if (viewMode || viewGlide) return;    // frozen in / gliding into a view — the toggle/click owns the exit
   if (consolePress()) return;           // aiming at the back-wall console → press it
-  if (state !== 'play' || !activeFrame || launch) return;
+  if (state !== 'play' || launch) return;
+  if (!activeFrame){
+    // no armed panel, but the gaze may rest on a DISTANT one — every input's
+    // visit press (click / E / pad A / touch tap fallback) auto-walks there,
+    // the same glide the finger-tap earns on touch. The wheel press keeps its
+    // meaning (open a tab) and never strolls.
+    if (!forceTab){
+      const f = frameAtScreen(innerWidth / 2, innerHeight / 2);
+      if (f) tapWalk(f);
+    }
+    return;
+  }
   if (activeFrame.userData.loadState !== 'done') return;   // world still loading
   // a live end wall answers "view?" — glide into a padded viewing pose and
   // engage view mode (walk + look freeze, the slab takes the mouse), rather
@@ -3762,8 +3778,9 @@ function tapWalk(f){
   viewGlide = {
     frame: f, t: 0, walkOnly: true,
     // pace scales with the trip so a far wall isn't a whip-pan and a nearby
-    // panel isn't a crawl
-    dur: clamp(player.position.distanceTo(toPos) * 0.11, 0.7, 2.2),
+    // panel isn't a crawl; the raised ceiling keeps LONG trips honest too —
+    // a capped duration would sneak the speed back up with distance
+    dur: clamp(player.position.distanceTo(toPos) * 0.145, 0.8, 3.5),
     fromPos: player.position.clone(), toPos,
     fromQuat: camera.quaternion.clone(), toQuat,
   };
