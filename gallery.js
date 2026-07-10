@@ -4059,13 +4059,22 @@ function updateSunGaze(dt){
   }
 }
 
-// ── sun lens flare: the warm glare AND the ghost train, painted together as
-//    radial-gradient layers on the full-viewport #sunglow overlay at z 25.
-//    Plain alpha, no blend mode, so it composites over everything on the
-//    page — live-portal iframes included, which the WebGL canvas can never
-//    paint above. Every layer has a FIXED radius at its true flare position
-//    (screen-pos mirrored through centre by its `distance`, the classic
-//    lensflare formula); only opacity moves, and every input to it is
+// ── sun lens flare: the warm glare AND the ghost train, each flare layer
+//    its OWN small child div of the #sunglow overlay (z 25). Plain alpha,
+//    no blend mode, so it composites over everything on the page —
+//    live-portal iframes included, which the WebGL canvas can never paint
+//    above. Every layer has a FIXED radius (screen-pos mirrored through
+//    centre by its `distance`, the classic lensflare formula); its gradient
+//    is painted ONCE at birth, and per frame only transform (position) and
+//    opacity (strength) move — compositor properties, zero repaint. The
+//    first cut rewrote ONE full-viewport background per frame instead:
+//    that re-rasterised and re-uploaded a screen-sized layer 60×/s at any
+//    camera angle within ~85° of the sun (even at op 0.01, far below what
+//    an eye can see), and the upload churn starved the GPU right when the
+//    live panel's fused box-reflect surface needed re-compositing (an
+//    animated page redraws it endlessly, walking or standing still) — the
+//    panel flashed whole-face BLACK / grew black smears over the mirror
+//    strip while the flare was invisibly faint. Every input stays
 //    continuous: facing^2.5 rises from exactly zero, each ghost grades by
 //    how far it sits from the sun on screen, and slab occlusion is a single
 //    ray eased over time — nothing pops, nothing inflates, no viewport-edge
@@ -4103,21 +4112,31 @@ const GHOST_SPECS = [
   { size: 94,  distance: 0.80, kind: 'ring' },
   { size: 130, distance: 1.00, kind: 'glow' },   // cool counter-glow mirrored through centre
 ];
-function ghostLayer(spec, lx, ly, a){
-  const r = (spec.size / 2).toFixed(0), at = `circle ${r}px at ${lx}% ${ly}%`;
+function ghostLayer(spec){
+  const at = `circle ${(spec.size / 2).toFixed(0)}px at 50% 50%`;
   if (spec.kind === 'core')
-    return `radial-gradient(${at}, rgba(255,247,224,${(0.85*a).toFixed(3)}) 0%, rgba(255,236,188,${(0.5*a).toFixed(3)}) 25%, rgba(255,222,150,${(0.22*a).toFixed(3)}) 48%, rgba(255,214,150,${(0.07*a).toFixed(3)}) 66%, transparent 78%)`;
+    return `radial-gradient(${at}, rgba(255,247,224,.85) 0%, rgba(255,236,188,.5) 25%, rgba(255,222,150,.22) 48%, rgba(255,214,150,.07) 66%, transparent 78%)`;
   if (spec.kind === 'ring')
-    return `radial-gradient(${at}, rgba(255,255,255,0) 0%, rgba(200,225,255,${(0.45*a).toFixed(3)}) 55%, rgba(170,210,255,${(0.2*a).toFixed(3)}) 82%, rgba(170,210,255,0) 100%)`;
-  return `radial-gradient(${at}, rgba(207,230,255,${(0.5*a).toFixed(3)}) 0%, rgba(190,220,255,${(0.22*a).toFixed(3)}) 45%, rgba(170,210,255,0) 72%)`;
+    return `radial-gradient(${at}, rgba(255,255,255,0) 0%, rgba(200,225,255,.45) 55%, rgba(170,210,255,.2) 82%, rgba(170,210,255,0) 100%)`;
+  return `radial-gradient(${at}, rgba(207,230,255,.5) 0%, rgba(190,220,255,.22) 45%, rgba(170,210,255,0) 72%)`;
 }
+// the per-ghost strength used to bake into every gradient stop (0.85·a,
+// 0.5·a, …) — scaling each stop's alpha by a IS multiplying the whole layer
+// by a, so it now rides the child's opacity and the gradient never repaints
+const ghostEls = GHOST_SPECS.map(spec => {
+  const d = document.createElement('div');
+  d.style.cssText = `position:absolute; left:0; top:0; width:${spec.size}px; height:${spec.size}px;` +
+                    ` opacity:0; will-change:transform,opacity; background:${ghostLayer(spec)}`;
+  sunglowEl?.appendChild(d);
+  return d;
+});
 function updateSunGlow(dt){
   if (!sunglowEl) return;
   camera.getWorldDirection(_glowDir);
   const facing = _glowDir.dot(SUN_DIR);          // 1 = looking straight at the sun, ≤0 = away
   const bloom = (state === 'play' || state === 'intro') && facing > 0
     ? Math.pow(Math.min(1, facing), 2.5) : 0;
-  if (bloom < 0.002){ sunglowEl.style.opacity = '0'; return; }   // invisible → skip the repaint
+  if (bloom < 0.002){ sunglowEl.style.opacity = '0'; return; }   // invisible → skip the work
   // slab occlusion: five rays across the sun's disk against the visit
   // cursor's panel cache (the slabs are exactly the occluders that matter),
   // graded by how many get through and eased over ~0.15 s — the glare melts
@@ -4137,19 +4156,21 @@ function updateSunGlow(dt){
   if (op < 0.002){ sunglowEl.style.opacity = '0'; return; }
   _sunNdc.copy(_sunWorld).project(camera);       // world sun → normalised device coords
   const off = Math.hypot(_sunNdc.x, _sunNdc.y);  // sun's own distance off screen-centre
-  const layers = GHOST_SPECS.map(spec => {
+  GHOST_SPECS.forEach((spec, i) => {
     const f = 1 - 2 * spec.distance;             // 0 = on the sun, 1 = mirrored through centre
-    const lx = ((_sunNdc.x * f * 0.5 + 0.5) * 100).toFixed(1);
-    const ly = ((-_sunNdc.y * f * 0.5 + 0.5) * 100).toFixed(1);
+    const x = ((_sunNdc.x * f * 0.5 + 0.5) * innerWidth ).toFixed(1);
+    const y = ((-_sunNdc.y * f * 0.5 + 0.5) * innerHeight).toFixed(1);
     // the core rides every angle at full strength; each ghost fades by ITS
     // OWN screen distance from the sun (2·d·off), so looking dead-on the
     // train melts into the glare instead of the plain-alpha layers stacking
     // into a blue blob ON the sun, and it sweeps back out — far ghosts
     // first — as the sun slides off-centre
     const a = spec.kind === 'core' ? 1 : Math.min(1, 2 * spec.distance * off * 1.5) * ghostVis;
-    return ghostLayer(spec, lx, ly, a);
+    // translate to the flare position, then back by half the fixed box —
+    // transform + opacity only: the layer's pixels were painted at birth
+    ghostEls[i].style.transform = `translate(${x}px, ${y}px) translate(-50%, -50%)`;
+    ghostEls[i].style.opacity = a.toFixed(3);
   });
-  sunglowEl.style.background = layers.join(',');
   sunglowEl.style.opacity = op.toFixed(3);
 }
 function animate(){

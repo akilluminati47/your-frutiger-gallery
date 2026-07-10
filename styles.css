@@ -35,10 +35,14 @@ body.cursor-live{ cursor:default; }
    Full-viewport overlay at z-index 25 — above the CSS3D live panels (z 12)
    and the HUD (z 20) — so the flare sweeps over interactive slabs instead
    of being cut off by them (the WebGL canvas always paints below those
-   panels). gallery.js repaints the glare and each ghost as fixed-size
-   radial-gradient background layers at their screen positions every frame.
-   No mix-blend-mode: a blend can't reach across a cross-origin iframe's
-   compositor surface, but plain alpha composites over everything. */
+   panels). gallery.js gives each ghost its OWN small child div: gradient
+   painted once at birth, then only transform + opacity move per frame —
+   compositor properties, zero repaint. (Rewriting this element's full-
+   viewport background per frame re-rasterised a screen-sized layer 60×/s
+   and the upload churn black-flashed the live panel's fused box-reflect
+   surface underneath.) No mix-blend-mode: a blend can't reach across a
+   cross-origin iframe's compositor surface, but plain alpha composites
+   over everything. */
 #sunglow{
   position:fixed; inset:0; z-index:25; pointer-events:none;
   opacity:0; will-change:opacity;
