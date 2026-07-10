@@ -3638,6 +3638,41 @@ const PORTAL_DEADBAND = 1.2;   // inner no-mouse band: the face sits ~0.45 ahead
 let live3d = null;       // lazy singleton: { container, renderer, scene, byFrame, shown }
 let hallCursor = null;   // last body.cursor-live state (null → first pass always writes)
 let portalAudioTick = 0; // frame counter for the ~10 Hz placement stream (gate loop)
+const _pjCorner = new THREE.Vector3();   // scratch for the reflection gate's corner projections
+// ── reflection gate — see the surface note in liveScreenFor ──
+// Projects the slab face's four corners with plain camera math (no DOM reads,
+// no layout) and sizes the composited surface the wrap would need: its
+// projected AABB, doubled in height by the box-reflect mirror, in device px.
+// Oversized (or any corner at/behind the eye, where the projection explodes)
+// → reflection and corner rounding lift; they return once the box shrinks
+// back. The two thresholds are hysteresis so the flip never flaps at the
+// boundary, and both sit well under the common 8192 px GPU texture floor.
+function reflectGate(f, s){
+  const hw = s.faceW / 2, hh = s.faceH / 2, p = s.obj.position;
+  const rx = Math.cos(f.rotation.y) * hw, rz = -Math.sin(f.rotation.y) * hw;
+  let behind = false, minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (let i = 0; i < 4; i++){
+    const sx = i & 1 ? 1 : -1, sy = i & 2 ? 1 : -1;
+    _pjCorner.set(p.x + sx * rx, p.y + sy * hh, p.z + sx * rz)
+             .applyMatrix4(camera.matrixWorldInverse);
+    if (_pjCorner.z > -0.05){ behind = true; break; }   // at/behind the eye plane
+    _pjCorner.applyMatrix4(camera.projectionMatrix);
+    const px = (_pjCorner.x * 0.5 + 0.5) * innerWidth;
+    const py = (0.5 - _pjCorner.y * 0.5) * innerHeight;
+    if (px < minX) minX = px;  if (px > maxX) maxX = px;
+    if (py < minY) minY = py;  if (py > maxY) maxY = py;
+  }
+  const surf = behind ? Infinity
+    : Math.max(maxX - minX, (maxY - minY) * 2) * (devicePixelRatio || 1);
+  const want = surf < (s.reflectOn ? 7200 : 5800);
+  if (want !== s.reflectOn){
+    s.reflectOn = want;
+    // '' removes the declaration — box-reflect has NO 'none' keyword, and
+    // Chromium silently rejects the assignment, leaving the mirror stuck on
+    s.wrap.style.webkitBoxReflect = want ? s.reflectCss : '';
+    s.el.style.borderRadius = want ? s.radiusCss : '0px';
+  }
+}
 
 function liveLayerInit(){
   if (live3d) return live3d;
@@ -3726,10 +3761,27 @@ function liveScreenFor(f){
   const FLOOR_Y = 0.004;                    // glass floor sits here (see buildCorridor)
   const bottomY = obj.position.y - (ph * k) / 2;          // slab face's bottom edge, world
   const gapPx = Math.max(0, 2 * (bottomY - FLOOR_Y) / k); // that gap, doubled, in element px
-  wrap.style.webkitBoxReflect =
-    `below ${gapPx.toFixed(1)}px linear-gradient(rgba(0,0,0,0.42), rgba(0,0,0,0.42))`;
+  const reflectCss = `below ${gapPx.toFixed(1)}px linear-gradient(rgba(0,0,0,0.42), rgba(0,0,0,0.42))`;
+  wrap.style.webkitBoxReflect = reflectCss;
+  // the pad body hides the slab's back — tell the compositor so it never
+  // rasterises the mirrored backface at grazing angles
+  wrap.style.backfaceVisibility = 'hidden';
 
-  s = { obj, el, wrap, on: null };   // null → the gate's first pass always writes a real state
+  s = { obj, el, wrap, on: null,     // null → the gate's first pass always writes a real state
+        // Chromium renders a 3D-composited element through an intermediate
+        // GPU surface sized to its PROJECTED screen box when it needs one —
+        // and both box-reflect (face + mirror fused into one surface) and the
+        // rounded-corner mask on a rotated iframe do. Walk right up to the
+        // slab, or catch it near edge-on, and the perspective projection
+        // blows that box past the GPU texture budget: the surface fails and
+        // the whole panel flashes BLACK. The animate gate measures the
+        // projected box every frame (reflectGate) and lifts reflection +
+        // corner rounding while it's oversized — the mirror is entirely
+        // below the viewport and the corners are off-screen in exactly
+        // those poses, so nothing visible changes; it also stops painting
+        // the doubled surface right when it's at its most expensive.
+        reflectCss, radiusCss: el.style.borderRadius, reflectOn: true,
+        faceW: pw * k, faceH: ph * k };
   L.byFrame.set(f, s);
   return s;
 }
@@ -3984,6 +4036,7 @@ function animate(){
         s.el.style.pointerEvents = on ? 'auto' : 'none';
         if (!on && document.activeElement === s.el){ s.el.blur(); window.focus(); }
       }
+      if (live3d.shown) reflectGate(f, s);   // keep the composited surface under the GPU budget
       if (sayAudio){
         const sp = playing ? audio.pagePlace(f.userData.worldPos) : { gain: 0, pan: 0 };
         try {
