@@ -3204,12 +3204,9 @@ const audio = (() => {
 // unlock the AudioContext on the first user gesture so menu bubble-pops have sound
 // before the visitor ever clicks Enter (browsers gate audio behind a real gesture)
 addEventListener('pointerdown', () => audio.init(), { once:true });
-// every aero pill (handle / Resume / Thumbs) presses with the Information Bar
-// tick — the hover bubble-pop lives in setUiHover. Synthesised .click()s (the
-// gamepad path) land here too.
-document.addEventListener('click', e => {
-  if (e.target?.closest?.('.aero-btn:not(:disabled)')) audio.hover();
-});
+// the hover bubble-pop lives in setUiHover. Console buttons play their own
+// press sounds inside consolePress. Menu pills (Enter, Resume, Thumbs) stay
+// silent — no Information Bar tick on every aero-btn click.
 
 /* ════════════════════════════════════════════════════════════════
    8 · state machine: enter → intro swoop → play → launch swoop

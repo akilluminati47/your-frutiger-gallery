@@ -8,6 +8,10 @@ index.zip
 # served from the OWNER_CONFIG secret by functions/api/owner-config.js.
 # This local copy is only for dev; forks boot the template in config.js.
 owner.config.json
+owner.config.json.bak
+
+# wrangler pages dev scratch
+.wrangler/
 
 # OS cruft
 Thumbs.db
