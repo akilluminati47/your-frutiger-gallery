@@ -1517,10 +1517,6 @@ function buildGallery(font){
     // no FX colour lift — lighting + ACES own the tone.
     const liveMat = new THREE.MeshStandardMaterial({
       color: 0xffffff, roughness: 0.35, metalness: 0, envMapIntensity: 0.8,
-      // white emissive baked into the program from birth: view mode's breath
-      // (setSlabGlow → animate loop) only writes emissiveIntensity — a uniform
-      // update, never a recompile, and never a DOM repaint of the face
-      emissive: 0xffffff, emissiveIntensity: 0,
     });
     u.panel.material.dispose();           // the basic screen material (its whiteTex dies at reveal)
     u.panel.material = liveMat;
@@ -2814,7 +2810,6 @@ const touchMove = { x:0, y:0 };       // on-screen joystick
 // mode engages (set by the "view?" affordance; null once seated / off).
 let viewMode  = false;
 let viewGlide = null;
-let glowFrame = null;   // the viewed slab breathing white (animate loop pulses its body's emissive)
 
 // apply a look delta the same way PointerLockControls does (so they compose)
 const _PI2 = Math.PI/2;
@@ -3375,7 +3370,7 @@ function pauseGame(){
   if (state !== 'play' && state !== 'intro') return;
   // pausing drops view mode too, so Resume returns you to the walk (not a freeze);
   // the slabs disarm on the next gate pass (viewMode off)
-  viewMode = false; viewGlide = null; setEyeGlow(false); setSlabGlow(null);
+  viewMode = false; viewGlide = null; setEyeGlow(false);
   pausedFrom = state;
   if (performance.now() > pauseHushUntil) audio.pauseOpen();
   state = 'paused';                         // freezes movement (loop skips intro/play)
@@ -3531,7 +3526,7 @@ function resetToMenu(){
   // (their pages keep state for the next entry)
   liveHide();
   launch = null; state = 'menu'; started = false;
-  viewMode = false; viewGlide = null; setEyeGlow(false); setSlabGlow(null);   // clear any view-lock on the way out
+  viewMode = false; viewGlide = null; setEyeGlow(false);   // clear any view-lock on the way out
   padCursor.ready = false;                    // gamepad cursor re-centres on the splash
   $('fade').style.opacity = '0';
   $('enter').classList.remove('hidden');
@@ -3591,11 +3586,11 @@ $('thumbsBtn')?.addEventListener('click', () => {
   if (!w) location.href = '/thumbs';
 });
 $('pauseBtn')?.addEventListener('click', e => { e.preventDefault(); togglePause(); });
-// touch view-lock eye — the finger-friendly twin of Ctrl / gamepad R3. With
-// live portals demoted to normal worlds on touch there is nothing left for the
-// eye to lock, so it retires there entirely — tap-to-walk covers the approach.
+// touch view-lock eye — the finger-friendly twin of Ctrl / gamepad R3. Its
+// breathing halo while engaged (#viewBtn.active) is view mode's ONLY proof:
+// walk + look freeze until you tap the eye (or the hall) again. The viewed
+// slab itself stays quiet — see the note above setEyeGlow.
 $('viewBtn')?.addEventListener('click', e => { e.preventDefault(); toggleView(); });
-if (isTouch) $('viewBtn')?.classList.add('hidden');
 
 // desktop click inside the world = visit the active frame. If a gamepad/touch
 // session started us without pointer lock, the first click instead engages
@@ -3730,7 +3725,6 @@ function engageView(f){
   viewGlide = null;
   if (controls.isLocked){ panelHandoff = true; controls.unlock(); }   // free the OS cursor for the slab
   setEyeGlow(true);
-  setSlabGlow(f);                           // the viewed slab breathes a slow white halo
   showViewHint(true);
   if (f) audio.ping(f.userData.worldPos);   // the slab is yours — same ding as a reveal
 }
@@ -3738,7 +3732,6 @@ function exitView(){
   if (!viewMode && !viewGlide) return;
   viewMode = false; viewGlide = null;
   setEyeGlow(false);
-  setSlabGlow(null);
   showViewHint(false);
   // moveAndInteract froze while view mode was on, so its affordance memory is
   // stale — clear it so the "view?"/"visit?" pill recomputes and re-shows the
@@ -3811,20 +3804,11 @@ function refreshPortals(){
   }
   exitView();
 }
+// view mode's proof is UI chrome only — the slab itself wears NOTHING: any
+// animated paint on or around the DOM face (the old .view-glow box-shadow)
+// re-rasterises the fused box-reflect surface every frame, and the panel
+// tears and flashes black under the churn.
 function setEyeGlow(on){ $('viewBtn')?.classList.toggle('active', on); }
-// view mode's proof on the slab itself: the white prism BODY breathes (the
-// animate loop pulses its emissive — a uniform write, nothing repaints).
-// This deliberately lives in WebGL, not on the DOM face: the old .view-glow
-// animated box-shadow ON the iframe, and every animation frame re-painted
-// the wrapper's fused box-reflect surface — a huge 3D-transformed raster
-// that showed as tearing tiles and, when the GPU surface allocation missed,
-// whole-panel BLACK flashes. With the pulse on the body, the face's painted
-// pixels never change after load; the compositor only re-transforms them,
-// so the panel stays solid. The glass floor's Reflector mirrors the
-// breathing body for free. Pass the viewed frame, or null to clear.
-function setSlabGlow(f){
-  glowFrame = f;
-}
 // touch has the glowing eye as its proof; desktop/gamepad get a quiet line
 // carrying the same "you're in view mode, here's the way out"
 let viewHintFadeT = null;
@@ -3881,20 +3865,25 @@ let hallCursor = null;   // last body.cursor-live state (null → first pass alw
 let portalAudioTick = 0; // frame counter for the ~10 Hz placement stream (gate loop)
 const _pjCorner = new THREE.Vector3();   // scratch for the reflection gate's corner projections
 // ── reflection gate — see the surface note in liveScreenFor ──
-// Projects the slab face's four corners with plain camera math (no DOM reads,
-// no layout) and sizes the composited surface the wrap would need: its
-// projected AABB, doubled in height by the box-reflect mirror, in device px.
+// Projects the fused surface's TRUE extents with plain camera math (no DOM
+// reads, no layout): from the face's top edge down to where the mirrored top
+// edge lands below the glass — face, bottom-edge gap and box-reflect copy
+// measured as the one raster the compositor actually allocates, in device px.
+// (An earlier gate doubled the face's own box and skipped the gap, so a
+// raised slab's surface ran far taller than measured — the gate green-lit
+// it, the GPU allocation missed, and the panel ripped black mid-walk.)
 // Oversized (or any corner at/behind the eye, where the projection explodes)
 // → reflection and corner rounding lift; they return once the box shrinks
 // back. The two thresholds are hysteresis so the flip never flaps at the
 // boundary, and both sit well under the common 8192 px GPU texture floor.
 function reflectGate(f, s){
-  const hw = s.faceW / 2, hh = s.faceH / 2, p = s.obj.position;
+  const hw = s.faceW / 2, p = s.obj.position;
   const rx = Math.cos(f.rotation.y) * hw, rz = -Math.sin(f.rotation.y) * hw;
+  const yTop = p.y + s.faceH / 2;         // the surface's top = the face's top edge
   let behind = false, minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
   for (let i = 0; i < 4; i++){
-    const sx = i & 1 ? 1 : -1, sy = i & 2 ? 1 : -1;
-    _pjCorner.set(p.x + sx * rx, p.y + sy * hh, p.z + sx * rz)
+    const sx = i & 1 ? 1 : -1;
+    _pjCorner.set(p.x + sx * rx, i & 2 ? yTop : s.surfBotY, p.z + sx * rz)
              .applyMatrix4(camera.matrixWorldInverse);
     if (_pjCorner.z > -0.05){ behind = true; break; }   // at/behind the eye plane
     _pjCorner.applyMatrix4(camera.projectionMatrix);
@@ -3904,7 +3893,7 @@ function reflectGate(f, s){
     if (py < minY) minY = py;  if (py > maxY) maxY = py;
   }
   const surf = behind ? Infinity
-    : Math.max(maxX - minX, (maxY - minY) * 2) * (devicePixelRatio || 1);
+    : Math.max(maxX - minX, maxY - minY) * (devicePixelRatio || 1);
   const want = surf < (s.reflectOn ? 7200 : 5800);
   if (want !== s.reflectOn){
     s.reflectOn = want;
@@ -4007,6 +3996,11 @@ function liveScreenFor(f){
   // the pad body hides the slab's back — tell the compositor so it never
   // rasterises the mirrored backface at grazing angles
   wrap.style.backfaceVisibility = 'hidden';
+  // the CSS3D matrix rewrites every frame of the walk: promise the churn so
+  // the compositor keeps this layer (and the fused face+mirror raster riding
+  // it) alive across frames instead of tearing it down and re-allocating —
+  // the rebuild under pressure is where mid-walk black rips came from
+  wrap.style.willChange = 'transform';
 
   s = { obj, el, wrap, on: null,     // null → the gate's first pass always writes a real state
         // Chromium renders a 3D-composited element through an intermediate
@@ -4022,7 +4016,12 @@ function liveScreenFor(f){
         // those poses, so nothing visible changes; it also stops painting
         // the doubled surface right when it's at its most expensive.
         reflectCss, radiusCss: el.style.borderRadius, reflectOn: true,
-        faceW: pw * k, faceH: ph * k };
+        faceW: pw * k, faceH: ph * k,
+        // world-y of the fused surface's bottom edge: box-reflect runs face →
+        // gap → copy, so the raster ends where the mirrored top edge lands
+        // (the face's top reflected about the glass). reflectGate measures the
+        // surface from here up — gap included, nothing under-counted.
+        surfBotY: 2 * FLOOR_Y - (obj.position.y + (ph * k) / 2) };
   L.byFrame.set(f, s);
   return s;
 }
@@ -4312,17 +4311,6 @@ function animate(){
   const pulse = 0.5 + 0.5*Math.sin(t*2.2);   // calm ~2.9s breath (3.4 blinked)
   for (const f of frames){
     const u = f.userData;
-
-    // the viewed slab breathes white through its BODY's emissive — the DOM
-    // face never repaints for the effect (see setSlabGlow for why the old
-    // box-shadow pulse tore the panel). Peak clears the bloom threshold
-    // (1.2) with FX for a soft halo at the crest; the trough keeps a
-    // whisper, like the old glow's resting rim. Eased at the same pace as
-    // every other frame animation so engage/exit never pops.
-    if (u.liveSlab && u.screenMat && u.screenMat.emissive){
-      const want = (f === glowFrame) ? 0.10 + (FX ? 1.25 : 0.55) * pulse : 0;
-      u.screenMat.emissiveIntensity = lerp(u.screenMat.emissiveIntensity, want, 1 - Math.pow(0.001, dt));
-    }
     // "visit?" / "view?" shows for the frame under your gaze — but a live slab's
     // "view?" shrinks away the instant you commit (glide-in or seated in view
     // mode), the same way "visit?" bows out under the launch swoop
