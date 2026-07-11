@@ -283,7 +283,11 @@ The glass floor is a true planar reflector — blue-tinted, blurred, moving in r
 parallax — and a live end wall lays its page into that mirror by painting the face
 iframe's own pixels a second time (`-webkit-box-reflect`, evenly dimmed), riding the
 slab's white bounce: one browsing context rendered twice, so the reflection can never
-fall out of step with the page. The live slab itself is the
+fall out of step with the page. Every mirror in the hall — the planar reflectors and
+the slab's painted copies — hangs off one visitor-owned switch on the pause menu
+(**Reflections: on/off**, saved in `localStorage`): off, the panes freeze to a flat
+frosted tint, the replicas drop, and the GPU keeps only the single forward pass.
+The live slab itself is the
 Aero-Pad, an extruded body: a rim rising flush to the page in front, a rounded
 shoulder sweeping onto a flat inset panel behind. The sun's lens flare — warm
 glare plus ghost train — is pure DOM: fixed-size radial gradients repainted each
