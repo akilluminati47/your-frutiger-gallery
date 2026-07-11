@@ -250,7 +250,6 @@ function render(){
         <p class="name"></p>
         <p class="url"></p>
         <p class="age"></p>
-        <p class="age hold" style="display:none;color:#7a5bb8;font-weight:700;">⚓ auto-refresh holds thum.io</p>
         <div class="row">
           <button class="btn mini act-fetch">⟳ Fetch</button>
           <button class="btn mini act-dl">↓ Save</button>
@@ -261,7 +260,6 @@ function render(){
     el.querySelector('.url').textContent = w.url;
     const img = el.querySelector('img'), empty = el.querySelector('.empty');
     const tag = el.querySelector('.tag'), age = el.querySelector('.age');
-    const hold = el.querySelector('.hold');
     const checkbox = el.querySelector('.pick input');
 
     checkbox.addEventListener('change', () => el.classList.toggle('sel', checkbox.checked));
@@ -281,7 +279,7 @@ function render(){
       if (!img.hidden && img.src) openZoom(img);
     });
 
-    cards.set(w.url, { el, img, empty, tag, age, hold, checkbox, provBtn });
+    cards.set(w.url, { el, img, empty, tag, age, checkbox, provBtn });
     grid.appendChild(el);
   }
   $('#sub').textContent = `${worlds.length} worlds`;
@@ -304,14 +302,15 @@ function showEmpty(url){
 }
 // the HOLD is the store's own memory (prov:<url> key, no TTL): a held world's
 // auto-refresh renders on thum.io from every visitor, not just this browser.
-// Mirror it into the card + localStorage so Fetch here follows it too.
+// Mirror it into localStorage so Fetch here follows it too — no badge, no
+// message: the provider tag on the crop already says who took it, and setting
+// a provider means expecting it to hold. The tooltip alone carries the detail.
 function setHeld(url, held){
   const c = cards.get(url); if (!c) return;
   c.held = held;
   setProv(url, held ? 'thumio' : 'microlink');
   c.provBtn.title = held ? 'auto-refresh holds thum.io — ⇄ swaps back to microlink'
                          : 'captures via microlink (default)';
-  c.hold.style.display = held ? '' : 'none';
 }
 
 async function refreshList(){
@@ -389,8 +388,7 @@ async function doSwap(w){
       // the server moved the hold with the swap: thum.io active = held (every
       // future auto-refresh renders there), microlink active = released
       setHeld(w.url, active === 'thumio');
-      setStatus(`${w.name} → ${active === 'thumio' ? 'thum.io' : 'microlink'} crop`
-              + (active === 'thumio' ? ' (held for auto-refresh)' : ''));
+      setStatus(`${w.name} → ${active === 'thumio' ? 'thum.io' : 'microlink'} crop`);
       return;
     }
     // nothing parked for the other side yet → capture it now (parks the old one)
