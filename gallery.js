@@ -3876,29 +3876,65 @@ const _pjCorner = new THREE.Vector3();   // scratch for the reflection gate's co
 // → reflection and corner rounding lift; they return once the box shrinks
 // back. The two thresholds are hysteresis so the flip never flaps at the
 // boundary, and both sit well under the common 8192 px GPU texture floor.
-function reflectGate(f, s){
-  const hw = s.faceW / 2, p = s.obj.position;
-  const rx = Math.cos(f.rotation.y) * hw, rz = -Math.sin(f.rotation.y) * hw;
-  const yTop = p.y + s.faceH / 2;         // the surface's top = the face's top edge
-  let behind = false, minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+// one projected span of the fused surface, world x-offsets x0…x1 along the
+// slab's local axis, face top → mirrored top below the glass: the screen
+// outline's longest side (CSS px) and the nearest corner's view depth — or
+// null with any corner at/behind the eye plane, where projections explode
+function projSpan(f, s, x0, x1){
+  const p = s.obj.position, yTop = p.y + s.faceH / 2;
+  const cx = Math.cos(f.rotation.y), cz = -Math.sin(f.rotation.y);
+  let zNear = Infinity, minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
   for (let i = 0; i < 4; i++){
-    const sx = i & 1 ? 1 : -1;
-    _pjCorner.set(p.x + sx * rx, i & 2 ? yTop : s.surfBotY, p.z + sx * rz)
+    const xo = i & 1 ? x1 : x0;
+    _pjCorner.set(p.x + cx * xo, i & 2 ? yTop : s.surfBotY, p.z + cz * xo)
              .applyMatrix4(camera.matrixWorldInverse);
-    if (_pjCorner.z > -0.05){ behind = true; break; }   // at/behind the eye plane
+    if (_pjCorner.z > -0.05) return null;
+    if (-_pjCorner.z < zNear) zNear = -_pjCorner.z;   // view depth of the closest corner
     _pjCorner.applyMatrix4(camera.projectionMatrix);
     const px = (_pjCorner.x * 0.5 + 0.5) * innerWidth;
     const py = (0.5 - _pjCorner.y * 0.5) * innerHeight;
     if (px < minX) minX = px;  if (px > maxX) maxX = px;
     if (py < minY) minY = py;  if (py > maxY) maxY = py;
   }
-  const surf = behind ? Infinity
-    : Math.max(maxX - minX, maxY - minY) * (devicePixelRatio || 1);
-  const want = surf < (s.reflectOn ? 7200 : 5800);
+  return { box: Math.max(maxX - minX, maxY - minY), zNear };
+}
+function reflectGate(f, s){
+  const dpr = devicePixelRatio || 1;
+  // no mirror while the page inside is still booting (see the warm-up note
+  // in liveScreenFor) — the budget check alone can't see load-burst pressure
+  const warm = performance.now() >= s.warmUntil;
+  // per tier, the metric is the bigger of the projected outline and a RASTER
+  // bound: Chromium sizes the fused surface's texture by the layer's maximum
+  // on-screen SCALE, which the outline only tracks because unclamped
+  // projections happen to explode too as a corner nears the eye. The bound
+  // measures the danger directly — view depth is linear across a plane, so
+  // the nearest corner carries the true maximum: element px → device px
+  // there is k · focal / zNear, and the whole surface rasterises at it.
+  // (Measured face-on the two agree to the pixel; the max() costs nothing.)
+  const focal = camera.projectionMatrix.elements[5] * innerHeight * 0.5 * dpr;
+  const surfOf = (m, elSpan) => m ? Math.max(m.box * dpr, elSpan * s.k * focal / m.zNear) : Infinity;
+  // tier 1 — the side-wall mirrors ride the WIDE strip (two extra face
+  // copies): they bust the budget soonest and lift first, which costs
+  // nothing visible — closing in on the slab pushes their images out to the
+  // flanks right as the wide raster outgrows its texture
+  if (s.mirL){
+    const surf = surfOf(projSpan(f, s, -s.extW, s.extW), s.elSpanWide);
+    const want = surf < (s.wallsOn ? 7200 : 5800) && warm;
+    if (want !== s.wallsOn){
+      s.wallsOn = want;
+      // '' removes the declaration — box-reflect has NO 'none' keyword, and
+      // Chromium silently rejects the assignment, leaving the mirror stuck on
+      s.mirL.style.webkitBoxReflect = want ? s.wallLCss : '';
+      s.mirR.style.webkitBoxReflect = want ? s.wallRCss : '';
+    }
+  }
+  // tier 2 — floor mirror + corner rounding on the face-wide surface (once
+  // the walls lift this is the raster that remains): the original gate
+  const hw = s.faceW / 2;
+  const surf = surfOf(projSpan(f, s, -hw, hw), s.elSpan);
+  const want = surf < (s.reflectOn ? 7200 : 5800) && warm;
   if (want !== s.reflectOn){
     s.reflectOn = want;
-    // '' removes the declaration — box-reflect has NO 'none' keyword, and
-    // Chromium silently rejects the assignment, leaving the mirror stuck on
     s.wrap.style.webkitBoxReflect = want ? s.reflectCss : '';
     s.el.style.borderRadius = want ? s.radiusCss : '0px';
   }
@@ -3956,7 +3992,21 @@ function liveScreenFor(f){
   // full perspective.
   const wrap = document.createElement('div');
   Object.assign(wrap.style, { width: pw + 'px', height: ph + 'px', position:'relative' });
-  wrap.appendChild(el);
+  // ── side-wall mirrors: the floor trick folded left and right ──
+  // a reflection about a PERPENDICULAR mirror stays in the reflected plane:
+  // the slab's image in each side glass is coplanar with the slab itself —
+  // flipped, one doubled glass-gap away — exactly what box-reflect left/right
+  // paints. One direction per element, so the mirrors NEST (wrap: below,
+  // mirR: right, mirL: left). Chromium replicates each as a FIRST-ORDER copy
+  // of the face alone — a child's own reflection overflow is never
+  // re-reflected (verified by headless-Edge screenshot: three clean copies,
+  // no compound images) — so the fused raster grows by exactly two face
+  // widths sideways and nothing else. Both mirror divs stay pe:none like the
+  // wrapper; the gate keeps driving the iframe alone.
+  const mirR = document.createElement('div'), mirL = document.createElement('div');
+  for (const m of [mirR, mirL])
+    Object.assign(m.style, { width: pw + 'px', height: ph + 'px', position:'relative', pointerEvents:'none' });
+  mirL.appendChild(el); mirR.appendChild(mirL); wrap.appendChild(mirR);
   const obj = new CSS3DObject(wrap);
   wrap.style.pointerEvents = 'none';  // CSS3DObject's constructor force-sets 'auto' — the wrapper
                                       // must stay transparent; the gate drives the iframe alone
@@ -3993,6 +4043,16 @@ function liveScreenFor(f){
   const gapPx = Math.max(0, 2 * (bottomY - FLOOR_Y) / k); // that gap, doubled, in element px
   const reflectCss = `below ${gapPx.toFixed(1)}px linear-gradient(rgba(0,0,0,0.42), rgba(0,0,0,0.42))`;
   wrap.style.webkitBoxReflect = reflectCss;
+  // the wall mirrors' gap follows the same doubling: slab edge → glass plane
+  // at ±WALL_X → mirrored edge. End-wall slabs only (u.liveSlab): a side
+  // panel is PARALLEL to the far glass, so its image there faces away behind
+  // the pane — box-reflect has nothing true to paint for it. The mask sits a
+  // shade under the floor's 0.42, matching the walls' lighter Reflector tint.
+  const gapWpx = Math.max(0, 2 * (WALL_X - (pw * k) / 2) / k);
+  const wallDim = 'linear-gradient(rgba(0,0,0,0.34), rgba(0,0,0,0.34))';
+  const wallLCss = `left ${gapWpx.toFixed(1)}px ${wallDim}`;
+  const wallRCss = `right ${gapWpx.toFixed(1)}px ${wallDim}`;
+  if (u.liveSlab){ mirL.style.webkitBoxReflect = wallLCss; mirR.style.webkitBoxReflect = wallRCss; }
   // the pad body hides the slab's back — tell the compositor so it never
   // rasterises the mirrored backface at grazing angles
   wrap.style.backfaceVisibility = 'hidden';
@@ -4021,7 +4081,30 @@ function liveScreenFor(f){
         // gap → copy, so the raster ends where the mirrored top edge lands
         // (the face's top reflected about the glass). reflectGate measures the
         // surface from here up — gap included, nothing under-counted.
-        surfBotY: 2 * FLOOR_Y - (obj.position.y + (ph * k) / 2) };
+        surfBotY: 2 * FLOOR_Y - (obj.position.y + (ph * k) / 2),
+        // for the gate's raster bound: world units per element px, and the
+        // fused surface's longest side in element px (face + gap + mirror)
+        k, elSpan: Math.max(pw, 2 * ph + gapPx),
+        // the wall-mirror tier: its copies widen the strip to |x| ≤ extW
+        // (the slab's far edge mirrored about the glass at ±WALL_X) and its
+        // raster's longest side to elSpanWide — reflectGate lifts the walls
+        // on these bounds first, leaving the floor tier the raster it always
+        // budgeted for. mirL null (non-slab live screens) skips the tier.
+        mirL: u.liveSlab ? mirL : null, mirR: u.liveSlab ? mirR : null,
+        wallLCss, wallRCss, wallsOn: true,
+        extW: (pw * k) / 2 + 2 * WALL_X,
+        elSpanWide: Math.max(3 * pw + 2 * gapWpx, 2 * ph + gapPx) };
+  // mirror warm-up: hold the fused reflection off while the page BOOTS. The
+  // load burst inside the cross-origin page — image decodes, its own WebGL
+  // context, texture floods, all in another process — is the one window
+  // where the replica composite still lost races and flashed the panel
+  // black. The gate refuses the mirror until warmUntil (its first pass runs
+  // in the same animate frame as the arm, so a fused surface is never
+  // composited pre-warm) and hands it back once the page has settled; a
+  // src re-assign (refreshPortals' panic reload) fires load again and the
+  // new boot gets the same grace.
+  s.warmUntil = performance.now() + 15000;      // fallback: a page whose load never fires
+  el.addEventListener('load', () => { s.warmUntil = performance.now() + 5000; });
   L.byFrame.set(f, s);
   return s;
 }
@@ -4556,6 +4639,7 @@ window.__realm = {
   step: animate,               // drive one frame by hand (headless checks, no rAF)
   enter: beginPlay,            // start play without pointer lock (headless can't grant it)
   toggleView,                  // drive view mode by hand (Ctrl/R3 need real input events)
+  get live(){ return live3d; },   // portal screens + reflect-gate state, for headless checks
   get resScale(){ return resScale; },
   renderOnce(){
     if (skyMat) skyMat.uniforms.uTime.value = clock.elapsedTime;
