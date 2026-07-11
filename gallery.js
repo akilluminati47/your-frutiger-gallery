@@ -780,10 +780,18 @@ scene.add(sun);
    panes, parking them parks EVERYTHING. OFF swaps each pane to a flat
    frosted tint and skips its mirror-camera render; the choice is the
    visitor's own — saved in localStorage, honoured on every visit until
-   they flip the pause-menu switch back. */
+   they flip the pause-menu switch back. The same flag also owns the
+   sun's shadow map (see applyReflectionsNow) — the shadow pass is the
+   OTHER expensive per-frame cost, so one switch parks both. */
 const REFL_KEY = 'fg-reflections';
 let reflectionsOn = true;
 try { reflectionsOn = localStorage.getItem(REFL_KEY) !== '0'; } catch {}
+// the static shadow map still needs its ONE bake with shadows enabled (see
+// the boot sequence's "one-shot shadow bake" + animate()'s first-frame sync
+// below) — flipping renderer.shadowMap.enabled here, before that bake has
+// run, would skip it and leave the light shadowless even after a later
+// toggle back on. shadowSynced gates that one deferred flip.
+let shadowSynced = false;
 
 /* ── semi-transparent mirror: a Reflector you can also see through ──
    patches the Reflector shader so the reflection blends over whatever
@@ -3624,16 +3632,20 @@ $('thumbsBtn')?.addEventListener('click', () => {
   const w = window.open('/thumbs', '_blank', 'noopener');
   if (!w) location.href = '/thumbs';
 });
-// pause-menu reflections switch — the visitor's master mirror cut (see the
-// reflectionsOn note up top). The whole live flip is a material swap on the
-// glass panes: parked = flat translucent tint (never the shader — its frozen
-// projective UVs would smear the last reflection across the pane), armed =
-// the Reflector material again, refreshed by onBeforeRender the next frame.
-// The live slab needs no touch at all any more: its mirror image is just
-// the thumbnail-dressed WebGL panel bounced by these same panes.
+// pause-menu reflections switch — the visitor's master mirror + shadow cut
+// (see the reflectionsOn note up top). The mirror flip is a material swap on
+// the glass panes: parked = flat translucent tint (never the shader — its
+// frozen projective UVs would smear the last reflection across the pane),
+// armed = the Reflector material again, refreshed by onBeforeRender the next
+// frame. The live slab needs no touch at all any more: its mirror image is
+// just the thumbnail-dressed WebGL panel bounced by these same panes.
+// Shadows ride the same switch: the map itself is only ever baked once (see
+// the boot sequence), so toggling renderer.shadowMap.enabled here just shows
+// or hides that cached bake — never a re-render, never a cost either way.
 function applyReflectionsNow(){
   for (const r of allReflectors)
     r.material = reflectionsOn ? r.userData.liveMat : r.userData.parkMat;
+  renderer.shadowMap.enabled = reflectionsOn;
 }
 {
   const reflBtn = $('reflBtn');
@@ -4474,6 +4486,12 @@ function animate(){
   // the live portals track the same camera every frame — glued to their slabs
   // while you walk, kept in step even across resizes
   if (live3d?.shown) live3d.renderer.render(live3d.scene, camera);
+
+  // the shadow map bakes ONCE, on this very first render (needsUpdate was set
+  // right before the loop started, with shadowMap.enabled still true) — only
+  // now, after that bake has actually happened, is it safe to drop shadows for
+  // a visitor whose saved preference is reflections/shadows off.
+  if (!shadowSynced){ shadowSynced = true; renderer.shadowMap.enabled = reflectionsOn; }
 }
 
 function moveAndInteract(dt, t, autoFwd = 0){
@@ -4514,6 +4532,23 @@ function moveAndInteract(dt, t, autoFwd = 0){
   const o = player;
   o.position.x = clamp(o.position.x, -(WALL_X-0.7), WALL_X-0.7);
   o.position.z = clamp(o.position.z, PLAT_Z0+1, PLAT_Z1-1);
+  // an invisible wall in front of any LIVE end-wall slab, planted at the same
+  // stand-off enterView glides you to (VIEW_PAD_DIST): walking can close the
+  // gap down to that distance and no further — closing the last stretch of
+  // floor is "choosing view", not strolling into it. Captured (non-live) end
+  // walls keep the ordinary hall boundary above; only the interactive iframe
+  // slabs get this stop, and only two ever exist (east/west), so a plain loop
+  // over `frames` is cheap and needs no extra bookkeeping.
+  for (const f of frames){
+    if (!f.userData.liveWall) continue;
+    const nx = Math.sin(f.rotation.y), nz = Math.cos(f.rotation.y);
+    const d = (o.position.x - f.position.x) * nx + (o.position.z - f.position.z) * nz;
+    if (d < VIEW_PAD_DIST){
+      const push = VIEW_PAD_DIST - d;
+      o.position.x += nx * push;
+      o.position.z += nz * push;
+    }
+  }
   // gentle, speed-scaled head-bob (smoothed so it never snaps)
   smoothSpeed = lerp(smoothSpeed, Math.min(sp/vMax, 1), 1 - Math.pow(0.0001, dt));
   bobPhase += dt * 6.2 * smoothSpeed;
