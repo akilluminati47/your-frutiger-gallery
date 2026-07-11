@@ -280,14 +280,13 @@ watches frame time and trades internal resolution for a locked frame rate, from 
 laptops to phones. Loading cutscenes draw on a small strip plane that maps one-to-one
 to its screen pixels, so the barber-pole bar stays sharp at a fixed upload cost.
 The glass floor is a true planar reflector — blue-tinted, blurred, moving in real
-parallax — and a live end wall lays its page into that mirror by painting the face
-iframe's own pixels a second time (`-webkit-box-reflect`, evenly dimmed), riding the
-slab's white bounce: one browsing context rendered twice, so the reflection can never
-fall out of step with the page. Every mirror in the hall — the planar reflectors and
-the slab's painted copies — hangs off one visitor-owned switch on the pause menu
-(**Reflections: on/off**, saved in `localStorage`): off, the panes freeze to a flat
-frosted tint, the replicas drop, and the GPU keeps only the single forward pass.
-The live slab itself is the
+parallax — and a live end wall lays its page into every mirror the cheap way: its
+WebGL panel wears the page's fetched thumbnail behind the live iframe, so floor and
+side glass bounce that one static capture for free while the face stays the real,
+interactive page. Every mirror in the hall hangs off one visitor-owned notched
+switch on the pause menu (saved in `localStorage`): off, each pane swaps to a flat
+frosted tint and skips its mirror-camera pass entirely — the GPU keeps only the
+single forward render. The live slab itself is the
 Aero-Pad, an extruded body: a rim rising flush to the page in front, a rounded
 shoulder sweeping onto a flat inset panel behind. The sun's lens flare — warm
 glare plus ghost train — is pure DOM: fixed-size radial gradients repainted each
