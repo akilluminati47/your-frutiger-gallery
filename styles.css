@@ -164,6 +164,42 @@ h2{ font-size:26px; letter-spacing:.05em; margin-bottom:6px; color:var(--aqua-d)
 .aero-btn:active{ transform:translateY(0) scale(.99); }
 .aero-btn:disabled{ opacity:.6; cursor:none; filter:saturate(.7); }
 
+/* ── Reflections switch (pause menu) ────────────────────────────
+   The console's notched pill (wToggle: green track / slate off, white knob,
+   white ring) grown up and DOM-native — no label, the notch IS the message.
+   Keeps .aero-btn so the shared virtual cursor (mouse OR gamepad) hovers and
+   presses it like any pill; everything button-shaped is overridden here. */
+#pause .aero-switch{ width:138px; }        /* beat the pause card's 220px pill rule */
+.aero-switch{
+  height:72px; padding:0; border-radius:36px;
+  background:rgba(150,180,205,.55);
+  box-shadow:
+    inset 0 2px 6px rgba(20,70,120,.35),
+    inset 0 0 0 2px rgba(255,255,255,.7),
+    0 8px 22px rgba(10,70,140,.3);
+  transition:background-color .25s ease, transform .15s ease, filter .2s ease, box-shadow .2s ease;
+}
+.aero-switch.on{ background:#57c46e; }
+.aero-switch::before{                       /* aero top gloss over the track */
+  content:''; position:absolute; inset:0; border-radius:inherit; pointer-events:none;
+  background:linear-gradient(180deg, rgba(255,255,255,.5), rgba(255,255,255,0) 55%);
+}
+.aero-switch::after{                        /* the knob */
+  content:''; position:absolute; top:6px; left:6px; width:60px; height:60px; border-radius:50%;
+  background:linear-gradient(180deg,#ffffff 0%, #eaf7ff 100%);
+  box-shadow:0 4px 10px rgba(10,60,110,.4), inset 0 1px 1px rgba(255,255,255,.95), inset 0 -3px 6px rgba(120,170,215,.35);
+  transition:left .28s cubic-bezier(.3,1.25,.4,1);
+}
+.aero-switch.on::after{ left:72px; }        /* 138 − 60 − 6 */
+.aero-switch{ position:relative; }
+.aero-switch.cursor-over{                   /* switch-shaped hover, not the pill's gloss stack */
+  transform:translateY(-2px) scale(1.03); filter:brightness(1.06);
+  box-shadow:
+    inset 0 2px 6px rgba(20,70,120,.35),
+    inset 0 0 0 3px var(--aqua),
+    0 12px 28px rgba(10,90,200,.45);
+}
+
 
 /* ── Custom crosshair cursor (menu/pause screens only) ──────────
    JS sets left/top to the mouse position and toggles .show / .active.

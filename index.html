@@ -109,9 +109,10 @@
       <!-- opens the /thumbs cache dashboard (new tab) — see gallery.js -->
       <button id="thumbsBtn" class="aero-btn">Thumbs</button>
       <!-- per-visitor master mirror switch: parks every reflection in the hall
-           (glass-pane Reflectors + the live slabs' box-reflect copies) to spare
-           the GPU; persists in localStorage until toggled back — see gallery.js -->
-      <button id="reflBtn" class="aero-btn">Reflections: on</button>
+           (the glass panes' Reflector re-renders) to spare the GPU; persists in
+           localStorage until toggled back. The console's notched pill, oversized,
+           no label — see .aero-switch and gallery.js -->
+      <button id="reflBtn" class="aero-btn aero-switch" type="button" role="switch" aria-checked="true" aria-label="reflections"></button>
     </div>
   </div>
 

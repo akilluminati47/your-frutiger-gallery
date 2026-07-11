@@ -774,13 +774,13 @@ scene.add(sun);
 
 /* ── per-visitor reflections master switch ──────────────────────────
    Every mirror in the hall hangs off this one flag: the glass panes'
-   Reflector scene re-renders (the dominant per-frame GPU cost — one
-   extra full scene pass per visible pane) AND the live slabs' fused
-   box-reflect copies (the dominant raster allocations). OFF parks them
-   all — panes freeze to a flat frosted tint, slabs drop their replicas
-   and the gate stops projecting — and the choice is the visitor's own:
-   saved in localStorage, honoured on every visit until they flip the
-   pause-menu button back. */
+   Reflector scene re-renders are the dominant per-frame GPU cost (one
+   extra full scene pass per visible pane), and since the live slab's
+   reflection is just its thumbnail-dressed panel bounced by those same
+   panes, parking them parks EVERYTHING. OFF swaps each pane to a flat
+   frosted tint and skips its mirror-camera render; the choice is the
+   visitor's own — saved in localStorage, honoured on every visit until
+   they flip the pause-menu switch back. */
 const REFL_KEY = 'fg-reflections';
 let reflectionsOn = true;
 try { reflectionsOn = localStorage.getItem(REFL_KEY) !== '0'; } catch {}
@@ -824,6 +824,18 @@ function glassReflector(geo, { tex=1024, color=0x9fc0dd, alpha=0.5 } = {}){
     m.transparent = true; m.depthWrite = false;
   }
   m.needsUpdate = true;
+  // the parked face: the pause-menu switch (reflectionsOn) can kill every
+  // mirror, and a parked Reflector must NOT keep drawing its shader — the
+  // frozen projective UVs smear its last texture across the pane as the
+  // camera moves (the "stretched static reflection" bug). Park = swap the
+  // whole material for a flat translucent tint (≈ the pane minus its mirror
+  // image); re-arm = swap back. applyReflectionsNow does the live flips, the
+  // check just below covers panes born while the saved switch is off.
+  r.userData.liveMat = m;
+  r.userData.parkMat = new THREE.MeshBasicMaterial({
+    color: new THREE.Color(color), transparent: true, opacity: alpha, depthWrite: false,
+  });
+  if (!reflectionsOn) r.material = r.userData.parkMat;
   allReflectors.push(r);
   return r;
 }
@@ -833,20 +845,6 @@ function glassReflector(geo, { tex=1024, color=0x9fc0dd, alpha=0.5 } = {}){
 //   2. decorative cull — skip noReflect objects (bubbles/hills/flare) in mirrors
 //   3. throttle — only refresh each mirror every `userData.every` frames; the
 //      scene moves slowly so a 1–2 frame-old, faint reflection is invisible
-// parked pane: blank the mirror texture ONCE to flat mid-grey. The shader's
-// blendOverlay(base, tint) turns 0.5-grey into the pane's own tint, so the
-// glass reads as still frosted glass — not a freeze-frame of wherever the
-// visitor stood when they flipped the reflections switch off.
-const _blankClr = new THREE.Color();
-function blankMirror(r){
-  const rt = r.getRenderTarget?.(); if (!rt) return;
-  const prev = renderer.getRenderTarget();
-  renderer.getClearColor(_blankClr); const prevA = renderer.getClearAlpha();
-  renderer.setRenderTarget(rt);
-  renderer.setClearColor(0x808080, 1); renderer.clear();
-  renderer.setRenderTarget(prev);
-  renderer.setClearColor(_blankClr, prevA);
-}
 function dontNestReflections(){
   for (const r of allReflectors){
     if (r.userData.nestGuarded) continue;   // idempotent: late panes (the end walls) re-run this
@@ -855,14 +853,9 @@ function dontNestReflections(){
     r.userData.tick = 0;
     r.userData.every = r.userData.every || 1;
     r.onBeforeRender = function(...args){
-      if (!reflectionsOn){                  // visitor parked the mirrors: skip the
-        if (!this.userData.parked){         // whole mirror-camera scene render
-          this.userData.parked = true;
-          blankMirror(this);
-        }
-        return;
-      }
-      this.userData.parked = false;
+      if (!reflectionsOn) return;   // parked: material is already the flat tint
+                                    // (glassReflector / applyReflectionsNow) —
+                                    // skip the whole mirror-camera scene render
       if ((this.userData.tick++ % this.userData.every) !== 0) return;   // reuse last reflection
       const hidden = [];
       for (const o of allReflectors) if (o !== this && o.visible){ o.visible = false; hidden.push(o); }
@@ -1566,12 +1559,12 @@ function buildGallery(font){
     // offers "view?" through the DOM pill instead (moveAndInteract), which draws
     // above the portal layer on every device.
     u.visit.visible = false;
-    // the slab stays IN the WebGL mirror passes: the glass floor bounces this
-    // bare body through the real Reflector — glass tint, blur, true parallax —
-    // and since the body carries no image, that bounce can never go stale. The
-    // live picture in the reflection is the face iframe's own pixels painted a
-    // second time via box-reflect (see liveScreenFor): bare bounce under, live
-    // image over, and the two images are one page — nothing to disagree.
+    // the slab stays IN the WebGL mirror passes: the glass floor and side
+    // panes bounce this body through the real Reflector — glass tint, blur,
+    // true parallax — and revealWorld dresses its panel with the page's
+    // fetched THUMBNAIL, so every mirror shows the page's capture while the
+    // face wears the live iframe. One static image in the mirrors, zero
+    // extra per-frame cost (the Reflectors render regardless).
   }
   if (wallProjects.east){
     const f = makeFrame(wallProjects.east, 'auto', autoDelayForRow(0), LOAD_DUR);
@@ -3486,11 +3479,22 @@ function revealWorld(f){
   // aspect so the whole page shows, filling it without a crop. On a failed
   // fetch the shared backdrop stays — a clean blank screen, no dead texture.
   // (Never dispose the current map here: it's the SHARED loadBackdropTex.)
-  // A live slab is the exception: its body is ALL WHITE — the real page is
-  // about to arm over its face, so no capture ever dresses it. Just shed
-  // whatever the loading choreography painted and stand bare.
+  // A live slab is the exception: the visitor sees the live iframe on its
+  // face, but the HALL'S MIRRORS see this panel — dress it with the fetched
+  // thumbnail (cover-cropped to the slab, never stretched: the capture is
+  // 16:9, the slab isn't) so floor and side glass reflect the page's capture.
+  // One static image bounced by Reflectors that render anyway, in place of
+  // the retired box-reflect replicas that re-painted the live page per frame.
+  // No fitPanelToImage here: the slab's footprint is fixed, the crop adapts.
   if (u.liveWall){
-    u.screenMat.map = null; u.screenMat.needsUpdate = true;
+    if (u.liveTexture){
+      const img = u.liveTexture.image;
+      const pa = CON_CW / CON_CH, ia = (img?.width || 16) / (img?.height || 9);
+      if (ia > pa) u.liveTexture.repeat.set(pa / ia, 1), u.liveTexture.offset.set((1 - pa / ia) / 2, 0);
+      else         u.liveTexture.repeat.set(1, ia / pa), u.liveTexture.offset.set(0, (1 - ia / pa) / 2);
+      u.screenMat.map = u.liveTexture;
+    } else u.screenMat.map = null;   // no capture yet → clean white, as before
+    u.screenMat.needsUpdate = true;
   } else if (u.liveTexture){
     u.screenMat.map = u.liveTexture; u.screenMat.needsUpdate = true;
     fitPanelToImage(u, u.liveTexture);
@@ -3621,31 +3625,31 @@ $('thumbsBtn')?.addEventListener('click', () => {
   if (!w) location.href = '/thumbs';
 });
 // pause-menu reflections switch — the visitor's master mirror cut (see the
-// reflectionsOn note up top). OFF tears the slab replicas down right here so
-// the change lands even mid-pause; ON hands the rebuild to reflectGate's next
-// pass, which re-arms tier by tier under the budget instead of slamming
-// three replicas onto the fused surface in one frame. The glass panes need
-// no push either way — their onBeforeRender guard reads the flag live.
+// reflectionsOn note up top). The whole live flip is a material swap on the
+// glass panes: parked = flat translucent tint (never the shader — its frozen
+// projective UVs would smear the last reflection across the pane), armed =
+// the Reflector material again, refreshed by onBeforeRender the next frame.
+// The live slab needs no touch at all any more: its mirror image is just
+// the thumbnail-dressed WebGL panel bounced by these same panes.
 function applyReflectionsNow(){
-  if (live3d) for (const [, s] of live3d.byFrame){
-    if (!reflectionsOn){
-      if (s.mirL && s.wallsOn){
-        s.wallsOn = false;
-        s.mirL.style.webkitBoxReflect = ''; s.mirR.style.webkitBoxReflect = '';
-      }
-      if (s.reflectOn){ s.reflectOn = false; s.wrap.style.webkitBoxReflect = ''; }
-    }
-  }
+  for (const r of allReflectors)
+    r.material = reflectionsOn ? r.userData.liveMat : r.userData.parkMat;
 }
 {
   const reflBtn = $('reflBtn');
-  const reflLabel = () => { if (reflBtn) reflBtn.textContent = `Reflections: ${reflectionsOn ? 'on' : 'off'}`; };
-  reflLabel();
+  // the console's notched pill in DOM form — no label, the knob's side and
+  // the track's green say it all (aria mirrors it for screen readers)
+  const paint = () => {
+    if (!reflBtn) return;
+    reflBtn.classList.toggle('on', reflectionsOn);
+    reflBtn.setAttribute('aria-checked', String(reflectionsOn));
+  };
+  paint();
   reflBtn?.addEventListener('click', () => {
     audio.init();
     reflectionsOn = !reflectionsOn;
     try { localStorage.setItem(REFL_KEY, reflectionsOn ? '1' : '0'); } catch {}
-    reflLabel();
+    paint();
     applyReflectionsNow();
   });
 }
@@ -3864,7 +3868,7 @@ function touchTap(x, y){
 // win by releasing our own, so it also resets whatever state the page grabbed.
 function refreshPortals(){
   if (live3d) for (const [, s] of live3d.byFrame){
-    try { s.el.src = s.el.src; } catch {}   // the face — its box-reflect mirror follows by construction
+    try { s.el.src = s.el.src; } catch {}   // re-assigning src forces the fresh load
   }
   exitView();
 }
@@ -3928,20 +3932,16 @@ let live3d = null;       // lazy singleton: { container, renderer, scene, byFram
 let hallCursor = null;   // last body.cursor-live state (null → first pass always writes)
 let portalAudioTick = 0; // frame counter for the ~10 Hz placement stream (gate loop)
 const _pjCorner = new THREE.Vector3();   // scratch for the reflection gate's corner projections
-// ── reflection gate — see the surface note in liveScreenFor ──
-// One measurement: a world-space quad in the slab's plane (x0…x1 along the
-// slab's local axis, yTop…yBot world height), CLIPPED to what's actually on
-// screen — Sutherland–Hodgman against the near plane in view space, then
-// against the viewport (+slop) in screen space, carrying 1/z per vertex
-// (affine across a plane in screen space, so the interpolation is exact).
-// The old whole-quad version bailed to "oversized" the moment ANY corner
-// fell behind the eye plane — and the wall tier's strip is ~3 face widths
-// across in the END-WALL plane, so standing mid-hall looking toward one side
-// pane put the strip's FAR corners behind the eye and blanked the very
-// mirror the visitor was looking at ("side glass shows no page").
-// Returns the visible screen box (CSS px, its longest side) and the view
-// depth of the quad's nearest VISIBLE point — or null when nothing of the
-// quad is on screen at all.
+// ── visible-projection helper for the radius gate below ──
+// A world-space quad in the slab's plane (x0…x1 along the slab's local axis,
+// yTop…yBot world height), CLIPPED to what's actually on screen —
+// Sutherland–Hodgman against the near plane in view space, then against the
+// viewport (+slop) in screen space, carrying 1/z per vertex (affine across a
+// plane in screen space, so the interpolation is exact). Returns the visible
+// screen box (CSS px, its longest side) and the view depth of the quad's
+// nearest VISIBLE point — or null when nothing of it is on screen. (Never
+// measure a plane by its raw corners: one corner behind the eye plane and
+// every unclipped projection explodes.)
 function projSpanVis(f, s, x0, x1, yTop, yBot, slop){
   const p = s.obj.position;
   const cx = Math.cos(f.rotation.y), cz = -Math.sin(f.rotation.y);
@@ -3999,85 +3999,32 @@ function projSpanVis(f, s, x0, x1, yTop, yBot, slop){
   return { box: Math.max(maxX - minX, maxY - minY), zNear: 1 / maxIz };
 }
 function reflectGate(f, s){
+  // ONE knob left: the rounded-corner mask. The box-reflect replicas are
+  // retired (the hall's WebGL Reflectors bounce the thumbnail-dressed panel
+  // instead — see liveScreenFor / revealWorld), so the only thing that still
+  // forces an intermediate surface on the live layer is borderRadius on the
+  // 3-D-transformed iframe. Chromium CLAMPS an oversized surface and paints
+  // it soft (headless-Edge probed — it never fails to black), so this guards
+  // SHARPNESS: walk right up and the mask's raster demand outgrows what
+  // rasters crisply — lift the rounding right when the corners are off
+  // screen anyway, and the face stays pixel-sharp. demand = the bigger of
+  // the face's visible screen box and span × raster scale at its nearest
+  // visible point (element px → device px there is k · focal / zNear).
+  // Flips stay rationed (instant off, 400 ms re-arm hold): a flip is the one
+  // paint event still allowed to touch the live layer, and a pose dancing on
+  // the threshold must never strobe the panel.
   const dpr = devicePixelRatio || 1;
-  // no mirror while the page inside is still booting (see the warm-up note
-  // in liveScreenFor) — the budget check alone can't see load-burst pressure
   const now = performance.now();
-  const warm = now >= s.warmUntil;
-  // WHAT THE GATE ACTUALLY GUARDS — sharpness, not survival. Headless-Edge
-  // probes of this exact nesting (cross-origin iframe, 3-D transform, fused
-  // span pushed to ~16k device px) show Chromium CLAMPS an oversized replica
-  // pass and paints it soft — it does not fail to black. (The black rips
-  // this gate was born chasing were the #sunglow repaint and the splash
-  // backdrop-filter, both since fixed.) So the policy is PRESENCE FIRST:
-  //   · a mirror whose pixels are on screen stays painted, period — a soft
-  //     reflection beats a blank pane, and the softness only appears in the
-  //     poses where the raster is genuinely enormous;
-  //   · the demand budget only lifts copies that are OFF screen, which is
-  //     exactly when dropping them protects the face's crispness (the clamp
-  //     blurs the WHOLE fused surface, face included) and costs nothing
-  //     visible.
-  // demand = device px the fused surface asks for: the bigger of its visible
-  // screen box and span × raster scale at its nearest visible point (element
-  // px → device px there is k · focal / zNear). Off screen entirely → 0.
   const focal = camera.projectionMatrix.elements[5] * innerHeight * 0.5 * dpr;
-  const demand = (m, elSpan) => m ? Math.max(m.box * dpr, elSpan * s.k * focal / m.zNear) : 0;
-  const seen = m => !!m && m.box > 16;   // any real pixels of the region on screen
-  // every flip below is itself a full re-composite of the fused surface —
-  // the one paint event still allowed to touch the live layer — so flips are
-  // rationed: OFF lands at once, but the way back ON waits out a short hold,
-  // so a pose dancing on a threshold can never strobe the panel. Visibility
-  // gets its own hysteresis: a mirror ARMS while still 96px off screen and
-  // only releases once it's fully 24px gone, so the flip's repaint happens
-  // while the mirror itself is out of frame.
-  const REARM = 400;
   const hw = s.faceW / 2;
   const yTopW = s.obj.position.y + s.faceH / 2, yBotW = s.obj.position.y - s.faceH / 2;
-  // tier 1 — the side-wall mirrors (two extra face copies on the WIDE strip)
-  if (s.mirL){
-    let want = false;
-    if (reflectionsOn && warm){
-      const slop = s.wallsOn ? 24 : 96;
-      want = seen(projSpanVis(f, s, -s.extW, -hw, yTopW, s.surfBotY, slop)) ||
-             seen(projSpanVis(f, s,  hw,  s.extW, yTopW, s.surfBotY, slop)) ||
-             demand(projSpanVis(f, s, -s.extW, s.extW, yTopW, s.surfBotY, 64), s.elSpanWide)
-               < (s.wallsOn ? 7800 : 7200);
-    }
-    if (want !== s.wallsOn && (!want || now >= s.holdWalls)){
-      s.wallsOn = want;
-      if (!want) s.holdWalls = now + REARM;
-      // '' removes the declaration — box-reflect has NO 'none' keyword, and
-      // Chromium silently rejects the assignment, leaving the mirror stuck on
-      s.mirL.style.webkitBoxReflect = want ? s.wallLCss : '';
-      s.mirR.style.webkitBoxReflect = want ? s.wallRCss : '';
-    }
-  }
-  // tier 2 — the floor mirror (the copy below the glass)
-  let want = false;
-  if (reflectionsOn && warm){
-    const slop = s.reflectOn ? 24 : 96;
-    want = seen(projSpanVis(f, s, -hw, hw, yBotW, s.surfBotY, slop)) ||
-           demand(projSpanVis(f, s, -hw, hw, yTopW, s.surfBotY, 64), s.elSpan)
-             < (s.reflectOn ? 7200 : 5800);
-  }
-  if (want !== s.reflectOn && (!want || now >= s.holdRefl)){
-    s.reflectOn = want;
-    if (!want) s.holdRefl = now + REARM;
-    s.wrap.style.webkitBoxReflect = want ? s.reflectCss : '';
-  }
-  // corner rounding — its own face-only gate in BOTH toggle modes: the mask
-  // never widens the raster, it only forces the intermediate surface, so it
-  // lifts on the bare face's demand (right when the corners are off screen
-  // anyway) and the rim keeps its matched corners the rest of the time
-  let wantR = false;
-  if (warm){
-    wantR = demand(projSpanVis(f, s, -hw, hw, yTopW, yBotW, 64), s.elSpanFace)
-              < (s.radiusOn ? 7200 : 5800);
-  }
-  if (wantR !== s.radiusOn && (!wantR || now >= s.holdRad)){
-    s.radiusOn = wantR;
-    if (!wantR) s.holdRad = now + REARM;
-    s.el.style.borderRadius = wantR ? s.radiusCss : '0px';
+  const m = projSpanVis(f, s, -hw, hw, yTopW, yBotW, 64);
+  const demandF = m ? Math.max(m.box * dpr, s.elSpanFace * s.k * focal / m.zNear) : 0;
+  const want = demandF < (s.radiusOn ? 7200 : 5800);
+  if (want !== s.radiusOn && (!want || now >= s.holdRad)){
+    s.radiusOn = want;
+    if (!want) s.holdRad = now + 400;
+    s.el.style.borderRadius = want ? s.radiusCss : '0px';
   }
 }
 
@@ -4133,21 +4080,7 @@ function liveScreenFor(f){
   // full perspective.
   const wrap = document.createElement('div');
   Object.assign(wrap.style, { width: pw + 'px', height: ph + 'px', position:'relative' });
-  // ── side-wall mirrors: the floor trick folded left and right ──
-  // a reflection about a PERPENDICULAR mirror stays in the reflected plane:
-  // the slab's image in each side glass is coplanar with the slab itself —
-  // flipped, one doubled glass-gap away — exactly what box-reflect left/right
-  // paints. One direction per element, so the mirrors NEST (wrap: below,
-  // mirR: right, mirL: left). Chromium replicates each as a FIRST-ORDER copy
-  // of the face alone — a child's own reflection overflow is never
-  // re-reflected (verified by headless-Edge screenshot: three clean copies,
-  // no compound images) — so the fused raster grows by exactly two face
-  // widths sideways and nothing else. Both mirror divs stay pe:none like the
-  // wrapper; the gate keeps driving the iframe alone.
-  const mirR = document.createElement('div'), mirL = document.createElement('div');
-  for (const m of [mirR, mirL])
-    Object.assign(m.style, { width: pw + 'px', height: ph + 'px', position:'relative', pointerEvents:'none' });
-  mirL.appendChild(el); mirR.appendChild(mirL); wrap.appendChild(mirR);
+  wrap.appendChild(el);
   const obj = new CSS3DObject(wrap);
   wrap.style.pointerEvents = 'none';  // CSS3DObject's constructor force-sets 'auto' — the wrapper
                                       // must stay transparent; the gate drives the iframe alone
@@ -4161,95 +4094,33 @@ function liveScreenFor(f){
   obj.scale.setScalar(k);
   L.scene.add(obj);
 
-  // ── live floor reflection: the SAME iframe, painted twice ──
-  // -webkit-box-reflect duplicates the wrapper's own painted pixels below its
-  // box: ONE browsing context, rendered twice by the compositor, so an
-  // animated page (the zoom quilt) is frame-locked with its own mirror by
-  // construction. The second-iframe copy this replaces never could be — a
-  // separate load runs its own clock (a randomiser even showed a different
-  // face down there). Chromium replicates cross-origin iframes into the
-  // reflection (verified, 3D-transformed wrappers included), and since the
-  // copy lives in the wrapper's plane, the CSS3D perspective transform lands
-  // it exactly on the mirrored geometry below the glass; the offset opens the
-  // bottom-edge→floor gap twice over (a face spanning [y0,y1] reflects to
-  // [-y1,-y0] about the floor plane). The gradient mask is the dimmer — flat
-  // 0.42, one even strength edge to edge, exactly the old opacity — and the
-  // WebGL Reflector's bare-body bounce (glass tint, blur, true parallax)
-  // still reads through under it; the mirror itself can never show the page
-  // (no web API reads a cross-origin iframe's pixels). A painted copy takes
-  // no input, holds no focus and plays no sound, so the old rel-iframe's
-  // pe:none / tabindex / allow='' guards retire with it.
-  const FLOOR_Y = 0.004;                    // glass floor sits here (see buildCorridor)
-  const bottomY = obj.position.y - (ph * k) / 2;          // slab face's bottom edge, world
-  const gapPx = Math.max(0, 2 * (bottomY - FLOOR_Y) / k); // that gap, doubled, in element px
-  const reflectCss = `below ${gapPx.toFixed(1)}px linear-gradient(rgba(0,0,0,0.42), rgba(0,0,0,0.42))`;
-  if (reflectionsOn) wrap.style.webkitBoxReflect = reflectCss;
-  // the wall mirrors' gap follows the same doubling: slab edge → glass plane
-  // at ±WALL_X → mirrored edge. End-wall slabs only (u.liveSlab): a side
-  // panel is PARALLEL to the far glass, so its image there faces away behind
-  // the pane — box-reflect has nothing true to paint for it. The mask sits a
-  // shade under the floor's 0.42, matching the walls' lighter Reflector tint.
-  const gapWpx = Math.max(0, 2 * (WALL_X - (pw * k) / 2) / k);
-  const wallDim = 'linear-gradient(rgba(0,0,0,0.34), rgba(0,0,0,0.34))';
-  const wallLCss = `left ${gapWpx.toFixed(1)}px ${wallDim}`;
-  const wallRCss = `right ${gapWpx.toFixed(1)}px ${wallDim}`;
-  if (u.liveSlab && reflectionsOn){ mirL.style.webkitBoxReflect = wallLCss; mirR.style.webkitBoxReflect = wallRCss; }
+  // ── reflections are WebGL's job now, not the DOM's ──
+  // The slab's floor and side-glass images ride the hall's Reflector panes
+  // off the THUMBNAIL-dressed WebGL panel behind this iframe (see
+  // revealWorld): one static capture bounced by mirrors that render anyway,
+  // in place of the retired -webkit-box-reflect replicas (floor + nested
+  // side copies). Those fused the face into one enormous raster — up to
+  // three face widths across — that Viz re-composited every camera frame,
+  // the single biggest GPU line-item when a live slab was in view, and
+  // their budget gate's flips were the last paint events still allowed to
+  // touch the live layer. All gone: the iframe is the wrapper's only child
+  // and its painted pixels never change after load.
   // the pad body hides the slab's back — tell the compositor so it never
   // rasterises the mirrored backface at grazing angles
   wrap.style.backfaceVisibility = 'hidden';
   // the CSS3D matrix rewrites every frame of the walk: promise the churn so
-  // the compositor keeps this layer (and the fused face+mirror raster riding
-  // it) alive across frames instead of tearing it down and re-allocating —
-  // the rebuild under pressure is where mid-walk black rips came from
+  // the compositor keeps this layer alive across frames instead of tearing
+  // it down and re-allocating under pressure
   wrap.style.willChange = 'transform';
 
   s = { obj, el, wrap, on: null,     // null → the gate's first pass always writes a real state
-        // Chromium renders a 3D-composited element through an intermediate
-        // GPU surface sized to its PROJECTED screen box when it needs one —
-        // and both box-reflect (face + mirror fused into one surface) and the
-        // rounded-corner mask on a rotated iframe do. Walk right up to the
-        // slab, or catch it near edge-on, and the perspective projection
-        // blows that box past the GPU texture budget: the surface fails and
-        // the whole panel flashes BLACK. The animate gate measures the
-        // projected box every frame (reflectGate) and lifts reflection +
-        // corner rounding while it's oversized — the mirror is entirely
-        // below the viewport and the corners are off-screen in exactly
-        // those poses, so nothing visible changes; it also stops painting
-        // the doubled surface right when it's at its most expensive.
-        reflectCss, radiusCss: el.style.borderRadius,
-        reflectOn: reflectionsOn, radiusOn: true,
-        holdWalls: 0, holdRefl: 0, holdRad: 0,   // re-arm holds — see reflectGate
+        // radius gate state — see reflectGate: the rounded-corner mask is
+        // the one intermediate-surface knob left on the live layer
+        radiusCss: el.style.borderRadius, radiusOn: true, holdRad: 0,
         faceW: pw * k, faceH: ph * k,
-        // world-y of the fused surface's bottom edge: box-reflect runs face →
-        // gap → copy, so the raster ends where the mirrored top edge lands
-        // (the face's top reflected about the glass). reflectGate measures the
-        // surface from here up — gap included, nothing under-counted.
-        surfBotY: 2 * FLOOR_Y - (obj.position.y + (ph * k) / 2),
-        // for the gate's raster bound: world units per element px, and the
-        // fused surface's longest side in element px (face + gap + mirror);
-        // elSpanFace = the bare face alone, for the parked-reflections
-        // radius gate
-        k, elSpan: Math.max(pw, 2 * ph + gapPx), elSpanFace: Math.max(pw, ph),
-        // the wall-mirror tier: its copies widen the strip to |x| ≤ extW
-        // (the slab's far edge mirrored about the glass at ±WALL_X) and its
-        // raster's longest side to elSpanWide — reflectGate lifts the walls
-        // on these bounds first, leaving the floor tier the raster it always
-        // budgeted for. mirL null (non-slab live screens) skips the tier.
-        mirL: u.liveSlab ? mirL : null, mirR: u.liveSlab ? mirR : null,
-        wallLCss, wallRCss, wallsOn: reflectionsOn,
-        extW: (pw * k) / 2 + 2 * WALL_X,
-        elSpanWide: Math.max(3 * pw + 2 * gapWpx, 2 * ph + gapPx) };
-  // mirror warm-up: hold the fused reflection off while the page BOOTS. The
-  // load burst inside the cross-origin page — image decodes, its own WebGL
-  // context, texture floods, all in another process — is the one window
-  // where the replica composite still lost races and flashed the panel
-  // black. The gate refuses the mirror until warmUntil (its first pass runs
-  // in the same animate frame as the arm, so a fused surface is never
-  // composited pre-warm) and hands it back once the page has settled; a
-  // src re-assign (refreshPortals' panic reload) fires load again and the
-  // new boot gets the same grace.
-  s.warmUntil = performance.now() + 15000;      // fallback: a page whose load never fires
-  el.addEventListener('load', () => { s.warmUntil = performance.now() + 5000; });
+        // world units per element px + the face's longest side in element px,
+        // for the gate's raster-demand bound
+        k, elSpanFace: Math.max(pw, ph) };
   L.byFrame.set(f, s);
   return s;
 }
@@ -4263,9 +4134,8 @@ function armPortal(f){
   L.renderer.render(L.scene, camera);
   liveShow();
 }
-// (no re-scrape cycle anymore: the slab's body is all white — there is no
-// wrapped capture to keep fresh. The reflection's image rides the mirrored
-// iframe in liveScreenFor, live by construction.)
+// (no re-scrape cycle: the slab's mirror image is the thumbnail on its WebGL
+// panel — revealWorld dresses it once, the Reflector panes bounce it forever.)
 
 /* ════════════════════════════════════════════════════════════════
    9 · the loop
@@ -4526,7 +4396,7 @@ function animate(){
         s.el.style.pointerEvents = on ? 'auto' : 'none';
         if (!on && document.activeElement === s.el){ s.el.blur(); window.focus(); }
       }
-      if (live3d.shown) reflectGate(f, s);   // keep the composited surface under the GPU budget
+      if (live3d.shown) reflectGate(f, s);   // corner mask on/off by raster demand (sharpness)
       if (sayAudio){
         const sp = playing ? audio.pagePlace(f.userData.worldPos) : { gain: 0, pan: 0 };
         try {
