@@ -777,11 +777,12 @@ scene.add(sun);
    Reflector scene re-renders are the dominant per-frame GPU cost (one
    extra full scene pass per visible pane), and since the live slab's
    reflection is just its thumbnail-dressed panel bounced by those same
-   panes, parking them parks EVERYTHING. OFF swaps each pane to a flat
-   frosted tint and skips its mirror-camera render; the choice is the
-   visitor's own — saved in localStorage, honoured on every visit until
-   they flip the pause-menu switch back. The same flag also owns the
-   sun's shadow map (see applyReflectionsNow) — the shadow pass is the
+   panes, parking them parks EVERYTHING. OFF swaps each pane to a static
+   sky-lit glass look (the scene's baked cloud env map via clearcoat, same
+   recipe as the rails/legs) and skips its mirror-camera render; the
+   choice is the visitor's own — saved in localStorage, honoured on every
+   visit until they flip the pause-menu switch back. The same flag also owns
+   the sun's shadow map (see applyReflectionsNow) — the shadow pass is the
    OTHER expensive per-frame cost, so one switch parks both. */
 const REFL_KEY = 'fg-reflections';
 let reflectionsOn = true;
@@ -836,12 +837,20 @@ function glassReflector(geo, { tex=1024, color=0x9fc0dd, alpha=0.5 } = {}){
   // mirror, and a parked Reflector must NOT keep drawing its shader — the
   // frozen projective UVs smear its last texture across the pane as the
   // camera moves (the "stretched static reflection" bug). Park = swap the
-  // whole material for a flat translucent tint (≈ the pane minus its mirror
-  // image); re-arm = swap back. applyReflectionsNow does the live flips, the
-  // check just below covers panes born while the saved switch is off.
+  // whole material for one that leans on the scene's STATIC sky env map
+  // (scene.environment, baked once via PMREMGenerator — see boot) instead of
+  // the live per-frame mirror: clearcoat + envMapIntensity pick up clouds and
+  // sun sheen off that one cheap cubemap, same recipe as the rails/legs/glass
+  // slab elsewhere in the hall, so parked glass still reads as blue and glassy
+  // rather than flattening to a plain grey swatch — and costs nothing extra
+  // per frame, since it's just an ordinary PBR material like dozens already
+  // in the scene, not a second scene render. re-arm = swap back to the live
+  // Reflector. applyReflectionsNow does the live flips, the check just below
+  // covers panes born while the saved switch is off.
   r.userData.liveMat = m;
-  r.userData.parkMat = new THREE.MeshBasicMaterial({
+  r.userData.parkMat = new THREE.MeshPhysicalMaterial({
     color: new THREE.Color(color), transparent: true, opacity: alpha, depthWrite: false,
+    roughness: 0.4, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.5, envMapIntensity: 0.85,
   });
   if (!reflectionsOn) r.material = r.userData.parkMat;
   allReflectors.push(r);
@@ -861,7 +870,7 @@ function dontNestReflections(){
     r.userData.tick = 0;
     r.userData.every = r.userData.every || 1;
     r.onBeforeRender = function(...args){
-      if (!reflectionsOn) return;   // parked: material is already the flat tint
+      if (!reflectionsOn) return;   // parked: material is already the static sky-glass swap
                                     // (glassReflector / applyReflectionsNow) —
                                     // skip the whole mirror-camera scene render
       if ((this.userData.tick++ % this.userData.every) !== 0) return;   // reuse last reflection
@@ -3634,11 +3643,12 @@ $('thumbsBtn')?.addEventListener('click', () => {
 });
 // pause-menu reflections switch — the visitor's master mirror + shadow cut
 // (see the reflectionsOn note up top). The mirror flip is a material swap on
-// the glass panes: parked = flat translucent tint (never the shader — its
-// frozen projective UVs would smear the last reflection across the pane),
-// armed = the Reflector material again, refreshed by onBeforeRender the next
-// frame. The live slab needs no touch at all any more: its mirror image is
-// just the thumbnail-dressed WebGL panel bounced by these same panes.
+// the glass panes: parked = the static sky-glass swap (never the Reflector
+// shader — its frozen projective UVs would smear the last reflection across
+// the pane), armed = the Reflector material again, refreshed by
+// onBeforeRender the next frame. The live slab needs no touch at all any
+// more: its mirror image is just the thumbnail-dressed WebGL panel bounced
+// by these same panes.
 // Shadows ride the same switch: the map itself is only ever baked once (see
 // the boot sequence), so toggling renderer.shadowMap.enabled here just shows
 // or hides that cached bake — never a re-render, never a cost either way.
