@@ -34,8 +34,19 @@ const te = new TextEncoder();
 // BOTH providers, the other provider's crop PARKED under alt:<url>. A PUT whose
 // prov differs from the active crop's parks the old one instead of erasing it,
 // and PUT ?swap=1 exchanges the two — the /thumbs Swap pill rides on that.
-const objKey = url => 'thumb:' + url;
-const altKey = url => 'alt:' + url;
+//
+// A world can also be HELD to thum.io: prov:<url> (no TTL — it outlives every
+// 24h crop cycle) records the owner's deliberate choice, made on /thumbs via a
+// hold=1 Fetch or a Swap that lands on thum.io. While held:
+//   · a GET miss answers x-thumb-prov-want: thumio, so the refreshing client
+//     captures through the pinned quota-free proxy route instead of microlink;
+//   · a microlink PUT can't demote the held active crop — it parks as alt;
+//   · held thum.io crops keep the full 24h TTL (unheld thum.io fallbacks get
+//     a short one so a later microlink capture can reclaim the slot).
+// Swapping back to microlink (or a hold=1 microlink Fetch) deletes the key.
+const objKey  = url => 'thumb:' + url;
+const altKey  = url => 'alt:' + url;
+const prefKey = url => 'prov:' + url;
 const provOf = m => m?.prov || 'microlink';   // legacy crops predate the tag; only microlink wins were ever uploaded
 const slotNow = () => Math.floor(Date.now() / (DAY_S * 1000));   // rotating 24h bucket
 
@@ -68,7 +79,16 @@ export async function onRequest({ request, env }){
       }
       cursor = page.list_complete ? null : page.cursor;
     } while (cursor);
-    return new Response(JSON.stringify({ bound: true, thumbs: out }), {
+    // held worlds (prov:<url> keys, TTL-less) — the dashboard shows the hold
+    // even when the crop itself has cycled out
+    const held = [];
+    let c2;
+    do {
+      const page = await store.list({ prefix: 'prov:', cursor: c2 });
+      for (const k of page.keys) held.push(k.name.slice(5));
+      c2 = page.list_complete ? null : page.cursor;
+    } while (c2);
+    return new Response(JSON.stringify({ bound: true, thumbs: out, held }), {
       headers: { 'content-type': 'application/json', 'access-control-allow-origin': '*', 'cache-control': 'no-store' },
     });
   }
@@ -100,16 +120,17 @@ export async function onRequest({ request, env }){
         });
       }
     }
-    // miss / expired / no store → invite a capture (client PUTs it back)
-    return new Response('capture', {
-      status: 404,
-      headers: {
-        'x-thumb-ask': await token(secret, target, slotNow()),
-        'access-control-allow-origin': '*',
-        'access-control-expose-headers': 'x-thumb-ask',
-        'cache-control': 'no-store',
-      },
-    });
+    // miss / expired / no store → invite a capture (client PUTs it back),
+    // naming the world's held provider so the refresh honours the owner's pick
+    const want = store ? await store.get(prefKey(target)) : null;
+    const h = {
+      'x-thumb-ask': await token(secret, target, slotNow()),
+      'access-control-allow-origin': '*',
+      'access-control-expose-headers': 'x-thumb-ask, x-thumb-prov-want',
+      'cache-control': 'no-store',
+    };
+    if (want) h['x-thumb-prov-want'] = want;
+    return new Response('capture', { status: 404, headers: h });
   }
 
   // ── accept a guest's own-IP capture as the new shared copy ──
@@ -123,7 +144,10 @@ export async function onRequest({ request, env }){
 
     // ── ?swap=1 (no body): exchange the active crop with the parked one ──
     // The /thumbs Swap pill calls this first; a 404 (nothing parked) tells the
-    // client to capture the other provider's crop itself instead.
+    // client to capture the other provider's crop itself instead. A swap is a
+    // deliberate owner choice, so the HOLD follows the new active provider:
+    // landing on thum.io pins it for every future auto-refresh, landing back
+    // on microlink releases it.
     if (u.searchParams.get('swap')){
       const [act, alt] = await Promise.all([
         store.getWithMetadata(objKey(target), { type: 'arrayBuffer' }),
@@ -134,7 +158,10 @@ export async function onRequest({ request, env }){
       await store.put(objKey(target), alt.value, { expirationTtl: DAY_S, metadata: alt.metadata });
       if (act?.value) await store.put(altKey(target), act.value, { expirationTtl: DAY_S, metadata: act.metadata });
       else await store.delete(altKey(target));
-      return new Response(JSON.stringify({ swapped: true, active: provOf(alt.metadata) }), { headers: hdrs });
+      const active = provOf(alt.metadata);
+      if (active === 'thumio') await store.put(prefKey(target), 'thumio');
+      else await store.delete(prefKey(target));
+      return new Response(JSON.stringify({ swapped: true, active }), { headers: hdrs });
     }
 
     const type = request.headers.get('content-type') || '';
@@ -145,14 +172,36 @@ export async function onRequest({ request, env }){
 
     // which provider rendered this crop — the two-slot store is keyed on it
     const prov = u.searchParams.get('prov') === 'thumio' ? 'thumio' : 'microlink';
-    // a DIFFERENT provider's crop is sitting active → park it instead of erasing
-    // it, so the world keeps one crop per provider (up to 2) and Swap can bounce
-    const cur = await store.getWithMetadata(objKey(target), { type: 'arrayBuffer' });
-    if (cur?.value && provOf(cur.metadata) !== prov)
-      await store.put(altKey(target), cur.value, { expirationTtl: DAY_S, metadata: cur.metadata });
+    // hold=1 marks a DELIBERATE /thumbs fetch: the world's future auto-refresh
+    // follows this provider (thum.io pins the hold, microlink releases it).
+    // Gallery auto-uploads never send it, so they can't re-pin anything.
+    const hold = !!u.searchParams.get('hold');
+    if (hold){
+      if (prov === 'thumio') await store.put(prefKey(target), 'thumio');
+      else await store.delete(prefKey(target));
+    }
+    const pref = hold ? (prov === 'thumio' ? 'thumio' : null)
+                      : await store.get(prefKey(target));
 
+    const cur = await store.getWithMetadata(objKey(target), { type: 'arrayBuffer' });
+    if (cur?.value && provOf(cur.metadata) !== prov){
+      // a held world's active crop can't be demoted by the other provider —
+      // the newcomer parks as alt (Swap can still bounce to it any time)
+      if (pref && provOf(cur.metadata) === pref){
+        await store.put(altKey(target), buf, {
+          expirationTtl: DAY_S, metadata: { contentType: type, ts: Date.now(), prov },
+        });
+        return new Response('parked', { status: 200, headers: { 'access-control-allow-origin': '*' } });
+      }
+      // otherwise park the OLD crop, so the world keeps one per provider (≤2)
+      await store.put(altKey(target), cur.value, { expirationTtl: DAY_S, metadata: cur.metadata });
+    }
+
+    // unheld thum.io fallbacks expire early: they self-heal an empty slot NOW,
+    // and hand it to the next microlink capture in hours instead of a day
+    const ttl = (prov === 'thumio' && pref !== 'thumio') ? 21600 : DAY_S;
     await store.put(objKey(target), buf, {
-      expirationTtl: DAY_S,                                 // auto-refresh cycle
+      expirationTtl: ttl,                                   // auto-refresh cycle
       metadata: { contentType: type, ts: Date.now(), prov },
     });
     return new Response('stored', { status: 200, headers: { 'access-control-allow-origin': '*' } });

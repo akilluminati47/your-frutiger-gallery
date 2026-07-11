@@ -67,10 +67,14 @@ export async function onRequestGet({ request, waitUntil }){
   const h = clampInt(u.searchParams.get('h'), 180, 1000, 720);
   const fresh = u.searchParams.get('fresh') || '';   // present → bypass + refresh the cache
 
+  const pinned = u.searchParams.get('prov') === 'thumio';
   const cache = caches.default;
   // Cache key is the normalised target+size only (no fresh key), so a forced
-  // refresh overwrites the entry every visitor then reads.
-  const cacheKey = new Request(`https://fg-shot.cache/${encodeURIComponent(target)}?w=${w}&h=${h}`);
+  // refresh overwrites the entry every visitor then reads. The thum.io PIN gets
+  // its own key family: a pinned request wants SPECIFICALLY thum.io's render
+  // (held worlds refresh through it), and must never be answered with a
+  // day-pinned microlink entry sitting under the shared key.
+  const cacheKey = new Request(`https://fg-shot.cache/${encodeURIComponent(target)}?w=${w}&h=${h}${pinned ? '&prov=thumio' : ''}`);
 
   if (!fresh){
     const hit = await cache.match(cacheKey);
@@ -81,14 +85,16 @@ export async function onRequestGet({ request, waitUntil }){
   // SPECIFICALLY the other provider's render, not whichever answers first (and
   // the browser can't fetch thum.io itself: its hotlink guard 403s cross-origin
   // fetch() while a server-side request sails through).
-  const chain = u.searchParams.get('prov') === 'thumio' ? ['thumio'] : ['microlink', 'thumio'];
+  const chain = pinned ? ['thumio'] : ['microlink', 'thumio'];
   for (const provider of chain){
     const shot = await tryCapture(provider, target, w, h);
     if (!shot) continue;
-    // A microlink (good) crop pins for a day; a thum.io fallback pins only
+    // A microlink (good) crop pins for a day; a thum.io FALLBACK pins only
     // briefly, so once microlink's daily quota resets the next capture upgrades
     // the cache to the sharp crop instead of staying stuck on thum.io for 24h.
-    const maxAge = provider === 'microlink' ? 86400 : 1200;
+    // A PINNED thum.io render is the deliberate ask (held worlds) — it keeps
+    // the full day under its own key, one render per world per day.
+    const maxAge = (provider === 'microlink' || pinned) ? 86400 : 1200;
     const resp = new Response(shot.buf, {
       headers: {
         'content-type': shot.type,

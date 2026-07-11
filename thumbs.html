@@ -250,6 +250,7 @@ function render(){
         <p class="name"></p>
         <p class="url"></p>
         <p class="age"></p>
+        <p class="age hold" style="display:none;color:#7a5bb8;font-weight:700;">⚓ auto-refresh holds thum.io</p>
         <div class="row">
           <button class="btn mini act-fetch">⟳ Fetch</button>
           <button class="btn mini act-dl">↓ Save</button>
@@ -260,6 +261,7 @@ function render(){
     el.querySelector('.url').textContent = w.url;
     const img = el.querySelector('img'), empty = el.querySelector('.empty');
     const tag = el.querySelector('.tag'), age = el.querySelector('.age');
+    const hold = el.querySelector('.hold');
     const checkbox = el.querySelector('.pick input');
 
     checkbox.addEventListener('change', () => el.classList.toggle('sel', checkbox.checked));
@@ -279,7 +281,7 @@ function render(){
       if (!img.hidden && img.src) openZoom(img);
     });
 
-    cards.set(w.url, { el, img, empty, tag, age, checkbox, provBtn });
+    cards.set(w.url, { el, img, empty, tag, age, hold, checkbox, provBtn });
     grid.appendChild(el);
   }
   $('#sub').textContent = `${worlds.length} worlds`;
@@ -300,6 +302,17 @@ function showEmpty(url){
   c.tag.className = 'tag none'; c.tag.textContent = 'no crop';
   c.age.textContent = '';
 }
+// the HOLD is the store's own memory (prov:<url> key, no TTL): a held world's
+// auto-refresh renders on thum.io from every visitor, not just this browser.
+// Mirror it into the card + localStorage so Fetch here follows it too.
+function setHeld(url, held){
+  const c = cards.get(url); if (!c) return;
+  c.held = held;
+  setProv(url, held ? 'thumio' : 'microlink');
+  c.provBtn.title = held ? 'auto-refresh holds thum.io — ⇄ swaps back to microlink'
+                         : 'captures via microlink (default)';
+  c.hold.style.display = held ? '' : 'none';
+}
 
 async function refreshList(){
   let data;
@@ -313,10 +326,15 @@ async function refreshList(){
       + 'You can still preview live captures below.';
   } else { banner.className = 'banner'; }
   const byUrl = new Map((data.thumbs||[]).map(t => [t.url, t]));
+  // held worlds (the store's own no-TTL memory) — shown even on browsers that
+  // never flipped anything locally, and synced into this browser's preference
+  const heldSet = new Set(data.held || []);
   for (const w of worlds){
-    const t = byUrl.get(/^https?:\/\//i.test(w.url) ? w.url : 'https://' + w.url) || byUrl.get(w.url);
+    const full = /^https?:\/\//i.test(w.url) ? w.url : 'https://' + w.url;
+    const t = byUrl.get(full) || byUrl.get(w.url);
     if (t){ showCrop(w.url, t.ts, t.prov); if (t.prov) setProv(w.url, t.prov); }   // pref follows what's showing
     else showEmpty(w.url);
+    setHeld(w.url, heldSet.has(full) || heldSet.has(w.url));
   }
   const n = (data.thumbs||[]).length;
   setStatus(data.bound ? `${n} crop${n===1?'':'s'} in the store` : 'store not bound');
@@ -337,10 +355,13 @@ async function doFetch(url){
     if (!blob.type.startsWith('image/')) throw new Error('not an image');
     if (!tok) throw new Error('no store bound');
     // prov rides along so the store can PARK a different provider's crop
-    // instead of erasing it — each world keeps up to one crop per provider
-    const put = await fetch(`/api/thumb?url=${enc(url)}&t=${enc(tok)}&prov=${p}`, { method:'PUT', body:blob, headers:{ 'content-type':blob.type } });
+    // instead of erasing it — each world keeps up to one crop per provider.
+    // hold=1 marks this as the owner's DELIBERATE pick: thum.io pins the
+    // world's auto-refresh to thum.io (every future 24h re-capture, from any
+    // visitor, renders there); microlink releases the hold back to default.
+    const put = await fetch(`/api/thumb?url=${enc(url)}&t=${enc(tok)}&prov=${p}&hold=1`, { method:'PUT', body:blob, headers:{ 'content-type':blob.type } });
     if (!put.ok) throw new Error('store ' + put.status);
-    showCrop(url, Date.now(), p); setStatus('stored ' + url);
+    showCrop(url, Date.now(), p); setHeld(url, p === 'thumio'); setStatus('stored ' + url);
   } catch (e){
     if (c) { c.tag.className='tag none'; c.tag.textContent='failed'; }
     setStatus('✗ ' + url + ' — ' + e.message);
@@ -365,7 +386,11 @@ async function doSwap(w){
       const active = j?.active || want;
       setProv(w.url, active);
       showCrop(w.url, Date.now(), active);
-      setStatus(`${w.name} → ${active === 'thumio' ? 'thum.io' : 'microlink'} crop`);
+      // the server moved the hold with the swap: thum.io active = held (every
+      // future auto-refresh renders there), microlink active = released
+      setHeld(w.url, active === 'thumio');
+      setStatus(`${w.name} → ${active === 'thumio' ? 'thum.io' : 'microlink'} crop`
+              + (active === 'thumio' ? ' (held for auto-refresh)' : ''));
       return;
     }
     // nothing parked for the other side yet → capture it now (parks the old one)

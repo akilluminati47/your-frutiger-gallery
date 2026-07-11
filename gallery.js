@@ -141,11 +141,16 @@ function fetchScreenshot(url, onImg, onFail, freshKey = ''){
       if (!res.ok) return tryNext();
       const blob = await res.blob();
       if (!blob.type.startsWith('image/')) return tryNext();
+      // resolve 'proxy' to the provider that ACTUALLY rendered it (x-fg-provider
+      // rides every /api/shot response) — the caller grades and uploads by the
+      // true renderer, not the route: a proxy-served microlink crop is just as
+      // sharp as an own-IP one, and a thum.io fallback must be tagged as itself
+      const real = prov === 'proxy' ? (res.headers.get('x-fg-provider') || 'thumio') : prov;
       const obj = URL.createObjectURL(blob);
       const img = new Image();
-      // pass the raw blob + which provider won, so a fresh own-IP microlink crop
-      // can be uploaded to the shared store (never the proxy/thum.io fallback)
-      img.onload  = () => { URL.revokeObjectURL(obj); img.naturalWidth > 1 ? onImg(img, blob, prov) : tryNext(); };
+      // pass the raw blob + the true provider, so the crop can be graded and
+      // (when the store wants it) uploaded under the right tag
+      img.onload  = () => { URL.revokeObjectURL(obj); img.naturalWidth > 1 ? onImg(img, blob, real) : tryNext(); };
       img.onerror = () => { URL.revokeObjectURL(obj); tryNext(); };
       img.src = obj;
     } catch { tryNext(); } // no CORS / network error → next provider
@@ -199,12 +204,13 @@ function texFromBlob(blob){
   });
 }
 
-// Fire-and-forget: hand a fresh own-IP microlink crop to the shared store so the
-// next visitor is served it from R2 instead of hitting microlink themselves.
-function uploadThumb(url, blob, tok){
-  // prov=microlink: only microlink wins reach this call — the tag lets the
-  // two-slot store park a thum.io crop the owner swapped in rather than eat it
-  fetch(`/api/thumb?url=${encodeURIComponent(url)}&t=${encodeURIComponent(tok)}&prov=microlink`,
+// Fire-and-forget: hand a fresh crop to the shared store so the next visitor is
+// served it from KV instead of capturing themselves. The prov tag matters: the
+// two-slot store parks a crop from the "wrong" provider instead of demoting a
+// held one, and unheld thum.io fallbacks get a shorter TTL server-side so a
+// later microlink capture can reclaim the slot.
+function uploadThumb(url, blob, tok, prov = 'microlink'){
+  fetch(`/api/thumb?url=${encodeURIComponent(url)}&t=${encodeURIComponent(tok)}&prov=${encodeURIComponent(prov)}`,
         { method: 'PUT', body: blob, headers: { 'content-type': blob.type } })
     .catch(() => {});
 }
@@ -215,33 +221,64 @@ function uploadThumb(url, blob, tok){
 const thumbGrade = new Map();   // url -> 'good' | 'weak'
 
 // One slab's capture, shared-store-first. Returns { tex, grade }:
-//   1. GET /api/thumb — a stored crop is served straight from KV (no microlink
-//      call at all), graded 'good'. Always yields an upload token for step 2.
-//   2. on a miss (or a forced refresh) capture from the visitor's OWN IP via the
-//      provider chain (microlink 'good' → proxy 'weak'). A microlink win is
-//      uploaded back so the store fills for everyone; the fallback is never
-//      uploaded (the KV store only ever holds sharp crops).
+//   1. GET /api/thumb — a stored crop is served straight from KV (no capture
+//      call at all), graded 'good'. Always yields an upload token, and a MISS
+//      also names the world's HELD provider (x-thumb-prov-want) when the owner
+//      pinned one on /thumbs.
+//   2. a world held to thum.io captures through the pinned proxy route —
+//      keyless, quota-free, works from EVERY visitor's browser — and uploads
+//      the crop back, so held worlds keep the store warm on the 24h refresh
+//      cycle without ever touching microlink.
+//   3. otherwise the ordinary own-IP chain (microlink 'good' → proxy 'weak').
+//      A microlink win is always uploaded; on a store MISS the fallback win is
+//      uploaded too (tagged truthfully) — a shared thum.io crop beats every
+//      later visitor re-running a flaky capture, and the server gives unheld
+//      thum.io crops a short TTL so microlink can reclaim the slot.
 async function captureThumb(url, freshKey){
-  let askToken = null;
+  let askToken = null, want = null, hadStored = false;
   try {
     const r = await fetch(`/api/thumb?url=${encodeURIComponent(url)}`, { cache: freshKey ? 'no-store' : 'default' });
     askToken = r.headers.get('x-thumb-ask');
+    want = r.headers.get('x-thumb-prov-want');
+    hadStored = r.ok;
     if (r.ok && !freshKey){
       const blob = await r.blob();
       if (blob.type.startsWith('image/')){
         const tex = await texFromBlob(blob);
-        if (tex) return { tex, grade: 'good' };   // stored crops are microlink-quality
+        if (tex) return { tex, grade: 'good' };   // the store is canonical — whatever it holds is the crop
       }
     }
   } catch { /* store unreachable (local dev / fork w/o KV) → capture live */ }
 
+  // held to thum.io → the pinned proxy first. Its edge cache key includes the
+  // prov pin, so this can never be answered with a stale microlink render.
+  if (want === 'thumio'){
+    try {
+      const full = withProtocol(url);
+      const pin = `/api/shot?url=${encodeURIComponent(full)}&w=${SHOT_W}&h=${SHOT_H}&prov=thumio`
+                + (freshKey ? `&fresh=${encodeURIComponent(freshKey)}` : '');
+      const res = await fetch(pin);
+      if (res.ok){
+        const blob = await res.blob();
+        if (blob.type.startsWith('image/')){
+          const tex = await texFromBlob(blob);
+          if (tex){
+            if (askToken) uploadThumb(url, blob, askToken, 'thumio');
+            return { tex, grade: 'good' };   // the held provider IS this world's sharp crop
+          }
+        }
+      }
+    } catch { /* pinned route down → the ordinary chain below still saves the slab */ }
+  }
+
   return new Promise(resolve => {
     fetchScreenshot(url,
-      (img, blob, prov) => {
+      (img, blob, prov) => {                     // prov = the TRUE renderer (proxy resolved)
         const tex = textureFromScreenshot(img);
         const grade = prov === 'microlink' ? 'good' : 'weak';
-        if (prov === 'microlink' && askToken && blob && blob.type.startsWith('image/'))
-          uploadThumb(url, blob, askToken);
+        if (askToken && blob && blob.type.startsWith('image/') &&
+            (prov === 'microlink' || !hadStored))
+          uploadThumb(url, blob, askToken, prov);
         resolve({ tex, grade });
       },
       () => resolve({ tex: null, grade: null }),
@@ -282,11 +319,56 @@ function runCaptureQueue(urls, onEach, freshKey = ''){
   });
 }
 
+// ── the live slab's portrait must ARRIVE, not just be asked for ──
+// The slab's mirror image is its thumbnail-dressed WebGL panel (see
+// revealWorld), so a live wall whose capture failed or landed late reveals
+// bare white and its reflections sit BLANK in every pane. Two guards:
+//   · dress-on-arrival — every queue result flows through here, and a live
+//     slab that already revealed bare gets its portrait the moment one lands;
+//   · a retry ladder — after the boot queue settles, live-wall urls that
+//     ended with nothing re-queue up to 3 times with widening waits (a burst
+//     429 or a slow thum.io render is transient; the pinned/held route and
+//     the self-healing store make later rounds land far more often).
+function dressLivePanel(u, tex){
+  // cover-crop to the slab (never stretched: the capture is 16:9, the slab may
+  // not be); the slab's footprint is fixed, so the crop adapts — no panel refit
+  const img = tex.image;
+  const pa = CON_CW / CON_CH, ia = (img?.width || 16) / (img?.height || 9);
+  if (ia > pa) tex.repeat.set(pa / ia, 1), tex.offset.set((1 - pa / ia) / 2, 0);
+  else         tex.repeat.set(1, ia / pa), tex.offset.set(0, (1 - ia / pa) / 2);
+  u.screenMat.map = tex;
+  u.screenMat.needsUpdate = true;
+}
+function dressLiveWalls(url, tex){
+  if (!tex) return;
+  for (const f of frames){
+    const u = f.userData;
+    if (u.liveWall && u.loadState === 'done' && !u.screenMat.map && u.project.url === url){
+      u.liveTexture = tex;
+      dressLivePanel(u, tex);
+    }
+  }
+}
+function liveWallUrls(){
+  const walls = normWalls(CONFIG.walls);
+  return ['west', 'east']
+    .filter(s => walls[s].on && walls[s].live && walls[s].url.trim())
+    .map(s => walls[s].url.trim());
+}
+function retryLiveWalls(attempt){
+  if (attempt > 3) return;
+  const missing = liveWallUrls().filter(u => !(prefetchMap.get(u) instanceof THREE.Texture));
+  if (!missing.length) return;
+  setTimeout(() => {
+    runCaptureQueue(missing, dressLiveWalls).then(() => retryLiveWalls(attempt + 1));
+  }, 20000 * attempt);
+}
+
 function preFetchScreenshots(){
   // corridor worlds + the end-wall slots (independent strings outside projects,
   // keyed by their trimmed url) — all queued through the concurrency limiter so
   // the GPU upload happens while the menu idles: a reveal is a zero-hitch swap.
-  runCaptureQueue([...galleryScreenshotUrls()], () => {});
+  runCaptureQueue([...galleryScreenshotUrls()], dressLiveWalls).then(() => retryLiveWalls(1));
 }
 // Fire immediately — renderer + FW are set up synchronously below, and every
 // onload callback is async so it sees the fully-initialised module.
@@ -3515,14 +3597,10 @@ function revealWorld(f){
   // the retired box-reflect replicas that re-painted the live page per frame.
   // No fitPanelToImage here: the slab's footprint is fixed, the crop adapts.
   if (u.liveWall){
-    if (u.liveTexture){
-      const img = u.liveTexture.image;
-      const pa = CON_CW / CON_CH, ia = (img?.width || 16) / (img?.height || 9);
-      if (ia > pa) u.liveTexture.repeat.set(pa / ia, 1), u.liveTexture.offset.set((1 - pa / ia) / 2, 0);
-      else         u.liveTexture.repeat.set(1, ia / pa), u.liveTexture.offset.set(0, (1 - ia / pa) / 2);
-      u.screenMat.map = u.liveTexture;
-    } else u.screenMat.map = null;   // no capture yet → clean white, as before
-    u.screenMat.needsUpdate = true;
+    if (u.liveTexture) dressLivePanel(u, u.liveTexture);
+    else { u.screenMat.map = null; u.screenMat.needsUpdate = true; }
+    // no capture yet → clean white for now; dressLiveWalls hangs the portrait
+    // the moment a (possibly retried) capture lands — see preFetchScreenshots
   } else if (u.liveTexture){
     u.screenMat.map = u.liveTexture; u.screenMat.needsUpdate = true;
     fitPanelToImage(u, u.liveTexture);
