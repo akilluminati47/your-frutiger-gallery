@@ -847,10 +847,21 @@ function glassReflector(geo, { tex=1024, color=0x9fc0dd, alpha=0.5 } = {}){
   // in the scene, not a second scene render. re-arm = swap back to the live
   // Reflector. applyReflectionsNow does the live flips, the check just below
   // covers panes born while the saved switch is off.
+  //
+  // roughness/clearcoatRoughness stay TIGHT (legMat's numbers, not the glass
+  // slab's soft 0.45/0.55 — the slab deliberately blurs its glint so it
+  // doesn't double up with the floor Reflector's own sun sitting right below
+  // it, a conflict these end/side panes never have). A flat plane's specular
+  // is already physically viewpoint-accurate — reflect(view, normal) lands the
+  // highlight at the true mirror angle on its own, the same angle a live
+  // Reflector's captured sun sits at — so position already matches; low
+  // roughness is what keeps the SIZE matching too, by collapsing the sun's
+  // reflection down to a small bright point instead of smearing it into a
+  // wide, dim glow the live mirror never shows.
   r.userData.liveMat = m;
   r.userData.parkMat = new THREE.MeshPhysicalMaterial({
     color: new THREE.Color(color), transparent: true, opacity: alpha, depthWrite: false,
-    roughness: 0.4, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.5, envMapIntensity: 0.85,
+    roughness: 0.18, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.12, envMapIntensity: 1.3,
   });
   if (!reflectionsOn) r.material = r.userData.parkMat;
   allReflectors.push(r);
