@@ -167,6 +167,13 @@ const enc = encodeURIComponent;
 const SHOT_W = 1600, SHOT_H = 900;
 const $ = s => document.querySelector(s);
 
+// tell an open gallery tab a crop changed, so it re-pulls the store at once
+// instead of waiting for a tab-refocus (its own belt-and-braces cue). Harmless
+// where the gallery isn't open; unsupported browsers just lean on refocus.
+let _bc = null;
+try { _bc = new BroadcastChannel('fg-thumbs'); } catch {}
+const pingGallery = () => { try { _bc?.postMessage('changed'); } catch {} };
+
 // ── bubbles ──
 const bubbles = $('#bubbles');
 for (let i = 0; i < 14; i++){
@@ -360,7 +367,7 @@ async function doFetch(url){
     // visitor, renders there); microlink releases the hold back to default.
     const put = await fetch(`/api/thumb?url=${enc(url)}&t=${enc(tok)}&prov=${p}&hold=1`, { method:'PUT', body:blob, headers:{ 'content-type':blob.type } });
     if (!put.ok) throw new Error('store ' + put.status);
-    showCrop(url, Date.now(), p); setHeld(url, p === 'thumio'); setStatus('stored ' + url);
+    showCrop(url, Date.now(), p); setHeld(url, p === 'thumio'); pingGallery(); setStatus('stored ' + url);
   } catch (e){
     if (c) { c.tag.className='tag none'; c.tag.textContent='failed'; }
     setStatus('✗ ' + url + ' — ' + e.message);
@@ -388,6 +395,7 @@ async function doSwap(w){
       // the server moved the hold with the swap: thum.io active = held (every
       // future auto-refresh renders there), microlink active = released
       setHeld(w.url, active === 'thumio');
+      pingGallery();
       setStatus(`${w.name} → ${active === 'thumio' ? 'thum.io' : 'microlink'} crop`);
       return;
     }

@@ -111,11 +111,15 @@ export async function onRequest({ request, env }){
             'content-type': metadata?.contentType || 'image/png',
             'cache-control': 'public, max-age=300, stale-while-revalidate=600',
             'access-control-allow-origin': '*',
-            'access-control-expose-headers': 'x-thumb-ask, x-thumb-age, x-thumb-prov',
+            'access-control-expose-headers': 'x-thumb-ask, x-thumb-age, x-thumb-prov, x-thumb-ver',
             // still hand out a token so a forced refresh (hold-R) can overwrite
             'x-thumb-ask': await token(secret, target, slotNow()),
             'x-thumb-age': Math.floor(ageS).toString(),
             'x-thumb-prov': provOf(metadata),
+            // active-slot version — bumps on any write here (fresh capture OR a
+            // Swap promoting an older crop), so a running gallery can detect the
+            // change by comparing this alone. Legacy crops (no ver) → capture ts.
+            'x-thumb-ver': (metadata?.ver || metadata?.ts || 0).toString(),
           },
         });
       }
@@ -155,7 +159,10 @@ export async function onRequest({ request, env }){
       ]);
       const hdrs = { 'content-type': 'application/json', 'access-control-allow-origin': '*', 'cache-control': 'no-store' };
       if (!alt?.value) return new Response(JSON.stringify({ swapped: false }), { status: 404, headers: hdrs });
-      await store.put(objKey(target), alt.value, { expirationTtl: DAY_S, metadata: alt.metadata });
+      // the promoted crop keeps its capture ts but gets a fresh ver (activation
+      // stamp) so a running gallery sees the active slot changed even though the
+      // crop itself was captured earlier
+      await store.put(objKey(target), alt.value, { expirationTtl: DAY_S, metadata: { ...alt.metadata, ver: Date.now() } });
       if (act?.value) await store.put(altKey(target), act.value, { expirationTtl: DAY_S, metadata: act.metadata });
       else await store.delete(altKey(target));
       const active = provOf(alt.metadata);
@@ -200,9 +207,10 @@ export async function onRequest({ request, env }){
     // unheld thum.io fallbacks expire early: they self-heal an empty slot NOW,
     // and hand it to the next microlink capture in hours instead of a day
     const ttl = (prov === 'thumio' && pref !== 'thumio') ? 21600 : DAY_S;
+    const now = Date.now();
     await store.put(objKey(target), buf, {
       expirationTtl: ttl,                                   // auto-refresh cycle
-      metadata: { contentType: type, ts: Date.now(), prov },
+      metadata: { contentType: type, ts: now, ver: now, prov },   // ver bumps the active slot for live re-checks
     });
     return new Response('stored', { status: 200, headers: { 'access-control-allow-origin': '*' } });
   }

@@ -219,6 +219,14 @@ function uploadThumb(url, blob, tok, prov = 'microlink'){
 // 'good' = a stored (shared) or own-IP microlink crop; 'weak' = the proxy/thum.io
 // fallback, which we only ever show on a slab that has nothing yet.
 const thumbGrade = new Map();   // url -> 'good' | 'weak'
+// The store stamps the ACTIVE crop with a version (ms, x-thumb-ver) that bumps
+// on every write to the slot — a fresh capture AND a Swap that promotes an
+// older parked crop. We remember the version we're showing so a live re-check
+// (tab refocus, or a /thumbs ping) can tell a genuine store change from the
+// crop already on screen, even when the newly-active crop was captured earlier.
+// See refreshStoredThumbs. (Capture time alone can't: a swap-to-older would
+// look "older" and never update.)
+const thumbVer = new Map();     // url -> active-crop version (ms)
 
 // One slab's capture, shared-store-first. Returns { tex, grade }:
 //   1. GET /api/thumb — a stored crop is served straight from KV (no capture
@@ -245,7 +253,10 @@ async function captureThumb(url, freshKey){
       const blob = await r.blob();
       if (blob.type.startsWith('image/')){
         const tex = await texFromBlob(blob);
-        if (tex) return { tex, grade: 'good' };   // the store is canonical — whatever it holds is the crop
+        if (tex){
+          thumbVer.set(url, verOf(r));   // remember which store version we're showing
+          return { tex, grade: 'good' };   // the store is canonical — whatever it holds is the crop
+        }
       }
     }
   } catch { /* store unreachable (local dev / fork w/o KV) → capture live */ }
@@ -364,11 +375,91 @@ function retryLiveWalls(attempt){
   }, 20000 * attempt);
 }
 
+// the store's ACTIVE-crop version: x-thumb-ver (a write stamp that bumps on any
+// change to the slot — new capture OR a Swap to an older parked crop). Legacy
+// crops predate it → fall back to capture time (x-thumb-age), which at least
+// still catches a fresh re-capture.
+function verOf(res){
+  const v = parseInt(res.headers.get('x-thumb-ver') || '', 10);
+  if (Number.isFinite(v)) return v;
+  const age = parseInt(res.headers.get('x-thumb-age') || '', 10);
+  return Number.isFinite(age) ? Date.now() - age * 1000 : Date.now();
+}
+
+// re-dress every REVEALED frame showing this url with a freshly-pulled crop:
+// live slabs through dressLivePanel (their mirror portrait — the WebGL panel
+// the Reflectors bounce), normal panels through the map + aspect snap. Frames
+// still loading need no touch — they pick the new crop up at reveal.
+function applyThumbToFrames(url, tex){
+  for (const f of frames){
+    const u = f.userData;
+    if (u.project?.url !== url || u.loadState !== 'done') continue;
+    u.liveTexture = tex;
+    if (u.liveWall) dressLivePanel(u, tex);
+    else { u.screenMat.map = tex; u.screenMat.needsUpdate = true; fitPanelToImage(u, tex); }
+  }
+}
+
+// A Swap/Fetch on /thumbs writes the store, but a gallery already running — or
+// reopened inside a crop's 5-min browser-cache window — keeps showing the crop
+// it loaded at boot, so a change looked like it "didn't update". This re-pulls
+// every world's stored crop, BYPASSING the HTTP cache (no-store) so it sees the
+// store's truth, and swaps in any whose active version moved past the one on
+// screen. Cheap (one small conditional GET per world), and only ever fires on
+// an explicit cue: the tab regaining focus, a cross-tab ping from /thumbs, or
+// once shortly after boot — never per frame.
+let _refreshingThumbs = false;
+async function refreshStoredThumbs(){
+  if (_refreshingThumbs || document.hidden) return;   // one sweep at a time; skip while backgrounded
+  _refreshingThumbs = true;
+  try {
+    for (const url of galleryScreenshotUrls()){
+      let r;
+      // the unique &v busts BOTH caches in the way (the browser's max-age=300
+      // and Cloudflare's edge cache on /api/thumb) so this reads the store's
+      // truth; the KV read is free and never touches a capture provider
+      try { r = await fetch(`/api/thumb?url=${encodeURIComponent(url)}&v=${Date.now()}`, { cache: 'no-store' }); }
+      catch { continue; }                              // store unreachable → keep what we show
+      if (!r.ok) continue;                             // miss → nothing newer to show
+      const ver = verOf(r), shown = thumbVer.get(url) || 0;
+      if (ver <= shown) continue;                      // same active crop as on screen
+      const blob = await r.blob();
+      if (!blob.type.startsWith('image/')) continue;
+      const tex = await texFromBlob(blob);
+      if (!tex) continue;
+      const prev = prefetchMap.get(url);
+      prefetchMap.set(url, tex);
+      thumbGrade.set(url, 'good');
+      thumbVer.set(url, ver);
+      applyThumbToFrames(url, tex);
+      if (prev instanceof THREE.Texture) prev.dispose();   // free the crop we replaced
+    }
+  } finally { _refreshingThumbs = false; }
+}
+// the cues (registered once): a return to the tab, a live ping from /thumbs
+// (BroadcastChannel when both are open), and one sweep a moment after boot to
+// catch a swap made just before the gallery opened, past the 5-min cache.
+addEventListener('visibilitychange', () => { if (!document.hidden) refreshStoredThumbs(); });
+addEventListener('focus', refreshStoredThumbs);
+addEventListener('pageshow', e => { if (e.persisted) refreshStoredThumbs(); });   // bfcache restore
+try {
+  const bc = new BroadcastChannel('fg-thumbs');
+  bc.onmessage = e => { if (e.data === 'changed') refreshStoredThumbs(); };
+} catch { /* no BroadcastChannel → focus/visibility still cover it */ }
+
 function preFetchScreenshots(){
   // corridor worlds + the end-wall slots (independent strings outside projects,
   // keyed by their trimmed url) — all queued through the concurrency limiter so
   // the GPU upload happens while the menu idles: a reveal is a zero-hitch swap.
-  runCaptureQueue([...galleryScreenshotUrls()], dressLiveWalls).then(() => retryLiveWalls(1));
+  runCaptureQueue([...galleryScreenshotUrls()], dressLiveWalls).then(() => {
+    retryLiveWalls(1);
+    // one store-truth sweep a beat after boot: a reopen within ~5 min of a
+    // /thumbs swap loads the STALE crop from cache and the focus/visibility
+    // cues never fire on an already-focused fresh load, so this is the only
+    // thing that catches that window. Delayed so it runs after reveal, not
+    // against the boot capture burst.
+    setTimeout(refreshStoredThumbs, 4000);
+  });
 }
 // Fire immediately — renderer + FW are set up synchronously below, and every
 // onload callback is async so it sees the fully-initialised module.
