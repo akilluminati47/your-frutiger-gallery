@@ -211,7 +211,7 @@ let prov = {};
 try { prov = JSON.parse(localStorage.getItem(PROV_KEY) || '{}') || {}; } catch {}
 const provOf  = url => prov[url] === 'thumio' ? 'thumio' : 'microlink';
 const setProv = (url, p) => { prov[url] = p; try { localStorage.setItem(PROV_KEY, JSON.stringify(prov)); } catch {} };
-const captureURL = url => provOf(url) === 'thumio' ? thumioURL(url) : microlinkURL(url);
+const captureVia = (url, p) => p === 'thumio' ? thumioURL(url) : microlinkURL(url);
 const ago = ts => {
   if (!ts) return '';
   const s = Math.max(0, (Date.now() - ts) / 1000);
@@ -355,19 +355,35 @@ async function doFetch(url){
   try {
     const p = provOf(url);
     const tok = await getToken(url);
-    const res = await fetch(captureURL(url), { mode:'cors' });
+    if (!tok) throw new Error('no store bound');
+    const res = await fetch(captureVia(url, p), { mode:'cors' });
     if (!res.ok) throw new Error(p + ' ' + res.status + (p === 'microlink' && res.status === 429 ? ' (IP quota spent — try cellular or ⇄ Swap)' : ''));
     const blob = await res.blob();
     if (!blob.type.startsWith('image/')) throw new Error('not an image');
-    if (!tok) throw new Error('no store bound');
-    // prov rides along so the store can PARK a different provider's crop
-    // instead of erasing it — each world keeps up to one crop per provider.
     // hold=1 marks this as the owner's DELIBERATE pick: thum.io pins the
     // world's auto-refresh to thum.io (every future 24h re-capture, from any
     // visitor, renders there); microlink releases the hold back to default.
+    // Either way the toggle now OWNS the active slot server-side — a gallery
+    // visitor's capture from the other provider parks as alt, never bumps it.
     const put = await fetch(`/api/thumb?url=${enc(url)}&t=${enc(tok)}&prov=${p}&hold=1`, { method:'PUT', body:blob, headers:{ 'content-type':blob.type } });
     if (!put.ok) throw new Error('store ' + put.status);
     showCrop(url, Date.now(), p); setHeld(url, p === 'thumio'); pingGallery(); setStatus('stored ' + url);
+    // Fetch catches BOTH sides: the OTHER provider's crop rides straight into
+    // the PARKED slot (alt=1 — active crop and hold untouched), so ⇄ Swap is a
+    // pure server-side exchange with the option already waiting. Best-effort:
+    // a failed alt capture never marks the fetch failed, and the gallery's own
+    // background backfill completes the pair later anyway.
+    try {
+      const q = p === 'thumio' ? 'microlink' : 'thumio';
+      const r2 = await fetch(captureVia(url, q), { mode:'cors' });
+      if (r2.ok){
+        const b2 = await r2.blob();
+        if (b2.type.startsWith('image/')){
+          await fetch(`/api/thumb?url=${enc(url)}&t=${enc(tok)}&prov=${q}&alt=1`, { method:'PUT', body:b2, headers:{ 'content-type':b2.type } });
+          setStatus('stored ' + url + ' — swap pair ready');
+        }
+      }
+    } catch { /* pair completes on the next gallery visit */ }
   } catch (e){
     if (c) { c.tag.className='tag none'; c.tag.textContent='failed'; }
     setStatus('✗ ' + url + ' — ' + e.message);
