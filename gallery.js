@@ -215,6 +215,31 @@ function uploadThumb(url, blob, tok, prov = 'microlink'){
     .catch(() => {});
 }
 
+// Keep each world's Swap pair complete: when the store says the ALT slot is
+// empty (no x-thumb-alt on the GET), capture the OTHER provider's crop in the
+// background and PUT it with alt=1 — parked only, never touching the active
+// crop or the hold. A /thumbs Swap then finds the option already sitting there
+// instead of capturing at click time. One sequential chain, so a warm boot
+// (every slab a store hit) can't burst a dozen captures at once.
+let _altChain = Promise.resolve();
+function backfillAlt(url, activeProv, tok){
+  const other = activeProv === 'thumio' ? 'microlink' : 'thumio';
+  _altChain = _altChain.then(async () => {
+    try {
+      const src = other === 'thumio'
+        // thum.io only renders through our proxy (hotlink guard) — quota-free
+        ? `/api/shot?url=${encodeURIComponent(withProtocol(url))}&w=${SHOT_W}&h=${SHOT_H}&prov=thumio`
+        : screenshotURL('microlink', url, SHOT_W, SHOT_H);
+      const res = await fetch(src, { mode: 'cors' });
+      if (!res.ok) return;
+      const blob = await res.blob();
+      if (!blob.type.startsWith('image/')) return;
+      await fetch(`/api/thumb?url=${encodeURIComponent(url)}&t=${encodeURIComponent(tok)}&prov=${other}&alt=1`,
+                  { method: 'PUT', body: blob, headers: { 'content-type': blob.type } });
+    } catch { /* best-effort — the /thumbs Swap fallback still captures on demand */ }
+  });
+}
+
 // Crop quality per url so a refresh never downgrades a sharp crop to a weak one:
 // 'good' = a stored (shared) or own-IP microlink crop; 'weak' = the proxy/thum.io
 // fallback, which we only ever show on a slab that has nothing yet.
@@ -230,9 +255,9 @@ const thumbVer = new Map();     // url -> active-crop version (ms)
 
 // One slab's capture, shared-store-first. Returns { tex, grade }:
 //   1. GET /api/thumb — a stored crop is served straight from KV (no capture
-//      call at all), graded 'good'. Always yields an upload token, and a MISS
-//      also names the world's HELD provider (x-thumb-prov-want) when the owner
-//      pinned one on /thumbs.
+//      call at all), graded 'good'. Always yields an upload token; every
+//      response names the world's HELD provider (x-thumb-prov-want, pinned on
+//      /thumbs) and whether the OTHER provider's crop is parked (x-thumb-alt).
 //   2. a world held to thum.io captures through the pinned proxy route —
 //      keyless, quota-free, works from EVERY visitor's browser — and uploads
 //      the crop back, so held worlds keep the store warm on the 24h refresh
@@ -242,12 +267,16 @@ const thumbVer = new Map();     // url -> active-crop version (ms)
 //      uploaded too (tagged truthfully) — a shared thum.io crop beats every
 //      later visitor re-running a flaky capture, and the server gives unheld
 //      thum.io crops a short TTL so microlink can reclaim the slot.
+// Server-side, the /thumbs toggle owns the ACTIVE slot: a non-preferred upload
+// parks as alt, so nothing a visitor captures can bump what the owner picked.
+// Whenever the alt slot is empty, backfillAlt completes the pair quietly.
 async function captureThumb(url, freshKey){
-  let askToken = null, want = null, hadStored = false;
+  let askToken = null, want = null, altHave = false, hadStored = false;
   try {
     const r = await fetch(`/api/thumb?url=${encodeURIComponent(url)}`, { cache: freshKey ? 'no-store' : 'default' });
     askToken = r.headers.get('x-thumb-ask');
     want = r.headers.get('x-thumb-prov-want');
+    altHave = !!r.headers.get('x-thumb-alt');   // the OTHER provider's crop is already parked
     hadStored = r.ok;
     if (r.ok && !freshKey){
       const blob = await r.blob();
@@ -255,6 +284,8 @@ async function captureThumb(url, freshKey){
         const tex = await texFromBlob(blob);
         if (tex){
           thumbVer.set(url, verOf(r));   // remember which store version we're showing
+          if (askToken && !altHave)      // complete the Swap pair in the background
+            backfillAlt(url, r.headers.get('x-thumb-prov') || 'microlink', askToken);
           return { tex, grade: 'good' };   // the store is canonical — whatever it holds is the crop
         }
       }
@@ -274,7 +305,10 @@ async function captureThumb(url, freshKey){
         if (blob.type.startsWith('image/')){
           const tex = await texFromBlob(blob);
           if (tex){
-            if (askToken) uploadThumb(url, blob, askToken, 'thumio');
+            if (askToken){
+              uploadThumb(url, blob, askToken, 'thumio');
+              if (!altHave) backfillAlt(url, 'thumio', askToken);   // park a microlink option for Swap
+            }
             return { tex, grade: 'good' };   // the held provider IS this world's sharp crop
           }
         }
@@ -290,6 +324,10 @@ async function captureThumb(url, freshKey){
         if (askToken && blob && blob.type.startsWith('image/') &&
             (prov === 'microlink' || !hadStored))
           uploadThumb(url, blob, askToken, prov);
+        // park the thum.io option too, so Swap has its pair — but only after a
+        // microlink win: if microlink itself just failed (this crop is the
+        // thum.io fallback), a microlink alt capture would only 429 again
+        if (askToken && !altHave && prov === 'microlink') backfillAlt(url, 'microlink', askToken);
         resolve({ tex, grade });
       },
       () => resolve({ tex: null, grade: null }),
