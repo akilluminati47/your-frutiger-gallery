@@ -47,21 +47,25 @@ const isTouch = matchMedia('(pointer: coarse)').matches
 const lowPerf = isTouch;
 
 const realDpr = window.devicePixelRatio || 1;
-const SW = window.screen.width;
 
 // ONE aspect, every panel, every device: 16:9. Phones used to hang tall
 // portrait frames shaped to their own screen; now the hall is uniform —
 // the same wide slabs whatever the visitor holds it on.
 const ASPECT = 16 / 9;
 
-// Capture one 16:9 desktop-laid-out screenful for every visitor:
-//   • SHOT_W is the render viewport's CSS width, clamped to a sane desktop
-//     band — a phone's ~390 screen rides the 1024 floor so sites serve their
-//     desktop face (the panels are desktop-shaped now), and ultra-wide
-//     monitors sit at the 1600 ceiling so nothing lays out stretched.
-//   • SHOT_H derives from ASPECT, so the capture already matches the panels
-//     and stretches edge-to-edge with no crop (see fitPanelToImage).
-const SHOT_W = clamp(Math.round(SW), 1024, 1600);
+// Capture one 16:9 desktop-laid-out screenful — the SAME one for every visitor.
+// This is deliberately NOT tied to the visitor's screen: the capture is a
+// SHARED artifact (every win is uploaded to the store and served to everyone
+// else), so letting it follow the local screen meant a 1366 laptop published a
+// 1366×768 crop and a phone a 1024×576 one, each softer than the panel they
+// hang on — and each rendered at a DIFFERENT viewport width, so the target site
+// answered at a different responsive breakpoint and the composition changed too.
+// 1600×900 is the one true capture: it matches the /thumbs Fetch button and the
+// nightly cron (tools/capture-thumbs.mjs) exactly, so a slab looks the same
+// whether it was captured by a phone on the way past, by the owner pressing
+// Fetch, or by the cron. Keep all three in step. SHOT_H derives from ASPECT, so
+// the crop already matches the panels edge-to-edge (see fitPanelToImage).
+const SHOT_W = 1600;
 const SHOT_H = Math.round(SHOT_W / ASPECT);
 
 function withProtocol(u){ return /^https?:\/\//i.test(u) ? u : 'https://' + u; }
@@ -1458,20 +1462,24 @@ function drawLoadingStrip(canvas, progress, animTime){
   // Track (empty pill)
   c2.fillStyle = 'rgba(150,200,235,.38)'; roundRect(c2,barX,barY,barW,barH,rr); c2.fill();
   // Filled portion — barber-pole: diagonal green / white / blue twist.
-  // One turn of the pole = green 35 % · white 30 % · blue 35 %, with the white
-  // band riding between the two colours so they read as separated rather than
-  // bleeding into one another. The bands are laid one WHOLE turn at a time:
-  // stepping the outer loop by a single band width instead would make every
-  // pass repaint its neighbour's slot, and the last colour drawn would win the
-  // whole bar (that is what left the old pole solid green under a thin blue
-  // stripe). Each band is filled a pixel wider than its slot to close the
-  // antialiased seam against the next one — bands are always painted left to
-  // right, so the overspill is covered by whatever comes after it.
+  // A white band caps BOTH colours: green 35 % · white 30 % · blue 35 % · white
+  // 30 %, so one turn of the pole is 130 % of a plain colour+colour+white run
+  // and every boundary — including the wrap back to green — is a white gap.
+  // The percentages are of that 100 % run (TURN), which is why the widths still
+  // read 35/30/35/30 while the period is TURN × 1.3.
+  // The bands are laid one WHOLE turn at a time: stepping the outer loop by a
+  // single band width instead would make every pass repaint its neighbour's
+  // slot, and the last colour drawn would win the whole bar (that is what left
+  // the old pole solid green under a thin blue stripe). Each band is filled a
+  // pixel wider than its slot to close the antialiased seam against the next
+  // one — bands are always painted left to right, so the overspill is covered
+  // by whatever comes after it.
   if (progress > 0){
     const fillW = Math.max(rr*2, barW*progress);
     c2.save(); roundRect(c2,barX,barY,fillW,barH,Math.min(rr,fillW/2)); c2.clip();
-    const rep=barH*3.3, off=(animTime*42)%rep;
-    const bands=[['#33c75a',rep*.35],['#ffffff',rep*.30],['#1a96ff',rep*.35]];
+    const turn=barH*3.3, rep=turn*1.3, off=(animTime*42)%rep;
+    const bands=[['#33c75a',turn*.35],['#ffffff',turn*.30],
+                 ['#1a96ff',turn*.35],['#ffffff',turn*.30]];
     for (let sx=-(rep*2)+off; sx<fillW+barH+rep; sx+=rep){
       let o=0;
       for (const [col,bw] of bands){
