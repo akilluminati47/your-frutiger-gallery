@@ -1475,12 +1475,27 @@ function drawLoadingStrip(canvas, progress, animTime){
   // one — bands are always painted left to right, so the overspill is covered
   // by whatever comes after it.
   if (progress > 0){
-    const fillW = Math.max(rr*2, barW*progress);
-    c2.save(); roundRect(c2,barX,barY,fillW,barH,Math.min(rr,fillW/2)); c2.clip();
+    // Leading edge is cut on the same 45° slant the twists lean at (/), NOT a
+    // rounded pill cap: the fill is the track pill INTERSECTED with the half-plane
+    // left of that diagonal, so the bands meet the empty track along their own
+    // angle. `lead` runs the top corner 0 → barW+barH over the load, so at 100 %
+    // the slant has swept fully past and the pill's own right cap rounds it off.
+    const lead = Math.max(barH, (barW+barH)*progress);
+    const topX = barX+lead, botX = topX-barH;   // 45° leading edge ‖ the twists
+    const clipDiag = () => {                     // everything LEFT of the leading /
+      c2.beginPath();
+      c2.moveTo(topX+4,barY-4); c2.lineTo(botX-4,barY+barH+4);
+      c2.lineTo(barX-barH*2,barY+barH+4); c2.lineTo(barX-barH*2,barY-4);
+      c2.closePath();
+    };
+    // --- fill: track pill ∩ left-of-diagonal ---
+    c2.save();
+    roundRect(c2,barX,barY,barW,barH,rr); c2.clip();   // whole track pill (rounds both caps)
+    clipDiag(); c2.clip();                              // ∩ up to the leading slant
     const turn=barH*3.3, rep=turn*1.3, off=(animTime*42)%rep;
     const bands=[['#33c75a',turn*.35],['#ffffff',turn*.30],
                  ['#1a96ff',turn*.35],['#ffffff',turn*.30]];
-    for (let sx=-(rep*2)+off; sx<fillW+barH+rep; sx+=rep){
+    for (let sx=-(rep*2)+off; sx<lead+barH+rep; sx+=rep){
       let o=0;
       for (const [col,bw] of bands){
         c2.fillStyle = col;
@@ -1496,9 +1511,18 @@ function drawLoadingStrip(canvas, progress, animTime){
     const gl=c2.createLinearGradient(0,barY,0,barY+barH);
     gl.addColorStop(0,'rgba(255,255,255,.72)'); gl.addColorStop(.44,'rgba(255,255,255,.16)');
     gl.addColorStop(.45,'rgba(255,255,255,0)'); gl.addColorStop(1,'rgba(255,255,255,0)');
-    c2.fillStyle=gl; c2.fillRect(barX,barY,fillW,barH); c2.restore();
+    c2.fillStyle=gl; c2.fillRect(barX,barY,barW,barH);
+    c2.restore();
+    // White edge — the pill outline paints the left cap + top/bottom (and the
+    // rounded right cap at 100 %), clipped to the filled side; the inset diagonal
+    // adds the leading twist's own highlight.
     c2.strokeStyle='rgba(255,255,255,.82)'; c2.lineWidth=3;
-    roundRect(c2,barX,barY,fillW,barH,Math.min(rr,fillW/2)); c2.stroke();
+    c2.save(); clipDiag(); c2.clip();
+    roundRect(c2,barX,barY,barW,barH,rr); c2.stroke();
+    c2.restore();
+    c2.save(); roundRect(c2,barX,barY,barW,barH,rr); c2.clip();   // keep highlight in-track
+    c2.beginPath(); c2.moveTo(topX-1,barY); c2.lineTo(botX-1,barY+barH); c2.stroke();
+    c2.restore();
   }
   // Percentage (below bar)
   c2.fillStyle = 'rgba(50,130,200,.75)';
