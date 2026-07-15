@@ -994,10 +994,19 @@ scene.add(sun);
    choice is the visitor's own — saved in localStorage, honoured on every
    visit until they flip the pause-menu switch back. The same flag also owns
    the sun's shadow map (see applyReflectionsNow) — the shadow pass is the
-   OTHER expensive per-frame cost, so one switch parks both. */
+   OTHER expensive per-frame cost, so one switch parks both.
+   The DEFAULT splits by device: a phone's first visit gets the mirrors parked
+   (the extra scene pass per pane is what costs a touch GPU its framerate — a
+   smooth hall is the better first impression than a reflective one), desktop
+   gets them armed. Either way it's only the default: once the visitor flips
+   the pause-menu switch, their choice is stored and wins on every later
+   visit. */
 const REFL_KEY = 'fg-reflections';
-let reflectionsOn = true;
-try { reflectionsOn = localStorage.getItem(REFL_KEY) !== '0'; } catch {}
+let reflectionsOn = !isTouch;
+try {
+  const saved = localStorage.getItem(REFL_KEY);
+  if (saved !== null) reflectionsOn = saved !== '0';
+} catch {}
 // the static shadow map still needs its ONE bake with shadows enabled (see
 // the boot sequence's "one-shot shadow bake" + animate()'s first-frame sync
 // below) — flipping renderer.shadowMap.enabled here, before that bake has
@@ -1432,7 +1441,7 @@ const loadBackdropTex = (() => {
   return t;
 })();
 
-// Frutiger Aero loading strip: barber-pole green/blue/white bar with the
+// Frutiger Aero loading strip: barber-pole green/white/blue bar with the
 // status label above and the percentage below, on a TRANSPARENT canvas \u2014 the
 // white/black panel background lives in loadBackdropTex behind it. Fixed
 // 1024\u00d7256 whatever the panel aspect, so layout metrics are plain pixels.
@@ -1448,21 +1457,33 @@ function drawLoadingStrip(canvas, progress, animTime){
   c2.fillText(progress < 0.995 ? 'loading world\u2026' : 'rendering\u2026', W/2, barY - 42);
   // Track (empty pill)
   c2.fillStyle = 'rgba(150,200,235,.38)'; roundRect(c2,barX,barY,barW,barH,rr); c2.fill();
-  // Filled portion — barber-pole: diagonal green / blue / white twist
+  // Filled portion — barber-pole: diagonal green / white / blue twist.
+  // One turn of the pole = green 35 % · white 30 % · blue 35 %, with the white
+  // band riding between the two colours so they read as separated rather than
+  // bleeding into one another. The bands are laid one WHOLE turn at a time:
+  // stepping the outer loop by a single band width instead would make every
+  // pass repaint its neighbour's slot, and the last colour drawn would win the
+  // whole bar (that is what left the old pole solid green under a thin blue
+  // stripe). Each band is filled a pixel wider than its slot to close the
+  // antialiased seam against the next one — bands are always painted left to
+  // right, so the overspill is covered by whatever comes after it.
   if (progress > 0){
     const fillW = Math.max(rr*2, barW*progress);
     c2.save(); roundRect(c2,barX,barY,fillW,barH,Math.min(rr,fillW/2)); c2.clip();
-    const sw=barH*1.1, rep=sw*3, off=(animTime*42)%rep;
-    const pal=['#33c75a','#1a96ff','#ffffff'];
-    for (let sx=-(rep*2)+off; sx<fillW+barH+rep; sx+=sw)
-      for (let ci=0; ci<3; ci++){
-        c2.fillStyle = pal[ci];
-        const ox=barX+sx+ci*sw;
+    const rep=barH*3.3, off=(animTime*42)%rep;
+    const bands=[['#33c75a',rep*.35],['#ffffff',rep*.30],['#1a96ff',rep*.35]];
+    for (let sx=-(rep*2)+off; sx<fillW+barH+rep; sx+=rep){
+      let o=0;
+      for (const [col,bw] of bands){
+        c2.fillStyle = col;
+        const ox=barX+sx+o, w=bw+1;
         c2.beginPath();
         c2.moveTo(ox-barH,barY+barH); c2.lineTo(ox,barY);
-        c2.lineTo(ox+sw,barY); c2.lineTo(ox+sw-barH,barY+barH);
+        c2.lineTo(ox+w,barY); c2.lineTo(ox+w-barH,barY+barH);
         c2.closePath(); c2.fill();
+        o += bw;
       }
+    }
     // Aero gloss overlay (top half)
     const gl=c2.createLinearGradient(0,barY,0,barY+barH);
     gl.addColorStop(0,'rgba(255,255,255,.72)'); gl.addColorStop(.44,'rgba(255,255,255,.16)');
