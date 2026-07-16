@@ -787,10 +787,32 @@ const GAZE_ROWS      = 1;                    // last N rows are gaze-only (not a
 const GAZE_ROW_START = ROWS - GAZE_ROWS;    // first gaze row index
 const INTRO_DUR      = 2.6;                 // intro glide duration (seconds)
 const INTRO_START_Y  = 3.3;                 // camera height at the start of the glide-in (~1 m over the raised eye)
-const LOAD_DUR       = 1.8;                 // bar pace while a fetch is still in flight (auto frames)
+const LOAD_DUR       = 1.8;                 // gaze bar pace + console boot; auto frames pace off the row window below
 const GAZE_LOAD_DUR  = 2.0;                 // gaze-triggered frames ALWAYS play the bar this long — the
                                             // reveal answers the player's look, so it gets its cutscene
                                             // even when the screenshot is already sitting in the cache
+
+// ── auto-row cascade ──────────────────────────────────────────────────────
+// The auto worlds no longer ping in one-by-one as you walk up to them. Instead
+// the whole hall lights up as a corridor of loading bars near entry and then
+// RESOLVES front-to-back, a wave down the walkway:
+//   • ROW_START_STEP — each row starts its bar a breath after the one ahead, so
+//     the visitor sees them ALL begin loading (blanks only at the far gaze end)
+//     while the tiny stagger also spreads the strip allocations over a few frames
+//     so the intro never hitches allocating a hallful of canvases at once;
+//   • FIRST_REVEAL — the front row (and the east wall, which rides row 0) plays
+//     its bar this long, then pings in first;
+//   • ROW_REVEAL_STEP — every row downhall pings this much after the row ahead,
+//     the cascade the visitor reads all the way to the last auto row.
+// Cached or not, every auto world now plays its bar before the thumbnail lands
+// (a cached capture just means the reveal never has to wait past its beat). The
+// gaze rows — the hall's last row and the west wall — are untouched: they stay
+// blank until looked at (startFrameLoading + updateLoadingSystem gate on gaze).
+const ROW_START_STEP  = 0.07;
+const FIRST_REVEAL    = 1.9;
+const ROW_REVEAL_STEP = 0.45;
+const autoStartForRow  = row => row * ROW_START_STEP;
+const autoRevealForRow = row => FIRST_REVEAL + row * ROW_REVEAL_STEP;
 
 const WALL_X  = HALF + 2.0;             // glass side walls
 const FRAME_X = WALL_X - 0.12;          // frames hang pressed flat against the glass walls
@@ -1536,11 +1558,6 @@ function drawLoadingStrip(canvas, progress, animTime){
 // clock starts WITH the intro whoosh (not after it), so the front pair is
 // already pinging as you glide in, and the row cadence keeps each pair
 // landing before the player walks up to it.
-function autoDelayForRow(row){
-  const walkTime = (START_Z + row * DZ) / (CONFIG.movement.maxSpeed * (CONFIG.movement.speed ?? 1));
-  return Math.max(0, walkTime - 1.5) + row * 0.3;
-}
-
 // Planar UVs from each vertex's local x,y so the full screenshot maps 1:1 across the
 // front face — and the curved rim's vertices clamp to the nearest edge column, so the
 // page appears to roll over the device's rounded bezel (a hi-tech screen). RoundedBox
@@ -1700,7 +1717,7 @@ function buildGallery(font){
 
   // one frame group = device slab + name plaque + visit? text — shared by the
   // corridor sides and the end walls; placeFrame positions it and registers it
-  function makeFrame(project, loadTrigger, autoDelay, loadDuration){
+  function makeFrame(project, loadTrigger, autoDelay, loadDuration, autoReveal){
     const group = new THREE.Group();
 
     // the screen: a flat rounded-rectangle showing the full screenshot stretched to
@@ -1750,7 +1767,7 @@ function buildGallery(font){
       project, visit, label, labelBaseY, scale:0, worldPos:new THREE.Vector3(),
       // ── loading state ──
       loadState:    'pending',               // 'pending' | 'loading' | 'done'
-      loadTrigger, autoDelay, loadDuration,
+      loadTrigger, autoDelay, loadDuration, autoReveal,   // autoReveal: this row's scheduled ping-in beat
       loadProgress: 0, imageReady: false, liveTexture: null,
       screenMat, panel, whiteTex, strip: null, stripTex: null, stripCanvas: null,
       labelBloop: -1,
@@ -1776,8 +1793,9 @@ function buildGallery(font){
     const isGazeFrame = row >= GAZE_ROW_START;  // last N rows are gaze-only
     const f = makeFrame(project,
       isGazeFrame ? 'gaze'      : 'auto',
-      isGazeFrame ? Infinity    : autoDelayForRow(row),
-      isGazeFrame ? GAZE_LOAD_DUR : LOAD_DUR);
+      isGazeFrame ? Infinity    : autoStartForRow(row),
+      isGazeFrame ? GAZE_LOAD_DUR : LOAD_DUR,
+      isGazeFrame ? Infinity    : autoRevealForRow(row));
     // pressed to the glass wall, facing the walkway
     placeFrame(f, side * FRAME_X, START_Z + row * DZ, side < 0 ? Math.PI/2 : -Math.PI/2);
   });
@@ -1859,7 +1877,7 @@ function buildGallery(font){
     // extra per-frame cost (the Reflectors render regardless).
   }
   if (wallProjects.east){
-    const f = makeFrame(wallProjects.east, 'auto', autoDelayForRow(0), LOAD_DUR);
+    const f = makeFrame(wallProjects.east, 'auto', autoStartForRow(0), LOAD_DUR, autoRevealForRow(0));
     // { live:true } slot → wakes as the real page (8c). NOT on touch: a phone
     // has no pointer to hand a portal, so the wall hangs as a normal captured
     // world there — the builder console alone stays fully interactive on touch.
@@ -1868,7 +1886,7 @@ function buildGallery(font){
     placeFrame(f, 0, PLAT_Z0 + 0.4 + 0.12, 0);
   }
   if (wallProjects.west){
-    const f = makeFrame(wallProjects.west, 'gaze', Infinity, GAZE_LOAD_DUR);
+    const f = makeFrame(wallProjects.west, 'gaze', Infinity, GAZE_LOAD_DUR, Infinity);
     // only hangs console-off, so live never fights the console; touch demotes
     // it to a normal captured world too (see the east wall note above)
     f.userData.liveWall = !!wallProjects.west.live && !isTouch;
@@ -3721,21 +3739,13 @@ function startFrameLoading(f){
   const u = f.userData;
   if (u.loadState !== 'pending') return;
   u.loadState = 'loading';
-  // pre-fetch cache first: the screenshots render the moment the PAGE loads
-  // (see preFetchScreenshots — GPU-uploaded during the menu), so by ping time
-  // they're usually done — AUTO frames reveal NOW, no bar, no fixed-duration
-  // theater; a bar on them only means a fetch genuinely still in flight.
-  // GAZE frames are the exception: their reveal answers the player's look,
-  // so they always play the bar (GAZE_LOAD_DUR) before popping — see
-  // updateLoadingSystem, which holds their reveal until the bar completes.
-  const ready = prefetchMap.get(u.project.url);
-  if (ready !== 'pending' && u.loadTrigger !== 'gaze'){
-    u.liveTexture = (ready instanceof THREE.Texture) ? ready : null;
-    u.imageReady = true;
-    if (!u.liveTexture){ u.screenMat.map = loadBackdropTex; u.screenMat.needsUpdate = true; }  // failed fetch → clean backdrop
-    revealWorld(f);
-    return;
-  }
+  // Every world plays its loading cutscene before the thumbnail lands — auto and
+  // gaze, cached or in-flight. The pre-fetch (see preFetchScreenshots, fired
+  // during the menu, GPU-uploaded before Enter) means the capture is usually
+  // already sitting in the cache by ping time, but the bar plays regardless:
+  // updateLoadingSystem reveals the moment BOTH the bar has played through (auto:
+  // the row's scheduled beat, autoReveal; gaze: the full bar) AND the fetch has
+  // settled. A bar that outlasts its beat means a fetch genuinely still in flight.
   // lazy-alloc the strip (canvas + texture + plane): only panels actually
   // mid-cutscene hold one — revealWorld frees it again
   if (!u.strip){
@@ -3812,33 +3822,45 @@ function updateLoadingSystem(dt, t){
     const u = f.userData;
     if (u.loadState === 'done') continue;
     if (u.loadState === 'pending'){
-      // gaze frames (the west wall + the last row) fire ONLY from the
-      // player's look; auto frames ONLY from the pair clock — looking at a
-      // panel never hurries its ping
+      // gaze frames (the west wall + the last row) fire ONLY from the player's
+      // look and stay blank until then; auto frames fire on the row's START beat
+      // (autoStartForRow) so the whole hall lights up as a wave near entry —
+      // looking at a panel never hurries its ping.
       if (u.loadTrigger === 'gaze' ? f === activeFrame : elapsed >= u.autoDelay){
         startFrameLoading(f); continue;
       }
       // pending state = solid white, nothing to animate
     }
     if (u.loadState === 'loading'){
-      // auto frames: a bar here means the fetch is genuinely still in flight
-      // (the ready path revealed inside startFrameLoading) — poll the cache
-      // and reveal the MOMENT it settles, no artificial wait, no watch-me
-      // speedup. Gaze frames ride the bar to FULL first — their reveal is a
-      // played cutscene — then take whatever the cache has settled to.
       const cached = prefetchMap.get(u.project.url);
-      const settled = cached !== 'pending';
-      // the bar may only claim 100% once the network has delivered; short of
-      // that it eases toward — and holds just under — full
-      u.loadProgress = Math.min(settled ? 1 : 0.95, u.loadProgress + dt / u.loadDuration);
-      if (settled && (u.loadTrigger !== 'gaze' || u.loadProgress >= 1)){
+      const settled = cached !== 'pending';   // preFetch never leaves a url pending (see runCaptureQueue)
+      let due;
+      if (u.loadTrigger === 'gaze'){
+        // gaze: a fixed-pace bar (GAZE_LOAD_DUR) — its cutscene answers the look —
+        // eased to full, then it takes whatever the cache settled to
+        u.loadProgress = Math.min(settled ? 1 : 0.95, u.loadProgress + dt / u.loadDuration);
+        due = u.loadProgress >= 1;
+      } else {
+        // auto: the bar fills ACROSS this row's window (start → autoReveal) so the
+        // corridor of bars eases to full and resolves front-to-back on the cascade,
+        // not one-by-one as you approach. It holds just under full (barber pole
+        // still scrolling) only if the fetch is genuinely still in flight past the
+        // row's beat — a cached world simply pings in right on cue.
+        const win    = Math.max(0.15, u.autoReveal - u.autoDelay);
+        const filled = clamp((elapsed - u.autoDelay) / win, 0, 1);
+        due = elapsed >= u.autoReveal;
+        u.loadProgress = Math.min(filled, settled && due ? 1 : 0.97);
+      }
+      if (settled && due){
         u.liveTexture = (cached instanceof THREE.Texture) ? cached : null;
         u.imageReady = true;
         revealWorld(f); continue;
       }
-      // repaint at ~30 Hz — the pole drifts slowly enough that half-rate reads
-      // as smooth, and it halves the strip's repaint + GPU upload cost
-      if (t - u.lastBarPaint >= 1/32){
+      // repaint the scrolling pole — rate eased on mobile since a hallful of bars
+      // now animates at once (the staggered starts already spread the uploads
+      // across frames). The pole drifts slowly enough that this reads as smooth.
+      const barHz = lowPerf ? 1/18 : 1/32;
+      if (t - u.lastBarPaint >= barHz){
         u.lastBarPaint = t;
         drawLoadingStrip(u.stripCanvas, u.loadProgress, t); u.stripTex.needsUpdate = true;
       }
