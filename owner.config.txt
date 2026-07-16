@@ -14,9 +14,10 @@
   "readyNote": "{n} worlds ready",
 
   "_projects":      "Your works. Add or remove rows freely — odd counts are fine: the spare LAST world hangs on a free end wall automatically. name = the plaque, url = where visit? takes you. The gallery lengthens automatically.",
+  "_thumb_lock":    "Optional, on any world above or any wall slot below: add \"thumbLock\": \"thumio\" (or \"microlink\") to pin that world's thumbnail to one capture provider. Some pages only ever come out right on one of them, so the lock takes the choice off the table — the /thumbs dashboard greys out that world's Swap pill and says \"owner config locked\", and every Fetch captures via the locked provider, which pins the shared store's auto-refresh there for every visitor too. Leave it out and the world stays swappable.",
   "projects": [
     { "name": "My Site",    "url": "https://example.com/" },
-    { "name": "My YouTube", "url": "https://www.youtube.com/" },
+    { "name": "My YouTube", "url": "https://www.youtube.com/", "thumbLock": "thumio" },
     { "name": "My Twitch",  "url": "https://www.twitch.tv/" },
     { "name": "My GitHub",  "url": "https://github.com/" }
   ],
