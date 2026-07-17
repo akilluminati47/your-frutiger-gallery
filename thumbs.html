@@ -203,14 +203,36 @@ const microlinkURL = url =>
 const thumioURL = url =>
   `/api/shot?url=${enc(freshTarget(url))}&w=${SHOT_W}&h=${SHOT_H}&prov=thumio&fresh=${Date.now().toString(36)}`;
 
+// worlds = corridor projects + every toggled-on end-wall slot, LIVE ones
+// included: an interactive wall never shows its own crop on desktop, but its
+// two static choices still matter — touch demotes live walls to normal
+// captured worlds, and a design with the live toggle off hangs the capture —
+// so the store needs entries for them like any other world.
+// A world may carry thumbLock ("thumio" | "microlink") from owner.config.json:
+// the owner pinning that world to one provider because the other never renders
+// it right. Anything else (absent, empty, a typo) leaves it swappable.
+const walls = CONFIG.walls || {};
+const lockOf_ = w => (w?.thumbLock === 'thumio' || w?.thumbLock === 'microlink') ? w.thumbLock : null;
+const worlds = [
+  ...(CONFIG.projects || []).map(p => ({ name: p.name, url: p.url, lock: lockOf_(p) })),
+  ...['west','east'].filter(s => walls[s]?.on && walls[s].url?.trim())
+                    .map(s => ({ name: walls[s].name || s + ' wall', url: walls[s].url.trim(), lock: lockOf_(walls[s]) })),
+].filter((w, i, a) => a.findIndex(x => x.url === w.url) === i);   // dedupe by url
+const LOCKS = new Map(worlds.filter(w => w.lock).map(w => [w.url, w.lock]));
+
 // ── per-world capture provider: microlink (sharp, 50/day per IP) ⇄ thum.io
 // (keyless, quota-free). Every flip writes localStorage IMMEDIATELY — there is
 // no save step, so a stray reload never loses a setting.
+// An owner-config lock OUTRANKS all of it: it wins over the stored preference
+// (so Fetch always captures via the locked provider — and the hold that PUT
+// writes pins every visitor's auto-refresh there too) and setProv refuses to
+// record anything against it, so a Fetch or a held-sync can't drift it loose.
 const PROV_KEY = 'fg-thumb-provider';
 let prov = {};
 try { prov = JSON.parse(localStorage.getItem(PROV_KEY) || '{}') || {}; } catch {}
-const provOf  = url => prov[url] === 'thumio' ? 'thumio' : 'microlink';
-const setProv = (url, p) => { prov[url] = p; try { localStorage.setItem(PROV_KEY, JSON.stringify(prov)); } catch {} };
+const lockOf  = url => LOCKS.get(url) || null;
+const provOf  = url => lockOf(url) || (prov[url] === 'thumio' ? 'thumio' : 'microlink');
+const setProv = (url, p) => { if (lockOf(url)) return; prov[url] = p; try { localStorage.setItem(PROV_KEY, JSON.stringify(prov)); } catch {} };
 const captureVia = (url, p) => p === 'thumio' ? thumioURL(url) : microlinkURL(url);
 const ago = ts => {
   if (!ts) return '';
@@ -221,21 +243,20 @@ const ago = ts => {
   return Math.round(s/86400) + ' d ago';
 };
 
-// worlds = corridor projects + every toggled-on end-wall slot, LIVE ones
-// included: an interactive wall never shows its own crop on desktop, but its
-// two static choices still matter — touch demotes live walls to normal
-// captured worlds, and a design with the live toggle off hangs the capture —
-// so the store needs entries for them like any other world.
-const walls = CONFIG.walls || {};
-const worlds = [
-  ...(CONFIG.projects || []).map(p => ({ name: p.name, url: p.url })),
-  ...['west','east'].filter(s => walls[s]?.on && walls[s].url?.trim())
-                    .map(s => ({ name: walls[s].name || s + ' wall', url: walls[s].url.trim() })),
-].filter((w, i, a) => a.findIndex(x => x.url === w.url) === i);   // dedupe by url
-
 const grid = $('#grid'), statusEl = $('#status');
 const setStatus = t => { statusEl.textContent = t || ''; };
 const cards = new Map();   // url -> {el, img, tag, age, checkbox}
+
+// The ⇄ Swap pill's tooltip is rewritten from a few places (the crop that came
+// back, the store's hold, a swap just taken), so the owner-config lock is
+// applied HERE rather than at any one of them — otherwise the next refresh
+// would quietly hand a locked world its swappable tooltip back.
+function setProvBtn(url, note){
+  const c = cards.get(url); if (!c?.provBtn) return;
+  const lock = lockOf(url);
+  c.provBtn.disabled = !!lock;                       // greys out via button.btn:disabled
+  c.provBtn.title = lock ? 'owner config locked' : note;
+}
 
 function slug(url){ return url.replace(/[^a-z0-9]+/gi,'-').replace(/^-+|-+$/g,'').slice(0,48) || 'thumb'; }
 const previewSrc = url => `/api/thumb?url=${enc(url)}&v=${Date.now()}`;
@@ -276,10 +297,17 @@ function render(){
     // provider, so this first asks the server to exchange active↔parked; if
     // nothing is parked yet it captures the other provider's crop right here.
     // Preference persists the moment it flips — no save step.
+    // A thumbLock world has no other side to show: the pill greys out and the
+    // click never binds (disabled already swallows it — this just says so).
     const provBtn = el.querySelector('.act-prov');
     provBtn.textContent = '⇄ Swap';
-    provBtn.title = 'captures via ' + provOf(w.url);
-    provBtn.addEventListener('click', () => doSwap(w));
+    if (w.lock){
+      provBtn.disabled = true;
+      provBtn.title = 'owner config locked';
+    } else {
+      provBtn.title = 'captures via ' + provOf(w.url);
+      provBtn.addEventListener('click', () => doSwap(w));
+    }
     // click the crop (not the checkbox) → expand it XXL; any click shrinks it back
     el.querySelector('.shot').addEventListener('click', e => {
       if (e.target.closest('.pick')) return;
@@ -299,7 +327,7 @@ function showCrop(url, ts, prov){
   c.tag.className = 'tag cached';
   c.tag.textContent = prov ? (prov === 'thumio' ? 'thum.io' : 'microlink') : 'cached';
   c.age.textContent = ts ? 'captured ' + ago(ts) : 'stored';
-  if (prov){ c.activeProv = prov; if (c.provBtn) c.provBtn.title = 'showing ' + prov; }
+  if (prov){ c.activeProv = prov; setProvBtn(url, 'showing ' + prov); }
 }
 function showEmpty(url){
   const c = cards.get(url); if (!c) return;
@@ -315,9 +343,9 @@ function showEmpty(url){
 function setHeld(url, held){
   const c = cards.get(url); if (!c) return;
   c.held = held;
-  setProv(url, held ? 'thumio' : 'microlink');
-  c.provBtn.title = held ? 'auto-refresh holds thum.io — ⇄ swaps back to microlink'
-                         : 'captures via microlink (default)';
+  setProv(url, held ? 'thumio' : 'microlink');   // no-op on a locked world
+  setProvBtn(url, held ? 'auto-refresh holds thum.io — ⇄ swaps back to microlink'
+                       : 'captures via microlink (default)');
 }
 
 async function refreshList(){
@@ -394,11 +422,14 @@ async function doFetch(url){
 // parked yet, auto-fetch it — that PUT parks the current one and the pair is
 // complete. Either way the preference lands in localStorage immediately.
 async function doSwap(w){
+  // the pill is already disabled for these — this covers the group action
+  // (and the gamepad's synthetic click) reaching the same path
+  if (lockOf(w.url)) return setStatus(`${w.name} — provider locked in owner config`);
   const c = cards.get(w.url);
   const cur = c?.activeProv || provOf(w.url);
   const want = cur === 'microlink' ? 'thumio' : 'microlink';
   setProv(w.url, want);
-  if (c?.provBtn) c.provBtn.title = 'captures via ' + want;
+  setProvBtn(w.url, 'captures via ' + want);
   try {
     const tok = await getToken(w.url);
     if (!tok) throw new Error('no store bound');
@@ -451,11 +482,17 @@ $('#dlSel').addEventListener('click', async () => {
 // sequentially (auto-fetches are kind to the burst limits). Every flip writes
 // localStorage immediately, same as the per-card pill.
 $('#provSel').addEventListener('click', async () => {
-  const sel = selected(); if (!sel.length) return setStatus('nothing selected');
+  const picked = selected();
+  if (!picked.length) return setStatus('nothing selected');
+  // owner-config locks drop out here rather than failing one by one
+  const sel = picked.filter(w => !lockOf(w.url));
+  const locked = picked.length - sel.length;
+  if (!sel.length) return setStatus(`nothing to swap — ${locked} locked in owner config`);
   $('#provSel').disabled = true;
   let i = 0;
   for (const w of sel){ setStatus(`swapping ${++i}/${sel.length}…`); await doSwap(w); }
-  $('#provSel').disabled = false; setStatus(`done — swapped ${sel.length}`);
+  $('#provSel').disabled = false;
+  setStatus(`done — swapped ${sel.length}${locked ? ` · skipped ${locked} locked` : ''}`);
 });
 
 // ── click-to-expand lightbox: grow from the card's spot to XXL, click to shrink ──

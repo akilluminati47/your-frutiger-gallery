@@ -787,32 +787,34 @@ const GAZE_ROWS      = 1;                    // last N rows are gaze-only (not a
 const GAZE_ROW_START = ROWS - GAZE_ROWS;    // first gaze row index
 const INTRO_DUR      = 2.6;                 // intro glide duration (seconds)
 const INTRO_START_Y  = 3.3;                 // camera height at the start of the glide-in (~1 m over the raised eye)
-const LOAD_DUR       = 1.8;                 // gaze bar pace + console boot; auto frames pace off the row window below
+const LOAD_DUR       = 1.8;                 // console boot pace (CON_BOOT_MS); panels pace off their own windows below
 const GAZE_LOAD_DUR  = 2.0;                 // gaze-triggered frames ALWAYS play the bar this long — the
                                             // reveal answers the player's look, so it gets its cutscene
                                             // even when the screenshot is already sitting in the cache
 
 // ── auto-row cascade ──────────────────────────────────────────────────────
-// The auto worlds no longer ping in one-by-one as you walk up to them. Instead
-// the whole hall lights up as a corridor of loading bars near entry and then
-// RESOLVES front-to-back, a wave down the walkway:
-//   • ROW_START_STEP — each row starts its bar a breath after the one ahead, so
-//     the visitor sees them ALL begin loading (blanks only at the far gaze end)
-//     while the tiny stagger also spreads the strip allocations over a few frames
-//     so the intro never hitches allocating a hallful of canvases at once;
-//   • FIRST_REVEAL — the front row (and the east wall, which rides row 0) plays
-//     its bar this long, then pings in first;
-//   • ROW_REVEAL_STEP — every row downhall pings this much after the row ahead,
-//     the cascade the visitor reads all the way to the last auto row.
-// Cached or not, every auto world now plays its bar before the thumbnail lands
-// (a cached capture just means the reveal never has to wait past its beat). The
+// The hall resolves front-to-back, but only ONE row is ever mid-load: a row's
+// pair (plus the east wall, which rides row 0) plays its bar, pings in, and only
+// THEN does the row behind it start. Lighting the whole corridor at once — every
+// row starting its bar a breath after the one ahead — meant a hallful of panels
+// fetching together while each repainted a 1024×256 canvas and re-uploaded its
+// texture every frame. That is what lagged the walk in.
+//   • FIRST_START — row 0 (and the east wall) starts its bar this far into the
+//     intro whoosh, so the front pair is already loading as the visitor glides in;
+//   • ROW_BAR_DUR — how long a row's bar plays before it pings, and so the beat of
+//     the whole cascade: the row behind starts the moment this one lands.
+// The CHAIN is what bounds the concurrency, and it holds however slow a fetch is.
+// The old absolute per-row reveal beats did not: a row whose capture was still in
+// flight sat holding at 97 % while the rows behind it opened on their own beats
+// anyway, so a slow hall degenerated back into everything loading together.
+// ROW_STALL_CAP is the escape hatch — a fetch that genuinely hangs stops holding
+// the gate, so one dead URL can never freeze the hall behind it.
+// Cached or not, every auto world plays its bar before the thumbnail lands. The
 // gaze rows — the hall's last row and the west wall — are untouched: they stay
 // blank until looked at (startFrameLoading + updateLoadingSystem gate on gaze).
-const ROW_START_STEP  = 0.07;
-const FIRST_REVEAL    = 1.9;
-const ROW_REVEAL_STEP = 0.45;
-const autoStartForRow  = row => row * ROW_START_STEP;
-const autoRevealForRow = row => FIRST_REVEAL + row * ROW_REVEAL_STEP;
+const FIRST_START   = 1.15;
+const ROW_BAR_DUR   = 0.75;
+const ROW_STALL_CAP = 4.0;
 
 const WALL_X  = HALF + 2.0;             // glass side walls
 const FRAME_X = WALL_X - 0.12;          // frames hang pressed flat against the glass walls
@@ -1481,45 +1483,36 @@ function drawLoadingStrip(canvas, progress, animTime){
   c2.font = '500 44px Quicksand, Segoe UI, sans-serif';
   c2.textAlign = 'center'; c2.textBaseline = 'middle';
   c2.fillText(progress < 0.995 ? 'loading world\u2026' : 'rendering\u2026', W/2, barY - 42);
-  // Track (empty pill)
+  // Track (empty pill) — base tint under the colourless pole
   c2.fillStyle = 'rgba(150,200,235,.38)'; roundRect(c2,barX,barY,barW,barH,rr); c2.fill();
-  // Filled portion — barber-pole: diagonal green / white / blue twist.
+  // Barber-pole: diagonal green / white / blue twist.
   // A white band caps BOTH colours: green 35 % · white 30 % · blue 35 % · white
   // 30 %, so one turn of the pole is 130 % of a plain colour+colour+white run
   // and every boundary — including the wrap back to green — is a white gap.
   // The percentages are of that 100 % run (TURN), which is why the widths still
   // read 35/30/35/30 while the period is TURN × 1.3.
+  // The pole is painted TWICE from the same bands in the same phase: colourless
+  // across the whole track, then lit up to the progress edge. So the sweep reads
+  // as the pole TAKING ON its colours — the twist is already turning the whole
+  // way across — instead of a coloured stripe growing out of an empty gutter.
+  // Both passes are opaque: the bands overspill their slot by a pixel to close
+  // the antialiased seam against the next one (they are always painted left to
+  // right, so the overspill is covered by whatever comes after), and that trick
+  // only works if the overdraw is fully opaque — a translucent pole would show
+  // every seam as a darker line.
+  const turn=barH*3.3, rep=turn*1.3, off=(animTime*42)%rep;
+  const POLE_LIT  = [['#33c75a',turn*.35],['#ffffff',turn*.30],
+                     ['#1a96ff',turn*.35],['#ffffff',turn*.30]];
+  const POLE_DEAD = [['#c2d0da',turn*.35],['#e9f1f6',turn*.30],
+                     ['#c2d0da',turn*.35],['#e9f1f6',turn*.30]];
   // The bands are laid one WHOLE turn at a time: stepping the outer loop by a
   // single band width instead would make every pass repaint its neighbour's
   // slot, and the last colour drawn would win the whole bar (that is what left
-  // the old pole solid green under a thin blue stripe). Each band is filled a
-  // pixel wider than its slot to close the antialiased seam against the next
-  // one — bands are always painted left to right, so the overspill is covered
-  // by whatever comes after it.
-  if (progress > 0){
-    // Leading edge is cut on the same 45° slant the twists lean at (/), NOT a
-    // rounded pill cap: the fill is the track pill INTERSECTED with the half-plane
-    // left of that diagonal, so the bands meet the empty track along their own
-    // angle. `lead` runs the top corner 0 → barW+barH over the load, so at 100 %
-    // the slant has swept fully past and the pill's own right cap rounds it off.
-    const lead = Math.max(barH, (barW+barH)*progress);
-    const topX = barX+lead, botX = topX-barH;   // 45° leading edge ‖ the twists
-    const clipDiag = () => {                     // everything LEFT of the leading /
-      c2.beginPath();
-      c2.moveTo(topX+4,barY-4); c2.lineTo(botX-4,barY+barH+4);
-      c2.lineTo(barX-barH*2,barY+barH+4); c2.lineTo(barX-barH*2,barY-4);
-      c2.closePath();
-    };
-    // --- fill: track pill ∩ left-of-diagonal ---
-    c2.save();
-    roundRect(c2,barX,barY,barW,barH,rr); c2.clip();   // whole track pill (rounds both caps)
-    clipDiag(); c2.clip();                              // ∩ up to the leading slant
-    const turn=barH*3.3, rep=turn*1.3, off=(animTime*42)%rep;
-    const bands=[['#33c75a',turn*.35],['#ffffff',turn*.30],
-                 ['#1a96ff',turn*.35],['#ffffff',turn*.30]];
-    for (let sx=-(rep*2)+off; sx<lead+barH+rep; sx+=rep){
+  // the old pole solid green under a thin blue stripe).
+  const paintPole = (cols, until) => {
+    for (let sx=-(rep*2)+off; sx<until+barH+rep; sx+=rep){
       let o=0;
-      for (const [col,bw] of bands){
+      for (const [col,bw] of cols){
         c2.fillStyle = col;
         const ox=barX+sx+o, w=bw+1;
         c2.beginPath();
@@ -1529,20 +1522,42 @@ function drawLoadingStrip(canvas, progress, animTime){
         o += bw;
       }
     }
-    // Aero gloss overlay (top half)
-    const gl=c2.createLinearGradient(0,barY,0,barY+barH);
-    gl.addColorStop(0,'rgba(255,255,255,.72)'); gl.addColorStop(.44,'rgba(255,255,255,.16)');
-    gl.addColorStop(.45,'rgba(255,255,255,0)'); gl.addColorStop(1,'rgba(255,255,255,0)');
-    c2.fillStyle=gl; c2.fillRect(barX,barY,barW,barH);
+  };
+  const pill = () => roundRect(c2,barX,barY,barW,barH,rr);
+  // 1 — the colourless pole, twisting the whole way across
+  c2.save(); pill(); c2.clip(); paintPole(POLE_DEAD, barW); c2.restore();
+  // 2 — the lit pole, same bands / same phase, up to the progress edge. That edge
+  // is cut on the same 45° slant the twists lean at (/), NOT a rounded pill cap:
+  // the lit region is the track pill INTERSECTED with the half-plane left of the
+  // diagonal, so colour meets grey along the pole's own angle. `lead` runs the top
+  // corner 0 → barW+barH over the load, so at 100 % the slant has swept fully past
+  // and the pill's own right cap rounds it off.
+  const lead = Math.max(barH, (barW+barH)*progress);
+  const topX = barX+lead, botX = topX-barH;   // 45° progress edge ‖ the twists
+  const clipDiag = () => {                     // everything LEFT of the leading /
+    c2.beginPath();
+    c2.moveTo(topX+4,barY-4); c2.lineTo(botX-4,barY+barH+4);
+    c2.lineTo(barX-barH*2,barY+barH+4); c2.lineTo(barX-barH*2,barY-4);
+    c2.closePath();
+  };
+  if (progress > 0){
+    c2.save(); pill(); c2.clip(); clipDiag(); c2.clip();
+    paintPole(POLE_LIT, lead);
     c2.restore();
-    // White edge — the pill outline paints the left cap + top/bottom (and the
-    // rounded right cap at 100 %), clipped to the filled side; the inset diagonal
-    // adds the leading twist's own highlight.
-    c2.strokeStyle='rgba(255,255,255,.82)'; c2.lineWidth=3;
-    c2.save(); clipDiag(); c2.clip();
-    roundRect(c2,barX,barY,barW,barH,rr); c2.stroke();
-    c2.restore();
-    c2.save(); roundRect(c2,barX,barY,barW,barH,rr); c2.clip();   // keep highlight in-track
+  }
+  // 3 — Aero gloss overlay (top half), across the whole bar now that the pole is
+  c2.save(); pill(); c2.clip();
+  const gl=c2.createLinearGradient(0,barY,0,barY+barH);
+  gl.addColorStop(0,'rgba(255,255,255,.72)'); gl.addColorStop(.44,'rgba(255,255,255,.16)');
+  gl.addColorStop(.45,'rgba(255,255,255,0)'); gl.addColorStop(1,'rgba(255,255,255,0)');
+  c2.fillStyle=gl; c2.fillRect(barX,barY,barW,barH);
+  c2.restore();
+  // 4 — white edge: the bar's own outline, plus a highlight down the progress
+  // edge (clipped to the pill, so at 100 % it slides out and only the cap shows)
+  c2.strokeStyle='rgba(255,255,255,.82)'; c2.lineWidth=3;
+  pill(); c2.stroke();
+  if (progress > 0){
+    c2.save(); pill(); c2.clip();
     c2.beginPath(); c2.moveTo(topX-1,barY); c2.lineTo(botX-1,barY+barH); c2.stroke();
     c2.restore();
   }
@@ -1553,11 +1568,6 @@ function drawLoadingStrip(canvas, progress, animTime){
   c2.fillText(`${Math.min(100,Math.round(progress*100))}%`, W/2, barY+barH+14);
 }
 
-// Auto-load delay: pings fire in PAIRS — both sides of a row land together
-// (no left/right stagger), the east wall riding with the first pair. The
-// clock starts WITH the intro whoosh (not after it), so the front pair is
-// already pinging as you glide in, and the row cadence keeps each pair
-// landing before the player walks up to it.
 // Planar UVs from each vertex's local x,y so the full screenshot maps 1:1 across the
 // front face — and the curved rim's vertices clamp to the nearest edge column, so the
 // page appears to roll over the device's rounded bezel (a hi-tech screen). RoundedBox
@@ -1717,7 +1727,7 @@ function buildGallery(font){
 
   // one frame group = device slab + name plaque + visit? text — shared by the
   // corridor sides and the end walls; placeFrame positions it and registers it
-  function makeFrame(project, loadTrigger, autoDelay, loadDuration, autoReveal){
+  function makeFrame(project, loadTrigger, autoDelay, loadDuration, row){
     const group = new THREE.Group();
 
     // the screen: a flat rounded-rectangle showing the full screenshot stretched to
@@ -1767,8 +1777,8 @@ function buildGallery(font){
       project, visit, label, labelBaseY, scale:0, worldPos:new THREE.Vector3(),
       // ── loading state ──
       loadState:    'pending',               // 'pending' | 'loading' | 'done'
-      loadTrigger, autoDelay, loadDuration, autoReveal,   // autoReveal: this row's scheduled ping-in beat
-      loadProgress: 0, imageReady: false, liveTexture: null,
+      loadTrigger, autoDelay, loadDuration, row,   // row: this frame's place in the cascade chain (auto only)
+      loadProgress: 0, loadElapsed: 0, imageReady: false, liveTexture: null,
       screenMat, panel, whiteTex, strip: null, stripTex: null, stripCanvas: null,
       labelBloop: -1,
     };
@@ -1792,10 +1802,10 @@ function buildGallery(font){
     const row         = Math.floor(i / 2);
     const isGazeFrame = row >= GAZE_ROW_START;  // last N rows are gaze-only
     const f = makeFrame(project,
-      isGazeFrame ? 'gaze'      : 'auto',
-      isGazeFrame ? Infinity    : autoStartForRow(row),
-      isGazeFrame ? GAZE_LOAD_DUR : LOAD_DUR,
-      isGazeFrame ? Infinity    : autoRevealForRow(row));
+      isGazeFrame ? 'gaze'        : 'auto',
+      isGazeFrame ? Infinity      : FIRST_START,
+      isGazeFrame ? GAZE_LOAD_DUR : ROW_BAR_DUR,
+      isGazeFrame ? Infinity      : row);
     // pressed to the glass wall, facing the walkway
     placeFrame(f, side * FRAME_X, START_Z + row * DZ, side < 0 ? Math.PI/2 : -Math.PI/2);
   });
@@ -1877,7 +1887,7 @@ function buildGallery(font){
     // extra per-frame cost (the Reflectors render regardless).
   }
   if (wallProjects.east){
-    const f = makeFrame(wallProjects.east, 'auto', autoStartForRow(0), LOAD_DUR, autoRevealForRow(0));
+    const f = makeFrame(wallProjects.east, 'auto', FIRST_START, ROW_BAR_DUR, 0);   // rides row 0
     // { live:true } slot → wakes as the real page (8c). NOT on touch: a phone
     // has no pointer to hand a portal, so the wall hangs as a normal captured
     // world there — the builder console alone stays fully interactive on touch.
@@ -3739,13 +3749,14 @@ function startFrameLoading(f){
   const u = f.userData;
   if (u.loadState !== 'pending') return;
   u.loadState = 'loading';
+  u.loadElapsed = 0;                 // the bar's window runs from HERE, not from entry
   // Every world plays its loading cutscene before the thumbnail lands — auto and
   // gaze, cached or in-flight. The pre-fetch (see preFetchScreenshots, fired
   // during the menu, GPU-uploaded before Enter) means the capture is usually
   // already sitting in the cache by ping time, but the bar plays regardless:
-  // updateLoadingSystem reveals the moment BOTH the bar has played through (auto:
-  // the row's scheduled beat, autoReveal; gaze: the full bar) AND the fetch has
-  // settled. A bar that outlasts its beat means a fetch genuinely still in flight.
+  // updateLoadingSystem reveals the moment BOTH the bar has played through (its
+  // own loadDuration) AND the fetch has settled. A bar that outlasts its window
+  // means a fetch genuinely still in flight.
   // lazy-alloc the strip (canvas + texture + plane): only panels actually
   // mid-cutscene hold one — revealWorld frees it again
   if (!u.strip){
@@ -3818,47 +3829,55 @@ function revealWorld(f){
 function updateLoadingSystem(dt, t){
   if (!galleryStartTime) return;
   const elapsed = performance.now() / 1000 - galleryStartTime;
+  // The cascade's gate: the lowest auto row still mid-bar. Only that row may be
+  // loading — a row behind it stays pending (flat white, no canvas, no fetch)
+  // until it pings. A row past ROW_STALL_CAP stops holding the gate so a hung
+  // capture releases the hall behind it instead of freezing it.
+  let gate = Infinity;
+  for (const f of frames){
+    const u = f.userData;
+    if (u.loadTrigger === 'auto' && u.loadState === 'loading' && u.loadElapsed < ROW_STALL_CAP){
+      gate = Math.min(gate, u.row);
+    }
+  }
   for (const f of frames){
     const u = f.userData;
     if (u.loadState === 'done') continue;
     if (u.loadState === 'pending'){
       // gaze frames (the west wall + the last row) fire ONLY from the player's
-      // look and stay blank until then; auto frames fire on the row's START beat
-      // (autoStartForRow) so the whole hall lights up as a wave near entry —
-      // looking at a panel never hurries its ping.
-      if (u.loadTrigger === 'gaze' ? f === activeFrame : elapsed >= u.autoDelay){
-        startFrameLoading(f); continue;
+      // look and stay blank until then; looking at a panel never hurries its ping.
+      // An auto frame needs the intro beat AND its turn in the chain: its own row
+      // is already up (its pair-mate / the east wall opened it), or the hall is
+      // clear and this is the next row down. `frames` runs in row order, so the
+      // front-most pending row is always the one that takes a clear gate.
+      const ready = u.loadTrigger === 'gaze'
+        ? f === activeFrame
+        : (elapsed >= u.autoDelay && u.row <= gate);
+      if (ready){
+        startFrameLoading(f);
+        if (u.loadTrigger === 'auto') gate = Math.min(gate, u.row);   // this row now holds it
+        continue;
       }
       // pending state = solid white, nothing to animate
     }
     if (u.loadState === 'loading'){
       const cached = prefetchMap.get(u.project.url);
       const settled = cached !== 'pending';   // preFetch never leaves a url pending (see runCaptureQueue)
-      let due;
-      if (u.loadTrigger === 'gaze'){
-        // gaze: a fixed-pace bar (GAZE_LOAD_DUR) — its cutscene answers the look —
-        // eased to full, then it takes whatever the cache settled to
-        u.loadProgress = Math.min(settled ? 1 : 0.95, u.loadProgress + dt / u.loadDuration);
-        due = u.loadProgress >= 1;
-      } else {
-        // auto: the bar fills ACROSS this row's window (start → autoReveal) so the
-        // corridor of bars eases to full and resolves front-to-back on the cascade,
-        // not one-by-one as you approach. It holds just under full (barber pole
-        // still scrolling) only if the fetch is genuinely still in flight past the
-        // row's beat — a cached world simply pings in right on cue.
-        const win    = Math.max(0.15, u.autoReveal - u.autoDelay);
-        const filled = clamp((elapsed - u.autoDelay) / win, 0, 1);
-        due = elapsed >= u.autoReveal;
-        u.loadProgress = Math.min(filled, settled && due ? 1 : 0.97);
-      }
-      if (settled && due){
+      u.loadElapsed += dt;
+      // Every world plays its bar over its OWN window, timed from its own start —
+      // auto (the row's beat, ROW_BAR_DUR) and gaze (GAZE_LOAD_DUR) alike. It eases
+      // to full and then holds just under it (pole still scrolling) only if the
+      // fetch is genuinely still in flight; a cached world pings in right on cue.
+      const played = u.loadElapsed >= u.loadDuration;
+      u.loadProgress = Math.min(u.loadElapsed / u.loadDuration, settled ? 1 : 0.97);
+      if (settled && played){
         u.liveTexture = (cached instanceof THREE.Texture) ? cached : null;
         u.imageReady = true;
         revealWorld(f); continue;
       }
-      // repaint the scrolling pole — rate eased on mobile since a hallful of bars
-      // now animates at once (the staggered starts already spread the uploads
-      // across frames). The pole drifts slowly enough that this reads as smooth.
+      // repaint the scrolling pole — only the one row mid-cascade (plus whatever
+      // the player is looking at) is ever painting one. The pole drifts slowly
+      // enough that a rate well under the frame rate still reads as smooth.
       const barHz = lowPerf ? 1/18 : 1/32;
       if (t - u.lastBarPaint >= barHz){
         u.lastBarPaint = t;

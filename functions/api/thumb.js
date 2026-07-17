@@ -40,7 +40,10 @@ const te = new TextEncoder();
 // The /thumbs toggle OWNS the active slot. A world held to thum.io carries
 // prov:<url> (no TTL — it outlives every 24h crop cycle), written on /thumbs
 // via a hold=1 Fetch or a Swap that lands on thum.io; no key = microlink, the
-// default. A PUT from the NON-preferred provider can never take the active
+// default. Above BOTH sits owner.config.json's thumbLock (see ownerLocks): a
+// world pinned there ignores the hold entirely — that is what keeps a visitor's
+// auto-refresh, a /thumbs Fetch and the cron all on one provider without any of
+// them having to agree first. A PUT from the NON-preferred provider can never take the active
 // slot — it parks as alt — so gallery visitors' auto-captures can't bump what
 // the owner picked, even when the active crop has expired. Sole exception: an
 // UNHELD world with an EMPTY slot takes a thum.io fallback (short TTL) — a
@@ -50,6 +53,48 @@ const te = new TextEncoder();
 //   · every GET reports x-thumb-alt (the parked crop's provider) so clients
 //     backfill the missing side of the pair in the background.
 // Swapping back to microlink (or a hold=1 microlink Fetch) deletes the key.
+// ── owner-config provider locks (thumbLock) ───────────────────────────────
+// A world may be pinned to one capture provider in owner.config.json. That is
+// the owner's STANDING pick, so it outranks the store's own prov:<url> hold
+// everywhere the hold is consulted — GET's x-thumb-prov-want and PUT's
+// active-slot guard. Resolving it HERE is what puts every path on one
+// provider: a visitor's auto-refresh reads the want header, the cron and the
+// gallery both PUT through the same guard, and /thumbs greys its Swap out. No
+// client has to agree, and no hold has to be converged first.
+// Read from the same places, in the same order, as the site itself: the
+// OWNER_CONFIG secret when set, else the deployment's own committed
+// owner.config.json. A fork/template tracks no such file and sets no secret →
+// no locks → the store's hold stands alone, exactly as before.
+// Cached per isolate: the file is a static asset of THIS deployment, so it
+// cannot change under us without a new deployment.
+const withProto = u => /^https?:\/\//i.test(u) ? u : 'https://' + u;
+const LOCKS_TTL_MS = 60_000;
+let _locks = null, _locksAt = 0;
+async function ownerLocks(env, request){
+  if (_locks && Date.now() - _locksAt < LOCKS_TTL_MS) return _locks;
+  const m = new Map();
+  try {
+    let raw = env.OWNER_CONFIG;
+    if (!raw && env.ASSETS){
+      const r = await env.ASSETS.fetch(new URL('/owner.config.json', request.url));
+      if (r.ok) raw = await r.text();
+    }
+    if (raw){
+      const cfg = JSON.parse(raw);
+      const add = w => {
+        const l = w?.thumbLock;
+        const url = typeof w?.url === 'string' ? w.url.trim() : '';
+        if (!url || (l !== 'thumio' && l !== 'microlink')) return;
+        m.set(url, l); m.set(withProto(url), l);   // clients key on either form
+      };
+      (cfg.projects || []).forEach(add);
+      for (const s of ['west', 'east']) add(cfg.walls?.[s]);
+    }
+  } catch { /* no config / unreadable / bad json → no locks, hold stands alone */ }
+  _locks = m; _locksAt = Date.now();
+  return m;
+}
+
 const objKey  = url => 'thumb:' + url;
 const altKey  = url => 'alt:' + url;
 const prefKey = url => 'prov:' + url;
@@ -117,7 +162,10 @@ export async function onRequest({ request, env }){
       const { value, metadata } = await store.getWithMetadata(objKey(target), { type: 'arrayBuffer' });
       if (value){
         const ageS = Math.max(0, (Date.now() - (metadata?.ts || 0)) / 1000);
-        const [want, alt] = await Promise.all([store.get(prefKey(target)), altProvOf(store, target)]);
+        const [held, alt, locks] = await Promise.all([
+          store.get(prefKey(target)), altProvOf(store, target), ownerLocks(env, request),
+        ]);
+        const want = locks.get(target) || held;   // owner.config outranks the store's hold
         // Cache for MINUTES, not the whole TTL: an uploaded/refreshed crop should
         // reach the gallery quickly, and re-reading KV costs nothing (it never
         // touches microlink — the store existing is what protects the IP quota).
@@ -146,10 +194,11 @@ export async function onRequest({ request, env }){
       }
     }
     // miss / expired / no store → invite a capture (client PUTs it back),
-    // naming the world's held provider so the refresh honours the owner's pick
-    const [want, alt] = store
+    // naming the world's pinned provider so the refresh honours the owner's pick
+    const [held, alt] = store
       ? await Promise.all([store.get(prefKey(target)), altProvOf(store, target)])
       : [null, null];
+    const want = (await ownerLocks(env, request)).get(target) || held;
     const h = {
       'x-thumb-ask': await token(secret, target, slotNow()),
       'access-control-allow-origin': '*',
@@ -177,11 +226,16 @@ export async function onRequest({ request, env }){
     // landing on thum.io pins it for every future auto-refresh, landing back
     // on microlink releases it.
     if (u.searchParams.get('swap')){
+      const hdrs = { 'content-type': 'application/json', 'access-control-allow-origin': '*', 'cache-control': 'no-store' };
+      // a swap rewrites the hold, so a locked world has nothing to exchange —
+      // /thumbs already greys its pill out; this closes the direct call
+      const swapLock = (await ownerLocks(env, request)).get(target);
+      if (swapLock)
+        return new Response(JSON.stringify({ swapped: false, locked: swapLock }), { status: 409, headers: hdrs });
       const [act, alt] = await Promise.all([
         store.getWithMetadata(objKey(target), { type: 'arrayBuffer' }),
         store.getWithMetadata(altKey(target), { type: 'arrayBuffer' }),
       ]);
-      const hdrs = { 'content-type': 'application/json', 'access-control-allow-origin': '*', 'cache-control': 'no-store' };
       if (!alt?.value) return new Response(JSON.stringify({ swapped: false }), { status: 404, headers: hdrs });
       // the promoted crop keeps its capture ts but gets a fresh ver (activation
       // stamp) so a running gallery sees the active slot changed even though the
@@ -217,14 +271,20 @@ export async function onRequest({ request, env }){
     // hold=1 marks a DELIBERATE /thumbs fetch: the world's future auto-refresh
     // follows this provider (thum.io pins the hold, microlink releases it).
     // Gallery auto-uploads never send it, so they can't re-pin anything.
+    // An owner.config thumbLock is the standing pick and simply wins: no hold
+    // write can move it, so the store never records a pin that contradicts the
+    // config (drop the lock and whatever was held before is what returns).
+    const lock = (await ownerLocks(env, request)).get(target) || null;
     const hold = !!u.searchParams.get('hold');
-    if (hold){
+    if (hold && !lock){
       if (prov === 'thumio') await store.put(prefKey(target), 'thumio');
       else await store.delete(prefKey(target));
     }
-    const pref = hold ? (prov === 'thumio' ? 'thumio' : null)
+    // 'thumio' pins the active slot; null = released (microlink, the default)
+    const pref = lock ? (lock === 'thumio' ? 'thumio' : null)
+               : hold ? (prov === 'thumio' ? 'thumio' : null)
                       : await store.get(prefKey(target));
-    // the /thumbs toggle's pick for this world: held → thum.io, else microlink
+    // this world's pick: pinned → thum.io, else microlink
     const prefProv = pref || 'microlink';
 
     const cur = await store.getWithMetadata(objKey(target), { type: 'arrayBuffer' });

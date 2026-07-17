@@ -46,6 +46,13 @@ export const CONFIG = {
   // the gallery corridor and the glass floor + walls lengthen to fit.
   //   name → the plaque mounted on the panel (revealed when the world loads)
   //   url  → where the "visit?" swoop takes you (and what gets screenshotted)
+  //   thumbLock (optional) → pin THIS world's thumbnail to one capture provider,
+  //          "thumio" or "microlink". Some pages only ever come out right on one
+  //          of them, so the lock takes the choice off the table: /thumbs greys
+  //          out that world's ⇄ Swap pill ("owner config locked") and every Fetch
+  //          captures via the locked provider, which pins the shared store's
+  //          auto-refresh there for every visitor too. Omit it and the world
+  //          stays swappable (the default).
   //
   // Order reads in PAIRS from the entrance to the back of the hall, front row first.
   // You spawn facing INTO the hall (+z), and for a +z-facing viewer "right" is -x,
@@ -104,6 +111,8 @@ export const CONFIG = {
   // panel on its far wall pointing back here — the loop that grows the place.
   // Owners who keep the builder ON park this under the console instead (the
   // strings survive); owners who want it gone just clear them in the console.
+  // A wall slot takes the same optional thumbLock as a project (see above) —
+  // /thumbs lists these slots like any other world, live ones included.
   walls: {
     west: { on: true, name: "Build a Gallery", url: "https://frutiger-gallery.pages.dev/", live: false },
     east: { on: true, name: "Designer", url: "https://akilluminati47.pages.dev/", live: false },
