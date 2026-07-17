@@ -231,6 +231,22 @@ Each world can use **microlink** or **thum.io** individually, swapped from the
 [`/thumbs`](#dashboard---thumbs) dashboard (or the pause menu's Thumbnails
 button). The choice sticks per world across refreshes.
 
+**Locking a world's provider.** Some pages only ever come out right on one of
+them. Add a `thumbLock` line to that world in your owner config — on any project
+or wall slot, `"thumio"` or `"microlink"`:
+
+```jsonc
+{ "name": "YouTube", "url": "https://youtube.com/@you", "thumbLock": "thumio" }
+```
+
+That pin is your standing pick, so it **outranks everything else** — every path
+follows it without anything having to agree first: a visitor's auto-refresh
+captures through it, the daily cron can't replace it (its crop parks as the
+spare instead), and `/thumbs` greys that world's **⇄ Swap** pill out with an
+*"owner config locked"* note. Leave the line out and the world stays swappable
+exactly as before. Worlds already holding the other provider's crop change over
+on their next refresh — press **Fetch** once to do it immediately.
+
 KV is on the **free** Workers plan (no card, unlike R2) and a set of ~15–80 KB
 crops is a rounding error against its limits. To enable it on a deployment:
 
