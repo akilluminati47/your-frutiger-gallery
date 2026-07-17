@@ -274,11 +274,19 @@ downgrades a sharp crop to a thum.io fallback on refresh — a weak fallback onl
 fills a slot that has nothing.
 
 **Daily keep-warm (optional).** [`.github/workflows/thumbs-cron.yml`](.github/workflows/thumbs-cron.yml)
-runs [`tools/capture-thumbs.mjs`](tools/capture-thumbs.mjs) once a day to refresh
-each crop (best-effort microlink recapture from the runner's IP, otherwise it
-re-touches the stored crop so it never silently expires). Opt in by setting an
-Actions **repository variable** `SITE_URL` to your Pages URL; without it the job
-no-ops. Also runnable on demand from the Actions tab.
+runs [`tools/capture-thumbs.mjs`](tools/capture-thumbs.mjs) once a day and
+refreshes **both** of each world's crops: it reads that world's pinned provider
+(a `thumbLock`, else a thum.io hold, else microlink), captures **that** one as
+the shown crop, and captures the **other** one into the spare slot so ⇄ Swap
+stays instant instead of quietly expiring. If a capture fails it re-touches the
+stored crop so a good one never silently expires. This costs no extra microlink
+quota — exactly one of the two is microlink, so it stays at one microlink
+capture per world from the runner's IP (which has real quota, unlike
+Cloudflare's shared one), and the thum.io side rides your own `/api/shot`
+proxy for free. A world you pin **after** its crop was taken changes over on
+the next nightly run. Opt in by setting an Actions **repository variable**
+`SITE_URL` to your Pages URL; without it the job no-ops. Also runnable on
+demand from the Actions tab.
 
 </details>
 
