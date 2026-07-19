@@ -156,6 +156,30 @@ export async function onRequest({ request, env }){
   const target = u.searchParams.get('url');
   if (!target) return new Response('missing url', { status: 400 });
 
+  // ── serve the PARKED (alt / Swap) crop's own bytes ──
+  // The active GET only reports the parked provider in x-thumb-alt, never its
+  // image. The keep-warm cron needs the bytes so it can RE-TOUCH the spare (reset
+  // its 24h TTL) on a day the "other provider" capture is down — the same failsafe
+  // the active slot already gets, so the Swap option never silently expires either.
+  // Always hands out an upload token so the caller can re-PUT ?alt=1.
+  if (request.method === 'GET' && u.searchParams.get('alt')){
+    const h = {
+      'x-thumb-ask': await token(secret, target, slotNow()),
+      'access-control-allow-origin': '*',
+      'access-control-expose-headers': 'x-thumb-ask, x-thumb-prov',
+      'cache-control': 'no-store',
+    };
+    if (store){
+      const { value, metadata } = await store.getWithMetadata(altKey(target), { type: 'arrayBuffer' });
+      if (value){
+        h['content-type'] = metadata?.contentType || 'image/png';
+        h['x-thumb-prov'] = provOf(metadata);
+        return new Response(value, { headers: h });
+      }
+    }
+    return new Response('no alt', { status: 404, headers: h });
+  }
+
   // ── serve a stored crop, or invite the client to capture one ──
   if (request.method === 'GET'){
     if (store){

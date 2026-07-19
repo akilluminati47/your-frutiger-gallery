@@ -1,14 +1,24 @@
-# Daily keep-warm for the shared thumbnail store (/api/thumb).
+# Keep-warm for the shared thumbnail store (/api/thumb).
 #
-# Opt-in per deployment: set a repository variable SITE_URL to your Pages URL
-# (Settings → Secrets and variables → Actions → Variables → New: SITE_URL =
-# https://your-site.pages.dev). Without it the job no-ops. Also runnable on
-# demand from the Actions tab. See tools/capture-thumbs.mjs for what it does.
+# Runs on THREE cues, all opt-in behind a repository variable SITE_URL set to
+# your Pages URL (Settings → Secrets and variables → Actions → Variables → New:
+# SITE_URL = https://your-site.pages.dev). Without it the job no-ops.
+#   • push  — every deploy pre-fetches all the sources, so the store is already
+#             full before the first human visitor arrives. This is what stops the
+#             first visit of the day eating a laggy live capture: the deploy warms
+#             it, no visitor ever has to. (Waits for the new deploy to go live
+#             first, so it reads the freshly-deployed world list.)
+#   • daily — a nightly top-up between deploys, re-touching any crop whose capture
+#             is down so nothing silently expires on its 24h TTL.
+#   • manual — runnable on demand from the Actions tab.
+# See tools/capture-thumbs.mjs for exactly what each run does to the store.
 name: Warm thumbnails
 
 on:
+  push:
+    branches: [main, console]   # the production branches CF Pages deploys
   schedule:
-    - cron: '17 8 * * *'      # daily ~08:17 UTC
+    - cron: '17 8 * * *'        # daily ~08:17 UTC
   workflow_dispatch: {}
 
 permissions:
@@ -26,6 +36,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
+      # A push fires this in parallel with Cloudflare's build; give the new deploy
+      # time to go live so the warm reads the freshly-deployed world list and the
+      # updated Functions, not the previous version. Skipped for cron/manual runs.
+      - name: Wait for the new deploy to go live
+        if: github.event_name == 'push'
+        run: sleep 150
       - name: Warm the store
         env:
           SITE_URL: ${{ vars.SITE_URL }}
