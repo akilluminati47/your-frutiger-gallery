@@ -273,20 +273,25 @@ button), so a visitor can't push arbitrary images into it. The gallery never
 downgrades a sharp crop to a thum.io fallback on refresh — a weak fallback only
 fills a slot that has nothing.
 
-**Daily keep-warm (optional).** [`.github/workflows/thumbs-cron.yml`](.github/workflows/thumbs-cron.yml)
-runs [`tools/capture-thumbs.mjs`](tools/capture-thumbs.mjs) once a day and
+**Keep-warm — on every deploy, and nightly (optional).**
+[`.github/workflows/thumbs-cron.yml`](.github/workflows/thumbs-cron.yml) runs
+[`tools/capture-thumbs.mjs`](tools/capture-thumbs.mjs) **on every push/deploy**
+(after waiting for the new deploy to go live) and again **once a day**. Each run
 refreshes **both** of each world's crops: it reads that world's pinned provider
 (a `thumbLock`, else a thum.io hold, else microlink), captures **that** one as
 the shown crop, and captures the **other** one into the spare slot so ⇄ Swap
-stays instant instead of quietly expiring. If a capture fails it re-touches the
-stored crop so a good one never silently expires. This costs no extra microlink
-quota — exactly one of the two is microlink, so it stays at one microlink
-capture per world from the runner's IP (which has real quota, unlike
-Cloudflare's shared one), and the thum.io side rides your own `/api/shot`
-proxy for free. A world you pin **after** its crop was taken changes over on
-the next nightly run. Opt in by setting an Actions **repository variable**
-`SITE_URL` to your Pages URL; without it the job no-ops. Also runnable on
-demand from the Actions tab.
+stays instant. If either capture fails it **re-touches** the stored crop —
+active slot *and* spare — so neither ever silently expires; the store is never
+left thumbnail-lacking. Because the deploy itself pre-fetches every source, the
+store is already full before the first human visitor arrives, so **no visitor
+ever eats a laggy live capture** — that path stays only as the fallback for a
+world the store has nothing for yet. This costs no extra microlink quota —
+exactly one of the two is microlink, so it stays at one microlink capture per
+world from the runner's IP (which has real quota, unlike Cloudflare's shared
+one), and the thum.io side rides your own `/api/shot` proxy for free. A world
+you pin **after** its crop was taken changes over on the next run. Opt in by
+setting an Actions **repository variable** `SITE_URL` to your Pages URL; without
+it the job no-ops. Also runnable on demand from the Actions tab.
 
 </details>
 

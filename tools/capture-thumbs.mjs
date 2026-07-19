@@ -9,7 +9,10 @@
 //      the capture fails, re-PUTs the existing bytes so a good crop never
 //      silently expires on a low-traffic day;
 //   3. captures the OTHER provider and PUTs it with ?alt=1, so the /thumbs
-//      Swap option stays fresh instead of quietly expiring on its own 24h TTL.
+//      Swap option stays fresh instead of quietly expiring on its own 24h TTL —
+//      or, if THAT capture also fails, GETs the parked crop's bytes (?alt=1) and
+//      re-PUTs them, the same re-touch the active slot gets, so neither slot ever
+//      silently expires and the store is never left thumbnail-lacking.
 //
 // Doing both costs no extra microlink quota. Exactly one of {pinned, other} is
 // microlink, so it is still ONE microlink capture per world from the runner's
@@ -64,6 +67,21 @@ async function capture(url, prov){
     if (!type.startsWith('image/')) return null;
     const buf = Buffer.from(await r.arrayBuffer());
     return buf.length > 1500 ? { buf, type } : null;
+  } catch { return null; }
+}
+
+// The parked (alt / Swap) crop's own bytes + its true provider, so a down-capture
+// day can re-touch the spare instead of letting it expire. null = nothing parked.
+async function getAlt(url){
+  try {
+    const r = await fetch(`${SITE}/api/thumb?url=${enc(url)}&alt=1`, { cache:'no-store' });
+    if (!r.ok) return null;
+    const type = r.headers.get('content-type') || 'image/png';
+    if (!type.startsWith('image/')) return null;
+    const buf = Buffer.from(await r.arrayBuffer());
+    return buf.length > 1500
+      ? { buf, type, prov: r.headers.get('x-thumb-prov') || 'microlink' }
+      : null;
   } catch { return null; }
 }
 
@@ -136,10 +154,21 @@ async function warmOne(url){
   // ── the PARKED slot: the other provider, so ⇄ Swap stays instant ──
   // The spare carries the same 24h TTL as the active crop, so it needs its own
   // refresh or the Swap option quietly expires between visits.
+  let altState;
   const cold = await capture(url, other);
-  const alt  = cold ? await put(url, token, other, cold, true) : false;
+  if (cold) altState = await put(url, token, other, cold, true) ? 'alt' : 'alt-failed';
+  else {
+    // capture down → re-touch the existing spare so the Swap option never
+    // silently expires either (the same failsafe the active slot gets above).
+    // Re-PUT under its OWN true provider tag, not `other`, so a swap doesn't
+    // mislabel it. Nothing parked → simply skip (a real visitor fills it).
+    const spare = await getAlt(url);
+    altState = spare
+      ? (await put(url, token, spare.prov, spare, true) ? 'alt-kept' : 'alt-failed')
+      : 'no-alt';
+  }
 
-  return `${state}/${alt ? 'alt' : 'no-alt'}`;
+  return `${state}/${altState}`;
 }
 
 const list = await worlds();
