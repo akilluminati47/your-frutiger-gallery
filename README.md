@@ -276,8 +276,16 @@ fills a slot that has nothing.
 **Keep-warm — on every deploy, and nightly (optional).**
 [`.github/workflows/thumbs-cron.yml`](.github/workflows/thumbs-cron.yml) runs
 [`tools/capture-thumbs.mjs`](tools/capture-thumbs.mjs) **on every push/deploy**
-(after waiting for the new deploy to go live) and again **once a day**. Each run
-refreshes **both** of each world's crops: it reads that world's pinned provider
+(after waiting for the new deploy to go live) and again **once a day** — but the
+two behave differently. A **deploy warms only the gaps**: brand-new or expired
+links get captured so the first visitor isn't laggy, while **every crop that
+already exists is left exactly as it is** — reorganising `owner.config` (moving a
+world between slots, duplicating a link) or redeploying never re-shoots or
+downgrades your curated thumbnails, and spends no capture quota on links already
+covered (crops are keyed by URL, not slot, so a moved/duplicated link reuses its
+stored crop for free). The **daily** run is the full refresh, and only it — plus
+the **Fetch**/**⇄ Swap** buttons — ever changes a crop you already have. Each
+full run refreshes **both** of each world's crops: it reads that world's pinned provider
 (a `thumbLock`, else a thum.io hold, else microlink), captures **that** one as
 the shown crop, and captures the **other** one into the spare slot so ⇄ Swap
 stays instant. If either capture fails it **re-touches** the stored crop —
