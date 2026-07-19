@@ -114,7 +114,7 @@ export const CONFIG = {
   // A wall slot takes the same optional thumbLock as a project (see above) —
   // /thumbs lists these slots like any other world, live ones included.
   walls: {
-    west: { on: true, name: "Build a Gallery", url: "https://frutiger-gallery.pages.dev/", live: false },
+    west: { on: true, name: "Build a Gallery", url: "https://your-frutiger-gallery.pages.dev/", live: false },
     east: { on: true, name: "Designer", url: "https://akilluminati47.pages.dev/", live: false },
   },
 

@@ -8,7 +8,7 @@
   "pause": { "title": "paused", "note": "done looking?", "resume": "explore", "thumbs": "thumbs" },
   "console": { "enabled": false },
   "walls": {
-    "west": { "on": true, "name": "Build Yours", "url": "https://frutiger-gallery.pages.dev/", "live": false },
+    "west": { "on": true, "name": "Build Yours", "url": "https://your-frutiger-gallery.pages.dev/", "live": false },
     "east": { "on": true, "name": "Procedural Quilt", "url": "https://procedural-quilt.pages.dev/", "live": true }
   },
   "projects": [
