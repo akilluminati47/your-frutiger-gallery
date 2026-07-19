@@ -1,7 +1,17 @@
-// Keeps a deployment's shared thumbnail store (/api/thumb) warm on a schedule.
+// Keeps a deployment's shared thumbnail store (/api/thumb) warm.
 //
-// Run by .github/workflows/thumbs-cron.yml once a day. For each world it fills
-// BOTH of the store's slots — the ACTIVE crop and the PARKED (alt) one:
+// Run by .github/workflows/thumbs-cron.yml on two cues, and it behaves
+// differently for each (env FILL_ONLY):
+//   • ON DEPLOY (push, FILL_ONLY=1) — FILL mode: warm only the GAPS. A world
+//     that already has a crop is left exactly as it is, so a redeploy preserves
+//     every curated thumbnail and spends no quota on links already covered; only
+//     brand-new/expired links get captured. (Crops are keyed by URL not slot, so
+//     a reorg that just moves/duplicates a link reuses its crop for free.)
+//   • DAILY (schedule) / manual (FILL_ONLY unset) — FULL refresh + touch-up:
+//     re-shoot both slots, re-touching the stored bytes when a capture is down.
+//
+// For each world it fills BOTH of the store's slots — the ACTIVE crop and the
+// PARKED (alt) one (fill mode skips a world outright once its ACTIVE slot exists):
 //   1. GETs /api/thumb?url= for the current crop, an upload token, and
 //      x-thumb-prov-want — the world's PINNED provider (an owner.config
 //      thumbLock, else the store's own thum.io hold, else microlink);
@@ -35,6 +45,13 @@
 
 const SITE = (process.env.SITE_URL || '').replace(/\/+$/, '');
 if (!SITE){ console.log('SITE_URL not set — nothing to do.'); process.exit(0); }
+
+// FILL_ONLY=1 is the DEPLOY warm (the workflow's push trigger): warm only the
+// GAPS and never re-shoot a crop that already exists, so a redeploy preserves
+// every curated thumbnail exactly and spends no provider quota on links that are
+// already covered. Unset = the daily cron's FULL refresh/touch-up cycle. See
+// warmOne + the header note.
+const FILL_ONLY = process.env.FILL_ONLY === '1';
 
 const SHOT_W = 1600, SHOT_H = 900;
 const withProto = u => /^https?:\/\//i.test(u) ? u : 'https://' + u;
@@ -137,6 +154,19 @@ async function warmOne(url){
   } catch {}
   if (!token){ return 'no-store'; }   // KV not bound on this deployment
 
+  // ── deploy/fill mode: preserve every existing crop, warm only the gaps ──
+  // On a push the owner may have just reorganised owner.config — moved a world
+  // between slots, duplicated a link, added a new one. Crops are keyed by URL,
+  // not slot, so a moved/duplicated link already reuses its stored crop for free.
+  // This goes one further: a world that ALREADY has a crop is left exactly as it
+  // is (same bytes, same look, zero quota, no chance of a fresh shot landing on a
+  // weak fallback) — only a brand-new or expired link (empty active slot) gets
+  // captured, so a reorg's new slabs are warm for the first visitor while nothing
+  // existing is touched. The daily cron stays the one refresh/touch-up cycle, and
+  // Fetch/Swap do the rest — exactly the "don't change what I've already curated
+  // unless I ask or the 24h cron runs" rule.
+  if (FILL_ONLY && existing) return 'kept-fill';
+
   const active = want === 'thumio' ? 'thumio' : 'microlink';
   const other  = active === 'thumio' ? 'microlink' : 'thumio';
 
@@ -173,7 +203,7 @@ async function warmOne(url){
 
 const list = await worlds();
 if (!list.length){ console.log('No worlds resolved from', SITE); process.exit(0); }
-console.log(`Warming ${list.length} thumbnails on ${SITE} — both providers per world`);
+console.log(`Warming ${list.length} thumbnails on ${SITE} — ${FILL_ONLY ? 'FILL-ONLY (gaps only, existing crops preserved)' : 'full refresh'} — both providers per world`);
 const tally = {};
 for (const url of list){
   const r = await warmOne(url);

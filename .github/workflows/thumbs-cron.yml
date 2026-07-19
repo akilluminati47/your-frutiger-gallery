@@ -3,13 +3,14 @@
 # Runs on THREE cues, all opt-in behind a repository variable SITE_URL set to
 # your Pages URL (Settings → Secrets and variables → Actions → Variables → New:
 # SITE_URL = https://your-site.pages.dev). Without it the job no-ops.
-#   • push  — every deploy pre-fetches all the sources, so the store is already
-#             full before the first human visitor arrives. This is what stops the
-#             first visit of the day eating a laggy live capture: the deploy warms
-#             it, no visitor ever has to. (Waits for the new deploy to go live
-#             first, so it reads the freshly-deployed world list.)
-#   • daily — a nightly top-up between deploys, re-touching any crop whose capture
-#             is down so nothing silently expires on its 24h TTL.
+#   • push  — every deploy warms only the GAPS (FILL_ONLY=1): brand-new/expired
+#             links get captured so the first visitor isn't laggy, while every
+#             crop that already exists is preserved exactly — a reorg or redeploy
+#             never re-shoots or downgrades your curated thumbnails, and spends no
+#             quota on links already covered. (Waits for the deploy to go live so
+#             it reads the freshly-deployed world list.)
+#   • daily — the FULL refresh + touch-up cycle: re-shoots both slots and
+#             re-touches any crop whose capture is down so nothing expires.
 #   • manual — runnable on demand from the Actions tab.
 # See tools/capture-thumbs.mjs for exactly what each run does to the store.
 name: Warm thumbnails
@@ -42,7 +43,11 @@ jobs:
       - name: Wait for the new deploy to go live
         if: github.event_name == 'push'
         run: sleep 150
+      # On a push (deploy) warm in FILL-ONLY mode: only new/expired links are
+      # captured, every existing crop is preserved as-is (no re-shoot, no quota).
+      # The daily/manual run leaves FILL_ONLY unset → full refresh + touch-up.
       - name: Warm the store
         env:
           SITE_URL: ${{ vars.SITE_URL }}
+          FILL_ONLY: ${{ github.event_name == 'push' && '1' || '' }}
         run: node tools/capture-thumbs.mjs
