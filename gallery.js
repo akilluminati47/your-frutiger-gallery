@@ -433,12 +433,21 @@ function verOf(res){
 // the Reflectors bounce), normal panels through the map + aspect snap. Frames
 // still loading need no touch — they pick the new crop up at reveal.
 function applyThumbToFrames(url, tex){
+  if (!tex) return;
   for (const f of frames){
     const u = f.userData;
     if (u.project?.url !== url || u.loadState !== 'done') continue;
+    const wasReady = u.imageReady;
     u.liveTexture = tex;
+    u.imageReady = true;
     if (u.liveWall) dressLivePanel(u, tex);
-    else { u.screenMat.map = tex; u.screenMat.needsUpdate = true; fitPanelToImage(u, tex); }
+    else {
+      u.screenMat.map = tex; u.screenMat.needsUpdate = true; fitPanelToImage(u, tex);
+      // a panel that revealed blank (crop still warming) lights its name plaque
+      // in colour and pings the moment the real crop lands — the "ping in" the
+      // visitor sees right after the faux loading, never a stalled half-load
+      if (!wasReady){ u.labelBloop = 0; audio.ping(u.worldPos); }
+    }
   }
 }
 
@@ -489,11 +498,33 @@ try {
   bc.onmessage = e => { if (e.data === 'changed') refreshStoredThumbs(); };
 } catch { /* no BroadcastChannel → focus/visibility still cover it */ }
 
+// ── the 24/7 warm-store poll: no slab may sit blank ──
+// The store is warmed on every deploy and self-heals from visitors, so any
+// panel that revealed WITHOUT a crop (store miss / a capture that resolved
+// empty at reveal time) keeps pulling from KV until its texture lands and pings
+// in through applyThumbToFrames — which lights the greyed name plaque and opens
+// the world for visiting. captureThumb is store-first, so this is a cheap KV GET
+// in the common case; it self-quiets the moment every world holds a real crop.
+function warmMissingThumbs(){
+  if (document.hidden) return;
+  const missing = [...galleryScreenshotUrls()]
+    .filter(u => !(prefetchMap.get(u) instanceof THREE.Texture));
+  if (!missing.length) return;
+  runCaptureQueue(missing, (url, tex) => { if (tex){ applyThumbToFrames(url, tex); dressLiveWalls(url, tex); } });
+}
+// steady heartbeat — long enough to stay gentle on the capture providers, short
+// enough that a transient miss fills within a beat or two of the faux loading
+setInterval(warmMissingThumbs, 12000);
+
 function preFetchScreenshots(){
   // corridor worlds + the end-wall slots (independent strings outside projects,
   // keyed by their trimmed url) — all queued through the concurrency limiter so
   // the GPU upload happens while the menu idles: a reveal is a zero-hitch swap.
-  runCaptureQueue([...galleryScreenshotUrls()], dressLiveWalls).then(() => {
+  // onEach dresses live-wall mirrors (dressLiveWalls) AND pushes the crop onto
+  // any frame that already revealed — the instant CTA (revealed at boot, blank
+  // until its crop lands) and any panel that came up before its capture settled.
+  const onPre = (url, tex) => { dressLiveWalls(url, tex); applyThumbToFrames(url, tex); };
+  runCaptureQueue([...galleryScreenshotUrls()], onPre).then(() => {
     retryLiveWalls(1);
     // one store-truth sweep a beat after boot: a reopen within ~5 min of a
     // /thumbs swap loads the STALE crop from cache and the focus/visibility
@@ -1777,10 +1808,16 @@ function buildGallery(font){
       project, visit, label, labelBaseY, scale:0, worldPos:new THREE.Vector3(),
       // ── loading state ──
       loadState:    'pending',               // 'pending' | 'loading' | 'done'
+      // instant = a CTA world that skips the faux-loading cutscene AND the gaze
+      // wait: it reveals ready and stays visitable from the first frame, its crop
+      // pinging in from the warm store whenever it lands (see updateLoadingSystem).
+      // Used for the template "Build Yours" slab — the viral loop must never sit
+      // greyed behind its own thumbnail load.
+      instant:      !!project.instant,
       loadTrigger, autoDelay, loadDuration, row,   // row: this frame's place in the cascade chain (auto only)
       loadProgress: 0, loadElapsed: 0, imageReady: false, liveTexture: null,
       screenMat, panel, whiteTex, strip: null, stripTex: null, stripCanvas: null,
-      labelBloop: -1,
+      labelBloop: -1, labelLit: 0,   // labelLit: 0 = dim/greyed (crop warming) → 1 = full colour (ready)
     };
     return group;
   }
@@ -3788,6 +3825,13 @@ function revealWorld(f){
   const u = f.userData;
   if (u.loadState === 'done') return;
   u.loadState = 'done';
+  // "Ready" means a real crop is on the slab — never a blank reveal. A normal
+  // panel that came up without a crop reveals to the clean backdrop with its
+  // name plaque DIMMED (greyed, unvisitable); the warm-store poll lands the
+  // crop moments later and lights it in colour (see applyThumbToFrames). A live
+  // wall is ready the instant it reveals — its portal is the page itself, the
+  // crop only dresses the mirrors.
+  u.imageReady = u.liveWall || u.instant || !!u.liveTexture;
   // Swap in the live screenshot and SNAP the panel to the screenshot's true
   // aspect so the whole page shows, filling it without a crop. On a failed
   // fetch the shared backdrop stays — a clean blank screen, no dead texture.
@@ -3843,6 +3887,14 @@ function updateLoadingSystem(dt, t){
   for (const f of frames){
     const u = f.userData;
     if (u.loadState === 'done') continue;
+    // an instant CTA never plays the cutscene: it reveals ready on the very
+    // first update, showing whatever crop is already cached and picking up a
+    // late one through the warm-store poll — no bar, no gaze gate, no wait.
+    if (u.instant){
+      const cached = prefetchMap.get(u.project.url);
+      u.liveTexture = (cached instanceof THREE.Texture) ? cached : null;
+      revealWorld(f); continue;
+    }
     if (u.loadState === 'pending'){
       // gaze frames (the west wall + the last row) fire ONLY from the player's
       // look and stay blank until then; looking at a panel never hurries its ping.
@@ -3872,7 +3924,8 @@ function updateLoadingSystem(dt, t){
       u.loadProgress = Math.min(u.loadElapsed / u.loadDuration, settled ? 1 : 0.97);
       if (settled && played){
         u.liveTexture = (cached instanceof THREE.Texture) ? cached : null;
-        u.imageReady = true;
+        // imageReady is set by revealWorld from whether a real crop actually
+        // landed — a blank reveal (no cached crop) stays "warming", not ready
         revealWorld(f); continue;
       }
       // repaint the scrolling pole — only the one row mid-cascade (plus whatever
@@ -4044,6 +4097,9 @@ function tryLaunch(forceTab = false){
     return;
   }
   if (activeFrame.userData.loadState !== 'done') return;   // world still loading
+  // a normal panel that revealed blank (crop still warming) stays gated until
+  // its cached thumbnail lands — no cold visit to a nameless, imageless slab
+  if (!activeFrame.userData.liveWall && !activeFrame.userData.imageReady) return;
   // a live end wall answers "view?" — glide into a padded viewing pose and
   // engage view mode (walk + look freeze, the slab takes the mouse), rather
   // than swooping the browser away. The wheel press (forceTab) still opens the
@@ -4620,15 +4676,29 @@ function animate(){
   updateSunGaze(dt);
   updateSunGlow(dt);           // sun glare + ghost train over the live panels
 
-  // Name-plaque bloop-in: scale 0.01→1.22→1.0 with overshoot, opacity 0→1
+  // Name-plaque bloop-in: scale 0.01→1.22→1.0 with overshoot. Colour + opacity
+  // ride a readiness envelope — a plaque revealed before its crop lands sits
+  // DIM and greyed (a gated, unvisitable name), then eases to the full aqua pill
+  // the instant the cached crop pings in (imageReady flips in applyThumbToFrames,
+  // which also re-bloops it for the pop). Nothing about it hangs half-lit.
+  const LB_LIFT = FX ? LABEL_LIFT : 1;
   for (const f of frames){
     const u = f.userData;
-    if (u.labelBloop < 0 || u.labelBloop >= 1) continue;
-    u.labelBloop = Math.min(1, u.labelBloop + dt * 3.0);
-    const lb = u.labelBloop;
-    const scl = lb < 0.65 ? (lb/0.65)*1.22 : 1.22 - ((lb-0.65)/0.35)*0.22;
-    u.label.scale.setScalar(Math.max(0.01, scl));
-    u.label.material.opacity = Math.min(1, lb * 2.5);
+    if (u.labelBloop < 0) continue;                       // not revealed yet → hidden
+    const litTarget = u.imageReady ? 1 : 0;
+    if (u.labelBloop >= 1 && u.labelLit === litTarget) continue;   // fully settled → skip
+    if (u.labelBloop < 1){
+      u.labelBloop = Math.min(1, u.labelBloop + dt * 3.0);
+      const lb = u.labelBloop;
+      const scl = lb < 0.65 ? (lb/0.65)*1.22 : 1.22 - ((lb-0.65)/0.35)*0.22;
+      u.label.scale.setScalar(Math.max(0.01, scl));
+    }
+    // ease the lit state toward readiness (snap-close to avoid a forever-fractional tail)
+    if (Math.abs(u.labelLit - litTarget) < 0.004) u.labelLit = litTarget;
+    else u.labelLit += (litTarget - u.labelLit) * Math.min(1, dt * 6);
+    const lit = u.labelLit;
+    u.label.material.opacity = Math.min(1, u.labelBloop * 2.5) * (0.40 + 0.60 * lit);
+    u.label.material.color.setScalar(LB_LIFT * (0.5 + 0.5 * lit));   // dim grey → full colour
   }
 
   updateBubbleShine();   // bubble hot-spots follow the sun glare as the camera turns
@@ -4768,7 +4838,10 @@ function animate(){
     // "view?" shrinks away the instant you commit (glide-in or seated in view
     // mode), the same way "visit?" bows out under the launch swoop
     const committing = viewMode || (viewGlide && viewGlide.frame === f);
-    const target = (f === activeFrame && state === 'play' && u.loadState === 'done' && !committing) ? 1 : 0;
+    // a normal panel only swells/hovers as active once its crop is on the slab —
+    // a still-warming (greyed) plaque never reads as reachable
+    const fReady = u.liveWall ? u.loadState === 'done' : u.imageReady;
+    const target = (f === activeFrame && state === 'play' && fReady && !committing) ? 1 : 0;
     u.scale = lerp(u.scale, target, 1 - Math.pow(0.001, dt));
     const s = u.scale < 0.002 ? 0.001 : u.scale;
     u.visit.scale.setScalar(s);
@@ -4799,7 +4872,11 @@ function animate(){
       u.label.position.y = u.labelBaseY + 0.085 * breath;
       let b = (FX ? LABEL_LIFT : 1) * (1 + 0.24 * u.scale);
       if (FX) b = Math.min(b, 1.19);
-      u.label.material.color.setRGB(b, b, b);
+      // readiness envelope owns the settled plaque: dim grey while the crop is
+      // still warming, full colour once it lands (labelLit eased in the bloop loop)
+      const litK = 0.5 + 0.5 * u.labelLit;
+      u.label.material.color.setRGB(b * litK, b * litK, b * litK);
+      u.label.material.opacity = 0.40 + 0.60 * u.labelLit;
     }
   }
 
@@ -4907,7 +4984,11 @@ function moveAndInteract(dt, t, autoFwd = 0){
   // both affordances live here now: a normal panel offers "visit?" (swoop away),
   // a live end wall offers "view?" (glide into a padded pose + engage view mode).
   // Nothing shows once you're actually in view mode / gliding in.
-  const canVisit = !!(activeFrame && activeFrame.userData.loadState === 'done' && !viewMode && !viewGlide);
+  // a normal panel only offers "visit" once its crop is on the slab (imageReady);
+  // a live wall is ready the moment it reveals (its portal is the page itself).
+  const au = activeFrame?.userData;
+  const frameReady = !!au && (au.liveWall ? au.loadState === 'done' : au.imageReady);
+  const canVisit = !!(activeFrame && frameReady && !viewMode && !viewGlide);
   if (activeFrame !== lastActive || canVisit !== lastCanVisit){
     const sameFrame = activeFrame === lastActive;
     lastActive = activeFrame; lastCanVisit = canVisit;
