@@ -520,7 +520,11 @@ function preFetchScreenshots(){
   // corridor worlds + the end-wall slots (independent strings outside projects,
   // keyed by their trimmed url) — all queued through the concurrency limiter so
   // the GPU upload happens while the menu idles: a reveal is a zero-hitch swap.
-  runCaptureQueue([...galleryScreenshotUrls()], dressLiveWalls).then(() => {
+  // onEach dresses live-wall mirrors (dressLiveWalls) AND pushes the crop onto
+  // any frame that already revealed — the instant CTA (revealed at boot, blank
+  // until its crop lands) and any panel that came up before its capture settled.
+  const onPre = (url, tex) => { dressLiveWalls(url, tex); applyThumbToFrames(url, tex); };
+  runCaptureQueue([...galleryScreenshotUrls()], onPre).then(() => {
     retryLiveWalls(1);
     // one store-truth sweep a beat after boot: a reopen within ~5 min of a
     // /thumbs swap loads the STALE crop from cache and the focus/visibility
@@ -1804,6 +1808,12 @@ function buildGallery(font){
       project, visit, label, labelBaseY, scale:0, worldPos:new THREE.Vector3(),
       // ── loading state ──
       loadState:    'pending',               // 'pending' | 'loading' | 'done'
+      // instant = a CTA world that skips the faux-loading cutscene AND the gaze
+      // wait: it reveals ready and stays visitable from the first frame, its crop
+      // pinging in from the warm store whenever it lands (see updateLoadingSystem).
+      // Used for the template "Build Yours" slab — the viral loop must never sit
+      // greyed behind its own thumbnail load.
+      instant:      !!project.instant,
       loadTrigger, autoDelay, loadDuration, row,   // row: this frame's place in the cascade chain (auto only)
       loadProgress: 0, loadElapsed: 0, imageReady: false, liveTexture: null,
       screenMat, panel, whiteTex, strip: null, stripTex: null, stripCanvas: null,
@@ -3821,7 +3831,7 @@ function revealWorld(f){
   // crop moments later and lights it in colour (see applyThumbToFrames). A live
   // wall is ready the instant it reveals — its portal is the page itself, the
   // crop only dresses the mirrors.
-  u.imageReady = u.liveWall || !!u.liveTexture;
+  u.imageReady = u.liveWall || u.instant || !!u.liveTexture;
   // Swap in the live screenshot and SNAP the panel to the screenshot's true
   // aspect so the whole page shows, filling it without a crop. On a failed
   // fetch the shared backdrop stays — a clean blank screen, no dead texture.
@@ -3877,6 +3887,14 @@ function updateLoadingSystem(dt, t){
   for (const f of frames){
     const u = f.userData;
     if (u.loadState === 'done') continue;
+    // an instant CTA never plays the cutscene: it reveals ready on the very
+    // first update, showing whatever crop is already cached and picking up a
+    // late one through the warm-store poll — no bar, no gaze gate, no wait.
+    if (u.instant){
+      const cached = prefetchMap.get(u.project.url);
+      u.liveTexture = (cached instanceof THREE.Texture) ? cached : null;
+      revealWorld(f); continue;
+    }
     if (u.loadState === 'pending'){
       // gaze frames (the west wall + the last row) fire ONLY from the player's
       // look and stay blank until then; looking at a panel never hurries its ping.
