@@ -8,7 +8,7 @@
   "pause": { "title": "paused", "note": "done looking?", "resume": "explore", "thumbs": "thumbs" },
   "console": { "enabled": false },
   "walls": {
-    "west": { "on": true, "name": "Rick Roll", "url": "https://frutiger-gallery.pages.dev/rickroll.html", "live": true },
+    "west": { "on": true, "name": "Rick Roll", "url": "https://factcheck-answers.pages.dev/video.mp4", "live": true },
     "east": { "on": true, "name": "Procedural Quilt", "url": "https://procedural-quilt.pages.dev/", "live": true }
   },
   "projects": [
@@ -25,7 +25,7 @@
     { "name": "DW Gallery",    "url": "https://dw-gallery.pages.dev/" },
     { "name": "Horror Quilt",  "url": "https://your-procedural-quilt.pages.dev/" },
     { "name": "MIC FX",        "url": "https://mic-fx.pages.dev/" },
-    { "name": "Build Yours",   "url": "https://your-frutiger-gallery.pages.dev/", "instant": true },
+    { "name": "Build Yours",   "url": "https://your-frutiger-gallery.pages.dev/" },
     { "name": "GitHub Repo",   "url": "https://github.com/akilluminati47/your-frutiger-gallery" },
     { "name": "Donate",        "url": "https://streamelements.com/akilluminati47", "thumbLock": "thumio" }
   ]

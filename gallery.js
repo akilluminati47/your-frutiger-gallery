@@ -70,6 +70,24 @@ const SHOT_H = Math.round(SHOT_W / ASPECT);
 
 function withProtocol(u){ return /^https?:\/\//i.test(u) ? u : 'https://' + u; }
 
+// A raw media file (a bare .mp4/.mp3/…) hung on a live wall can't receive the
+// hall's fg-audio placement stream — it has no script — so its sound played flat
+// while a real page (the quilt) gets full directional gain+pan. isRawMedia spots
+// those URLs by extension; liveFrameSrc routes them through media-frame.html, a
+// same-origin wrapper that loads live-audio.js and plays the clip CORS-attributed,
+// so ANY forker's video/audio wall gets the same spatial sound with no extra work.
+const MEDIA_RE = /\.(mp4|webm|ogv|ogg|mov|m4v|mp3|wav|m4a|aac|oga|flac|opus|weba)(?:[?#]|$)/i;
+function isRawMedia(u){
+  try { return MEDIA_RE.test(new URL(withProtocol(u)).pathname); }
+  catch { return MEDIA_RE.test(u); }
+}
+function liveFrameSrc(u){
+  const full = withProtocol(u);
+  return isRawMedia(full)
+    ? location.origin + '/media-frame.html?src=' + encodeURIComponent(full)
+    : full;
+}
+
 function screenshotURL(provider, url, w, h, freshKey = ''){
   const maxAge = freshKey ? 0 : 86400;
   const full = withProtocol(url);
@@ -4453,7 +4471,9 @@ function liveScreenFor(f){
   const wW = u.liveSlab ? CON_CW : FW, wH = u.liveSlab ? CON_CH : FH;
   const pw = u.liveSlab ? 1600 : 1024, ph = Math.round(pw * wH / wW), k = wW / pw;
   const el = document.createElement('iframe');
-  el.src = withProtocol(u.project.url);
+  // a bare media file gets the same-origin player wrapper (directional sound);
+  // any real page loads straight (liveFrameSrc is a pass-through for those)
+  el.src = liveFrameSrc(u.project.url);
   el.allow = 'autoplay; fullscreen; gamepad';
   Object.assign(el.style, {
     width: pw + 'px', height: ph + 'px', border:'0', background:'#fff', display:'block',

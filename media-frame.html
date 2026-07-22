@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>media</title>
+<!-- Generic player for a bare media file hung on a live wall.
+
+     A live wall is a cross-origin <iframe>, and no web API lets the gallery
+     touch a cross-origin page's sound — so the hall STREAMS placement instead
+     ({type:'fg-audio', gain, pan} at ~10 Hz). A real page (e.g. the quilt)
+     receives that itself; a raw .mp4/.mp3 has no script to, so it played flat.
+
+     The engine detects a raw-media live-wall URL and points the iframe here
+     instead — same-origin with the gallery, so live-audio.js loads and applies
+     the exact same directional gain+pan the quilt gets. crossorigin="anonymous"
+     earns the PAN half: with a CORS-clean source the receiver can route the
+     element through WebAudio; without it, it can only duck volume (gain only).
+
+     The media URL rides in ?src=. Opened standalone it just plays the clip. -->
+<script src="/live-audio.js"></script>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  #stage { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; }
+  video, audio { display: block; }
+  video { width: 100%; height: 100%; object-fit: cover; background: #000; }
+  audio { width: min(80%, 640px); }
+</style>
+</head>
+<body>
+  <div id="stage"></div>
+  <script>
+    (() => {
+      'use strict';
+      // ?src= is the media URL the engine handed us. Accept only http(s) — never
+      // let a crafted javascript:/other scheme through, even though a media
+      // element wouldn't execute it. A live wall could already point anywhere,
+      // so this is the same trust boundary, just guarded.
+      let src = '';
+      try { src = new URLSearchParams(location.search).get('src') || ''; } catch {}
+      let ok = false;
+      try { const u = new URL(src); ok = u.protocol === 'http:' || u.protocol === 'https:'; } catch {}
+      if (!ok) return;
+
+      // audio extensions get an <audio>; everything else an <video> (which also
+      // plays audio-only sources, just black). Extension read off the path only.
+      let ext = '';
+      try { ext = (new URL(src).pathname.match(/\.([a-z0-9]+)$/i) || [,''])[1].toLowerCase(); } catch {}
+      const isAudio = /^(mp3|wav|m4a|aac|oga|flac|opus|weba)$/.test(ext);
+
+      const el = document.createElement(isAudio ? 'audio' : 'video');
+      // crossorigin BEFORE src so the load is CORS-attributed (load-bearing for
+      // the pan tap in live-audio.js — see mayProcess there)
+      el.crossOrigin = 'anonymous';
+      el.autoplay = true; el.loop = true; el.playsInline = true;
+      if (isAudio) el.controls = true;      // a bare audio wall needs a visible surface
+      el.src = src;
+      document.getElementById('stage').appendChild(el);
+
+      // Autoplay-with-sound is delegated (the live iframe carries allow="autoplay"
+      // and the visitor's Enter click is top-level activation), so it usually
+      // starts itself. Belt: the first pointer/key inside the slab — routed here
+      // by view mode — kicks it if a policy parked it. Either way 'play' fires and
+      // live-audio.js adopts the element into its gain->pan tap.
+      const kick = () => { const p = el.play(); if (p && p.catch) p.catch(() => {}); };
+      kick();
+      for (const ev of ['pointerdown', 'keydown', 'touchstart'])
+        addEventListener(ev, kick, { passive: true });
+    })();
+  </script>
+</body>
+</html>
