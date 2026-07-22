@@ -8,7 +8,7 @@
   "pause": { "title": "paused", "note": "done looking?", "resume": "explore", "thumbs": "thumbs" },
   "console": { "enabled": false },
   "walls": {
-    "west": { "on": true, "name": "Rick Roll", "url": "https://factcheck-answers.pages.dev/video.mp4", "live": true },
+    "west": { "on": true, "name": "Rick Roll", "url": "https://frutiger-gallery.pages.dev/rickroll.html", "live": true },
     "east": { "on": true, "name": "Procedural Quilt", "url": "https://procedural-quilt.pages.dev/", "live": true }
   },
   "projects": [
