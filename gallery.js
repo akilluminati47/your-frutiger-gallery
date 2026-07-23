@@ -3866,9 +3866,24 @@ function startFrameLoading(f){
     f.add(u.strip);
   }
   u.lastBarPaint = -1;
-  // panel behind the strip: the shared flat white/black backdrop
-  u.screenMat.map = loadBackdropTex;
-  u.screenMat.needsUpdate = true;
+  // panel behind the strip: the shared flat white backdrop. A LIVE slab's body
+  // is a LIT StandardMaterial (env-mapped, tone-mapped) so a white backdrop on
+  // it goes HDR-bright, tips past the bloom threshold (1.2), and the glare veil
+  // washes the strip's Aero colours — the sun-lit end wall was worst of all.
+  // Dress its face for the cutscene exactly like a normal panel instead: an
+  // UNLIT backdrop lifted to 1.12 (same as the screens — under the threshold, no
+  // bloom). liveMat (kept on u.screenMat) is restored at reveal for the rim +
+  // the mirror's portrait.
+  if (u.liveSlab){
+    if (!u.loadBackMat){
+      u.loadBackMat = new THREE.MeshBasicMaterial({ map: loadBackdropTex, toneMapped: false });
+      if (FX) u.loadBackMat.color.setScalar(1.12);
+    }
+    u.panel.material = u.loadBackMat;
+  } else {
+    u.screenMat.map = loadBackdropTex;
+    u.screenMat.needsUpdate = true;
+  }
   drawLoadingStrip(u.stripCanvas, 0, 0); u.stripTex.needsUpdate = true;
   // still fetching — updateLoadingSystem polls every frame and reveals on arrival
 }
@@ -3895,6 +3910,13 @@ function revealWorld(f){
   // One static image bounced by Reflectors that render anyway, in place of
   // the retired box-reflect replicas that re-painted the live page per frame.
   // No fitPanelToImage here: the slab's footprint is fixed, the crop adapts.
+  // A live slab spent the cutscene on the UNLIT loading backdrop (see
+  // startFrameLoading) — put its lit hardware material back before the portrait
+  // and portal go on, so the rim shades and the mirror shows the crop on liveMat.
+  if (u.loadBackMat){
+    u.panel.material = u.screenMat;      // = liveMat
+    u.loadBackMat.dispose(); u.loadBackMat = null;
+  }
   if (u.liveWall){
     if (u.liveTexture) dressLivePanel(u, u.liveTexture);
     else { u.screenMat.map = null; u.screenMat.needsUpdate = true; }
