@@ -147,9 +147,28 @@ function screenshotURL(provider, url, w, h, freshKey = ''){
 // everything through the proxy would 429 on Cloudflare's shared IP and give
 // everyone thum.io — hence own-IP first.) mShots isn't here: no CORS in the
 // browser; thum.io lives only inside the proxy as its deep last resort.
-const PROVIDERS = CONFIG.screenshotProvider
+// thum.io can't be fetched directly from the browser (its hotlink guard 403s
+// cross-origin fetch), so it's never a DIRECT provider — when it's the site
+// primary the capture goes through the pinned /api/shot?prov=thumio route in
+// captureThumb, and this chain is only the fallback (own-IP microlink → proxy).
+const PROVIDERS = CONFIG.screenshotProvider && CONFIG.screenshotProvider !== 'thumio'
   ? [CONFIG.screenshotProvider, 'proxy']
   : ['microlink', 'proxy'];
+
+// Every capture fetch is BOUNDED. A provider that never answers (thum.io can
+// wait/18, microlink can stall on a heavy page) would otherwise hold its slot in
+// the CAPTURE_CONCURRENCY queue forever, starving every world still queued behind
+// it — that stalled queue is what leaves slabs frozen at 97 % (their capture
+// never even starts). On timeout the fetch aborts and the caller falls through to
+// the next provider, then to a warming reveal. An aborted /api/shot still
+// finishes server-side via waitUntil, so its crop is edge-cached for the next
+// warm-poll GET — a slow render is never wasted, just deferred.
+const CAPTURE_TIMEOUT_MS = 12000;   // render fetches (microlink / proxy / thum.io pin)
+const STORE_TIMEOUT_MS   = 6000;    // cheap KV GETs (/api/thumb) — should be near-instant
+function fetchCapped(resource, opts = {}, ms = CAPTURE_TIMEOUT_MS){
+  return fetch(resource, { ...opts, signal: AbortSignal.timeout(ms) });
+}
+
 function fetchScreenshot(url, onImg, onFail, freshKey = ''){
   let i = 0;
   const tryNext = async () => {
@@ -159,7 +178,7 @@ function fetchScreenshot(url, onImg, onFail, freshKey = ''){
       // fetch first so the HTTP status is visible: thum.io answers rate-limits
       // with a 403 that still carries a decodable "error" image, which would
       // sail through a plain <img> onload and paint a blank panel forever.
-      const res = await fetch(screenshotURL(prov, url, SHOT_W, SHOT_H, freshKey), { mode: 'cors' });
+      const res = await fetchCapped(screenshotURL(prov, url, SHOT_W, SHOT_H, freshKey), { mode: 'cors' });
       if (!res.ok) return tryNext();
       const blob = await res.blob();
       if (!blob.type.startsWith('image/')) return tryNext();
@@ -252,7 +271,7 @@ function backfillAlt(url, activeProv, tok){
         // thum.io only renders through our proxy (hotlink guard) — quota-free
         ? `/api/shot?url=${encodeURIComponent(withProtocol(url))}&w=${SHOT_W}&h=${SHOT_H}&prov=thumio`
         : screenshotURL('microlink', url, SHOT_W, SHOT_H);
-      const res = await fetch(src, { mode: 'cors' });
+      const res = await fetchCapped(src, { mode: 'cors' });
       if (!res.ok) return;
       const blob = await res.blob();
       if (!blob.type.startsWith('image/')) return;
@@ -293,11 +312,16 @@ const thumbVer = new Map();     // url -> active-crop version (ms)
 // parks as alt, so nothing a visitor captures can bump what the owner picked.
 // Whenever the alt slot is empty, backfillAlt completes the pair quietly.
 async function captureThumb(url, freshKey){
-  let askToken = null, want = null, altHave = false, hadStored = false;
+  // The site-wide primary provider. thum.io routes through the pinned proxy
+  // (want === 'thumio' below); the store's own x-thumb-prov-want — a /thumbs
+  // hold or an owner.config thumbLock — still overrides it per world. Non-thumio
+  // primaries leave want null so the ordinary own-IP chain runs.
+  const DEFAULT_WANT = CONFIG.screenshotProvider === 'thumio' ? 'thumio' : null;
+  let askToken = null, want = DEFAULT_WANT, altHave = false, hadStored = false;
   try {
-    const r = await fetch(`/api/thumb?url=${encodeURIComponent(url)}`, { cache: freshKey ? 'no-store' : 'default' });
+    const r = await fetchCapped(`/api/thumb?url=${encodeURIComponent(url)}`, { cache: freshKey ? 'no-store' : 'default' }, STORE_TIMEOUT_MS);
     askToken = r.headers.get('x-thumb-ask');
-    want = r.headers.get('x-thumb-prov-want');
+    want = r.headers.get('x-thumb-prov-want') || DEFAULT_WANT;
     altHave = !!r.headers.get('x-thumb-alt');   // the OTHER provider's crop is already parked
     hadStored = r.ok;
     if (r.ok && !freshKey){
@@ -321,7 +345,7 @@ async function captureThumb(url, freshKey){
       const full = withProtocol(url);
       const pin = `/api/shot?url=${encodeURIComponent(full)}&w=${SHOT_W}&h=${SHOT_H}&prov=thumio`
                 + (freshKey ? `&fresh=${encodeURIComponent(freshKey)}` : '');
-      const res = await fetch(pin);
+      const res = await fetchCapped(pin);
       if (res.ok){
         const blob = await res.blob();
         if (blob.type.startsWith('image/')){
@@ -487,8 +511,8 @@ async function refreshStoredThumbs(){
       // the unique &v busts BOTH caches in the way (the browser's max-age=300
       // and Cloudflare's edge cache on /api/thumb) so this reads the store's
       // truth; the KV read is free and never touches a capture provider
-      try { r = await fetch(`/api/thumb?url=${encodeURIComponent(url)}&v=${Date.now()}`, { cache: 'no-store' }); }
-      catch { continue; }                              // store unreachable → keep what we show
+      try { r = await fetchCapped(`/api/thumb?url=${encodeURIComponent(url)}&v=${Date.now()}`, { cache: 'no-store' }, STORE_TIMEOUT_MS); }
+      catch { continue; }                              // store unreachable / slow → keep what we show
       if (!r.ok) continue;                             // miss → nothing newer to show
       const ver = verOf(r), shown = thumbVer.get(url) || 0;
       if (ver <= shown) continue;                      // same active crop as on screen
@@ -864,6 +888,16 @@ const GAZE_LOAD_DUR  = 2.0;                 // gaze-triggered frames ALWAYS play
 const FIRST_START   = 1.15;
 const ROW_BAR_DUR   = 0.75;
 const ROW_STALL_CAP = 4.0;
+// Even with a bounded capture, a slow provider can settle the crop AFTER the bar
+// has played through — the strip would then hold at 97 % for as long as the
+// fetch runs. STALL_HOLD caps that hold: once its bar has played, a world waits
+// at most this long for the crop before it reveals anyway (warming — the clean
+// backdrop with a dimmed plaque). The crop pings in the moment it lands, through
+// the warm poll / applyThumbToFrames, exactly like any store-miss reveal. So
+// every bar completes on its own beat; a genuinely slow world just colours in a
+// breath later instead of freezing the strip. Prefetch (fired during the menu)
+// means most crops are already cached by bar time, so this rarely bites.
+const STALL_HOLD    = 2.0;
 
 const WALL_X  = HALF + 2.0;             // glass side walls
 const FRAME_X = WALL_X - 0.12;          // frames hang pressed flat against the glass walls
@@ -3940,7 +3974,14 @@ function updateLoadingSystem(dt, t){
       // fetch is genuinely still in flight; a cached world pings in right on cue.
       const played = u.loadElapsed >= u.loadDuration;
       u.loadProgress = Math.min(u.loadElapsed / u.loadDuration, settled ? 1 : 0.97);
-      if (settled && played){
+      // Reveal when the bar has played AND the crop has settled — OR, if the crop
+      // is still in flight past STALL_HOLD, reveal warming so the strip can never
+      // stick at 97 %. In the forced case `cached` is still 'pending', so
+      // liveTexture resolves to null → a clean warming reveal, and the crop pings
+      // in later via the warm poll (applyThumbToFrames). A forced reveal also ends
+      // this row's loading, so the auto-cascade gate advances to the row behind.
+      const forced = played && !settled && u.loadElapsed >= u.loadDuration + STALL_HOLD;
+      if ((settled && played) || forced){
         u.liveTexture = (cached instanceof THREE.Texture) ? cached : null;
         // imageReady is set by revealWorld from whether a real crop actually
         // landed — a blank reveal (no cached crop) stays "warming", not ready
