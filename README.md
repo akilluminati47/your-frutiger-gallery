@@ -118,7 +118,7 @@ an owner's real settings arrive through the handshake below.
 | `console` | object | `enabled: false` removes the sign-ups wall; `sourceRepo` is the template it forks |
 | `shuffleOrder` | bool | Shuffle the hall on every load |
 | `openInNewTab` | bool | Open chosen worlds in a new tab instead of the same-tab swoop |
-| `screenshotProvider` | string | Direct fallback used only if the `/api/shot` edge-cache proxy is unreachable — `microlink`, `mshots`, or `thumio`. Normally every capture goes through the proxy (server-side microlink → thum.io, cached a day at the edge so the free quota is shared across visitors). |
+| `screenshotProvider` | string | Site-wide **primary** capture provider — `thumio` (default), `microlink`, or `mshots`. `thumio` captures through the `/api/shot` edge-cache proxy (it hotlink-guards direct browser fetches), renders server-side on a fixed wait so it handles never-idle pages, and isn't gated by microlink's 50/day-per-IP tier — the reliable default. `microlink` captures from the visitor's own IP first (sharp, but rate-limited). Either way the other provider is kept as the `/thumbs` Swap alternative and the automatic fallback, and a per-world `thumbLock` still overrides this for that world. |
 | `postFX` | bool | HDR bloom, filmic grade, dynamic resolution; `false` is the low-end kill switch |
 | `movement` | object | Walk feel: `accel`, `friction`, `maxSpeed`, look sensitivities |
 | `volume` | number | Master volume for the SFX, 0..1 |

@@ -139,11 +139,22 @@ export const CONFIG = {
   // Open the chosen domain in a new tab instead of swooping the same tab.
   openInNewTab: false,
 
-  // Live-screenshot provider used to paint each frame.
-  //   "thumio"    – image.thum.io  (fast, honours width/height, good CORS)
+  // Site-wide PRIMARY capture provider — the one every world's thumbnail is
+  // captured through by default (a per-world thumbLock / a /thumbs hold still
+  // overrides it for that world).
+  //   "thumio"    – image.thum.io, reached through the /api/shot proxy (thum.io
+  //                 hotlink-guards direct browser fetches). Renders server-side
+  //                 on a FIXED wait, so it captures never-idle pages (games,
+  //                 live canvases) that microlink's networkidle0 gives up on,
+  //                 and it isn't gated by microlink's 50/day-PER-IP free tier —
+  //                 so it's the reliable default for every visitor.
+  //   "microlink" – api.microlink.io, captured from the visitor's OWN IP first
+  //                 (sharp crops, but 50/day per IP and needs the page to go
+  //                 network-idle). Falls back to the proxy.
   //   "mshots"    – WordPress mShots (free, can be slow on first hit)
-  //   "microlink" – api.microlink.io (clean, rate-limited on free tier)
-  screenshotProvider: "microlink",
+  // Whatever is chosen, the OTHER provider is still captured as the /thumbs Swap
+  // alternative and used as the automatic fallback if the primary can't render.
+  screenshotProvider: "thumio",
 
   // Next-gen post-processing (HDR bloom, filmic grade, dynamic resolution).
   // Leave true for the full look; set false only if a very old GPU struggles.
