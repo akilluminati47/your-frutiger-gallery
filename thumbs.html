@@ -247,15 +247,23 @@ const grid = $('#grid'), statusEl = $('#status');
 const setStatus = t => { statusEl.textContent = t || ''; };
 const cards = new Map();   // url -> {el, img, tag, age, checkbox}
 
-// The ⇄ Swap pill's tooltip is rewritten from a few places (the crop that came
-// back, the store's hold, a swap just taken), so the owner-config lock is
-// applied HERE rather than at any one of them — otherwise the next refresh
-// would quietly hand a locked world its swappable tooltip back.
-function setProvBtn(url, note){
+// The ⇄ Swap pill always shows which provider it will switch TO (the "alt"),
+// unless the owner config has locked this world to one provider. The lock is
+// applied here so every state change (crop loaded, hold changed, swap taken)
+// ends up with the right tooltip.
+function otherProv(p){ return p === 'thumio' ? 'microlink' : 'thumio'; }
+function provBtnNote(url){
+  const lock = lockOf(url);
+  if (lock) return 'owner config locked (' + lock + ')';
+  const c = cards.get(url);
+  const cur = c?.activeProv || provOf(url);
+  return 'swap to ' + otherProv(cur);
+}
+function setProvBtn(url){
   const c = cards.get(url); if (!c?.provBtn) return;
   const lock = lockOf(url);
-  c.provBtn.disabled = !!lock;                       // greys out via button.btn:disabled
-  c.provBtn.title = lock ? 'owner config locked' : note;
+  c.provBtn.disabled = !!lock;
+  c.provBtn.title = provBtnNote(url);
 }
 
 function slug(url){ return url.replace(/[^a-z0-9]+/gi,'-').replace(/^-+|-+$/g,'').slice(0,48) || 'thumb'; }
@@ -301,13 +309,7 @@ function render(){
     // click never binds (disabled already swallows it — this just says so).
     const provBtn = el.querySelector('.act-prov');
     provBtn.textContent = '⇄ Swap';
-    if (w.lock){
-      provBtn.disabled = true;
-      provBtn.title = 'owner config locked';
-    } else {
-      provBtn.title = 'captures via ' + provOf(w.url);
-      provBtn.addEventListener('click', () => doSwap(w));
-    }
+    if (!w.lock) provBtn.addEventListener('click', () => doSwap(w));
     // click the crop (not the checkbox) → expand it XXL; any click shrinks it back
     el.querySelector('.shot').addEventListener('click', e => {
       if (e.target.closest('.pick')) return;
@@ -315,6 +317,7 @@ function render(){
     });
 
     cards.set(w.url, { el, img, empty, tag, age, checkbox, provBtn });
+    setProvBtn(w.url);
     grid.appendChild(el);
   }
   $('#sub').textContent = `${worlds.length} worlds`;
@@ -327,25 +330,25 @@ function showCrop(url, ts, prov){
   c.tag.className = 'tag cached';
   c.tag.textContent = prov ? (prov === 'thumio' ? 'thum.io' : 'microlink') : 'cached';
   c.age.textContent = ts ? 'captured ' + ago(ts) : 'stored';
-  if (prov){ c.activeProv = prov; setProvBtn(url, 'showing ' + prov); }
+  if (prov){ c.activeProv = prov; setProvBtn(url); }
 }
 function showEmpty(url){
   const c = cards.get(url); if (!c) return;
   c.img.hidden = true; c.empty.style.display = 'grid';
   c.tag.className = 'tag none'; c.tag.textContent = 'no crop';
   c.age.textContent = '';
+  delete c.activeProv;
+  setProvBtn(url);
 }
 // the HOLD is the store's own memory (prov:<url> key, no TTL): a held world's
 // auto-refresh renders on thum.io from every visitor, not just this browser.
-// Mirror it into localStorage so Fetch here follows it too — no badge, no
-// message: the provider tag on the crop already says who took it, and setting
-// a provider means expecting it to hold. The tooltip alone carries the detail.
+// We record it on the card so the swap tooltip stays accurate, but we do NOT
+// overwrite the per-URL provider preference — the stored crop's actual provider
+// is what matters, and a lock/unlock should restore the real alt without drift.
 function setHeld(url, held){
   const c = cards.get(url); if (!c) return;
-  c.held = held;
-  setProv(url, held ? 'thumio' : 'microlink');   // no-op on a locked world
-  setProvBtn(url, held ? 'auto-refresh holds thum.io — ⇄ swaps back to microlink'
-                       : 'captures via microlink (default)');
+  c.held = !!held;
+  setProvBtn(url);
 }
 
 async function refreshList(){
@@ -395,7 +398,7 @@ async function doFetch(url){
     // visitor's capture from the other provider parks as alt, never bumps it.
     const put = await fetch(`/api/thumb?url=${enc(url)}&t=${enc(tok)}&prov=${p}&hold=1`, { method:'PUT', body:blob, headers:{ 'content-type':blob.type } });
     if (!put.ok) throw new Error('store ' + put.status);
-    showCrop(url, Date.now(), p); setHeld(url, p === 'thumio'); pingGallery(); setStatus('stored ' + url);
+    showCrop(url, Date.now(), p); setProv(url, p); setHeld(url, p === 'thumio'); pingGallery(); setStatus('stored ' + url);
     // Fetch catches BOTH sides: the OTHER provider's crop rides straight into
     // the PARKED slot (alt=1 — active crop and hold untouched), so ⇄ Swap is a
     // pure server-side exchange with the option already waiting. Best-effort:
@@ -429,7 +432,7 @@ async function doSwap(w){
   const cur = c?.activeProv || provOf(w.url);
   const want = cur === 'microlink' ? 'thumio' : 'microlink';
   setProv(w.url, want);
-  setProvBtn(w.url, 'captures via ' + want);
+  setProvBtn(w.url);
   try {
     const tok = await getToken(w.url);
     if (!tok) throw new Error('no store bound');
@@ -442,6 +445,7 @@ async function doSwap(w){
       // the server moved the hold with the swap: thum.io active = held (every
       // future auto-refresh renders there), microlink active = released
       setHeld(w.url, active === 'thumio');
+      setProvBtn(w.url);
       pingGallery();
       setStatus(`${w.name} → ${active === 'thumio' ? 'thum.io' : 'microlink'} crop`);
       return;

@@ -166,7 +166,7 @@ export async function onRequest({ request, env }){
     const h = {
       'x-thumb-ask': await token(secret, target, slotNow()),
       'access-control-allow-origin': '*',
-      'access-control-expose-headers': 'x-thumb-ask, x-thumb-prov',
+      'access-control-expose-headers': 'x-thumb-ask, x-thumb-prov, x-thumb-ts, x-thumb-ver',
       'cache-control': 'no-store',
     };
     if (store){
@@ -174,6 +174,8 @@ export async function onRequest({ request, env }){
       if (value){
         h['content-type'] = metadata?.contentType || 'image/png';
         h['x-thumb-prov'] = provOf(metadata);
+        h['x-thumb-ts'] = (metadata?.ts || 0).toString();
+        h['x-thumb-ver'] = (metadata?.ver || metadata?.ts || 0).toString();
         return new Response(value, { headers: h });
       }
     }
@@ -189,7 +191,11 @@ export async function onRequest({ request, env }){
         const [held, alt, locks] = await Promise.all([
           store.get(prefKey(target)), altProvOf(store, target), ownerLocks(env, request),
         ]);
-        const want = locks.get(target) || held;   // owner.config outranks the store's hold
+        // pinned provider for the active slot: owner.config lock > store hold >
+        // current active provider. Returning the active provider lets the daily cron
+        // refresh the same provider a visitor swapped to, instead of defaulting to
+        // microlink and parking the real active as the spare.
+        const want = locks.get(target) || held || (value ? provOf(metadata) : null);
         // Cache for MINUTES, not the whole TTL: an uploaded/refreshed crop should
         // reach the gallery quickly, and re-reading KV costs nothing (it never
         // touches microlink — the store existing is what protects the IP quota).
@@ -198,7 +204,7 @@ export async function onRequest({ request, env }){
           'content-type': metadata?.contentType || 'image/png',
           'cache-control': 'public, max-age=300, stale-while-revalidate=600',
           'access-control-allow-origin': '*',
-          'access-control-expose-headers': 'x-thumb-ask, x-thumb-age, x-thumb-prov, x-thumb-ver, x-thumb-prov-want, x-thumb-alt',
+          'access-control-expose-headers': 'x-thumb-ask, x-thumb-age, x-thumb-prov, x-thumb-ver, x-thumb-prov-want, x-thumb-alt, x-thumb-ts',
           // still hand out a token so a forced refresh (hold-R) can overwrite
           'x-thumb-ask': await token(secret, target, slotNow()),
           'x-thumb-age': Math.floor(ageS).toString(),
@@ -207,6 +213,9 @@ export async function onRequest({ request, env }){
           // Swap promoting an older crop), so a running gallery can detect the
           // change by comparing this alone. Legacy crops (no ver) → capture ts.
           'x-thumb-ver': (metadata?.ver || metadata?.ts || 0).toString(),
+          // original capture timestamp so a re-touch (TTL reset) can keep the
+          // real newest fetched image identifiable
+          'x-thumb-ts': (metadata?.ts || 0).toString(),
         };
         // the hold rides every response so even a forced refresh (hold-R, which
         // skips serving the stored crop) still renders on the held provider
@@ -282,12 +291,22 @@ export async function onRequest({ request, env }){
     // which provider rendered this crop — the two-slot store is keyed on it
     const prov = u.searchParams.get('prov') === 'thumio' ? 'thumio' : 'microlink';
 
+    // Re-touches can preserve the original capture timestamp and version so the
+    // "newest fetched" image stays identifiable and the gallery doesn't re-download
+    // an unchanged crop; fresh captures default both to now.
+    const tsParam = u.searchParams.get('ts');
+    const parsedTs = tsParam ? parseInt(tsParam, 10) : NaN;
+    const metaTs = Number.isFinite(parsedTs) && parsedTs > 0 ? parsedTs : Date.now();
+    const verParam = u.searchParams.get('ver');
+    const parsedVer = verParam ? parseInt(verParam, 10) : NaN;
+    const metaVer = Number.isFinite(parsedVer) && parsedVer > 0 ? parsedVer : Date.now();
+
     // ── ?alt=1: park this crop in the ALT slot, active crop untouched ──
     // Clients capture BOTH providers per fetch; the non-preferred crop arrives
     // through here so a /thumbs Swap always finds a complete parked pair.
     if (u.searchParams.get('alt')){
       await store.put(altKey(target), buf, {
-        expirationTtl: DAY_S, metadata: { contentType: type, ts: Date.now(), prov },
+        expirationTtl: DAY_S, metadata: { contentType: type, ts: metaTs, ver: metaVer, prov },
       });
       return new Response('parked', { status: 200, headers: { 'access-control-allow-origin': '*' } });
     }
@@ -300,18 +319,21 @@ export async function onRequest({ request, env }){
     // config (drop the lock and whatever was held before is what returns).
     const lock = (await ownerLocks(env, request)).get(target) || null;
     const hold = !!u.searchParams.get('hold');
+    const cur = await store.getWithMetadata(objKey(target), { type: 'arrayBuffer' });
     if (hold && !lock){
       if (prov === 'thumio') await store.put(prefKey(target), 'thumio');
       else await store.delete(prefKey(target));
     }
-    // 'thumio' pins the active slot; null = released (microlink, the default)
-    const pref = lock ? (lock === 'thumio' ? 'thumio' : null)
-               : hold ? (prov === 'thumio' ? 'thumio' : null)
-                      : await store.get(prefKey(target));
-    // this world's pick: pinned → thum.io, else microlink
-    const prefProv = pref || 'microlink';
+    // Active-slot preference: owner.config lock > deliberate hold > stored thum.io
+    // hold > current active provider (so the cron/gallery refresh the same side
+    // a visitor swapped to) > site default 'microlink'.
+    const storedPref = await store.get(prefKey(target));
+    let prefProv;
+    if (lock) prefProv = lock === 'thumio' ? 'thumio' : 'microlink';
+    else if (hold) prefProv = prov;
+    else if (storedPref === 'thumio') prefProv = 'thumio';
+    else prefProv = (cur?.metadata ? provOf(cur.metadata) : null) || 'microlink';
 
-    const cur = await store.getWithMetadata(objKey(target), { type: 'arrayBuffer' });
     if (prov !== prefProv){
       // the toggle OWNS the active slot: a non-preferred crop can never take
       // it — not on a held world (even when the active crop has expired; this
@@ -319,9 +341,9 @@ export async function onRequest({ request, env }){
       // never over a crop that's already showing. It parks as alt instead.
       // Sole exception: an UNHELD world with an EMPTY slot takes the thum.io
       // fallback (short TTL below) — a weak crop now beats a blank slab.
-      if (pref || cur?.value){
+      if (lock || storedPref || cur?.value){
         await store.put(altKey(target), buf, {
-          expirationTtl: DAY_S, metadata: { contentType: type, ts: Date.now(), prov },
+          expirationTtl: DAY_S, metadata: { contentType: type, ts: metaTs, ver: metaVer, prov },
         });
         return new Response('parked', { status: 200, headers: { 'access-control-allow-origin': '*' } });
       }
@@ -333,11 +355,10 @@ export async function onRequest({ request, env }){
 
     // unheld thum.io fallbacks expire early: they self-heal an empty slot NOW,
     // and hand it to the next microlink capture in hours instead of a day
-    const ttl = (prov === 'thumio' && pref !== 'thumio') ? 21600 : DAY_S;
-    const now = Date.now();
+    const ttl = (prov === 'thumio' && prefProv !== 'thumio') ? 21600 : DAY_S;
     await store.put(objKey(target), buf, {
       expirationTtl: ttl,                                   // auto-refresh cycle
-      metadata: { contentType: type, ts: now, ver: now, prov },   // ver bumps the active slot for live re-checks
+      metadata: { contentType: type, ts: metaTs, ver: metaVer, prov },   // ver bumps the active slot for live re-checks
     });
     return new Response('stored', { status: 200, headers: { 'access-control-allow-origin': '*' } });
   }

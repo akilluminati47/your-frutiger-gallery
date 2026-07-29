@@ -87,8 +87,9 @@ async function capture(url, prov){
   } catch { return null; }
 }
 
-// The parked (alt / Swap) crop's own bytes + its true provider, so a down-capture
-// day can re-touch the spare instead of letting it expire. null = nothing parked.
+// The parked (alt / Swap) crop's own bytes + its true provider + original capture
+// timestamp, so a down-capture day can re-touch the spare instead of letting it
+// expire. null = nothing parked.
 async function getAlt(url){
   try {
     const r = await fetch(`${SITE}/api/thumb?url=${enc(url)}&alt=1`, { cache:'no-store' });
@@ -97,16 +98,20 @@ async function getAlt(url){
     if (!type.startsWith('image/')) return null;
     const buf = Buffer.from(await r.arrayBuffer());
     return buf.length > 1500
-      ? { buf, type, prov: r.headers.get('x-thumb-prov') || 'microlink' }
+      ? { buf, type, prov: r.headers.get('x-thumb-prov') || 'microlink', ts: r.headers.get('x-thumb-ts'), ver: r.headers.get('x-thumb-ver') }
       : null;
   } catch { return null; }
 }
 
 // alt=1 parks the crop in the spare slot; without it the store applies its own
-// rule — the pinned provider takes the active slot, anything else parks anyway
-async function put(url, token, prov, img, alt){
+// rule — the pinned provider takes the active slot, anything else parks anyway.
+// `ts` preserves the original capture timestamp on a re-touch (TTL reset) so the
+// "newest fetched" image stays accurately identifiable.
+async function put(url, token, prov, img, alt, ts, ver){
   try {
-    const r = await fetch(`${SITE}/api/thumb?url=${enc(url)}&t=${enc(token)}&prov=${prov}${alt ? '&alt=1' : ''}`,
+    const tsParam = ts ? `&ts=${enc(ts)}` : '';
+    const verParam = ver ? `&ver=${enc(ver)}` : '';
+    const r = await fetch(`${SITE}/api/thumb?url=${enc(url)}&t=${enc(token)}&prov=${prov}${alt ? '&alt=1' : ''}${tsParam}${verParam}`,
                           { method:'PUT', body: img.buf, headers:{ 'content-type': img.type } });
     return r.ok;
   } catch { return false; }
@@ -138,10 +143,30 @@ async function worlds(){
   return [...urls];
 }
 
-async function warmOne(url){
+// The site's default primary provider (from the resolved owner config or config.js).
+// The daily cron needs this when the active slot is empty (a fresh KV miss) so it
+// warms the same provider the gallery would use by default.
+async function defaultProvider(){
+  try {
+    const r = await fetch(`${SITE}/api/owner-config`);
+    if (r.ok){
+      const cfg = await r.json();
+      if (cfg.screenshotProvider === 'thumio' || cfg.screenshotProvider === 'microlink') return cfg.screenshotProvider;
+    }
+  } catch {}
+  try {
+    const txt = await (await fetch(`${SITE}/config.js`)).text();
+    const m = txt.match(/screenshotProvider:\s*["'`](thumio|microlink)["'`]/);
+    if (m) return m[1];
+  } catch {}
+  return 'microlink';
+}
+
+async function warmOne(url, siteDefault){
   // current crop + upload token + the world's PINNED provider (x-thumb-prov-want:
-  // an owner.config thumbLock, else the store's thum.io hold; absent = microlink)
-  let token = null, existing = null, existingType = 'image/png', existingProv = 'microlink', want = null;
+  // an owner.config thumbLock, else the store's thum.io hold, else the current
+  // active provider, absent = site default)
+  let token = null, existing = null, existingType = 'image/png', existingProv = 'microlink', existingTs = null, existingVer = null, want = null;
   try {
     const g = await fetch(`${SITE}/api/thumb?url=${enc(url)}`, { cache:'no-store' });
     token = g.headers.get('x-thumb-ask');
@@ -150,6 +175,8 @@ async function warmOne(url){
       existing = Buffer.from(await g.arrayBuffer());
       existingType = g.headers.get('content-type') || existingType;
       existingProv = g.headers.get('x-thumb-prov') || existingProv;
+      existingTs = g.headers.get('x-thumb-ts');
+      existingVer = g.headers.get('x-thumb-ver');
     }
   } catch {}
   if (!token){ return 'no-store'; }   // KV not bound on this deployment
@@ -167,7 +194,7 @@ async function warmOne(url){
   // unless I ask or the 24h cron runs" rule.
   if (FILL_ONLY && existing) return 'kept-fill';
 
-  const active = want === 'thumio' ? 'thumio' : 'microlink';
+  const active = want === 'thumio' ? 'thumio' : want === 'microlink' ? 'microlink' : siteDefault;
   const other  = active === 'thumio' ? 'microlink' : 'thumio';
 
   // ── the ACTIVE slot: this world's own pinned provider ──
@@ -178,7 +205,10 @@ async function warmOne(url){
     // re-touch to reset the TTL so a good crop never silently expires on a bad
     // capture day — but only when it IS the pinned provider's crop. Re-PUTting
     // the other one would merely park it and leave the active slot expiring.
-    state = await put(url, token, existingProv, { buf: existing, type: existingType }, false) ? 'kept' : 'put-failed';
+    // The original capture timestamp + version are preserved so the "newest
+    // fetched" image stays identifiable and the gallery doesn't re-download an
+    // unchanged crop.
+    state = await put(url, token, existingProv, { buf: existing, type: existingType }, false, existingTs, existingVer) ? 'kept' : 'put-failed';
   else state = 'skip';                // capture failed and nothing worth keeping
 
   // ── the PARKED slot: the other provider, so ⇄ Swap stays instant ──
@@ -194,7 +224,7 @@ async function warmOne(url){
     // mislabel it. Nothing parked → simply skip (a real visitor fills it).
     const spare = await getAlt(url);
     altState = spare
-      ? (await put(url, token, spare.prov, spare, true) ? 'alt-kept' : 'alt-failed')
+      ? (await put(url, token, spare.prov, spare, true, spare.ts, spare.ver) ? 'alt-kept' : 'alt-failed')
       : 'no-alt';
   }
 
@@ -203,10 +233,11 @@ async function warmOne(url){
 
 const list = await worlds();
 if (!list.length){ console.log('No worlds resolved from', SITE); process.exit(0); }
-console.log(`Warming ${list.length} thumbnails on ${SITE} — ${FILL_ONLY ? 'FILL-ONLY (gaps only, existing crops preserved)' : 'full refresh'} — both providers per world`);
+const siteDefault = await defaultProvider();
+console.log(`Warming ${list.length} thumbnails on ${SITE} — ${FILL_ONLY ? 'FILL-ONLY (gaps only, existing crops preserved)' : 'full refresh'} — both providers per world (default: ${siteDefault})`);
 const tally = {};
 for (const url of list){
-  const r = await warmOne(url);
+  const r = await warmOne(url, siteDefault);
   tally[r] = (tally[r] || 0) + 1;
   console.log(`  ${r.padEnd(14)} ${url}`);
   // gentle on microlink's burst limit — still exactly ONE microlink capture per
