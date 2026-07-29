@@ -25,7 +25,7 @@ function clampInt(v, lo, hi, dflt){
 }
 function withProtocol(u){ return /^https?:\/\//i.test(u) ? u : 'https://' + u; }
 
-function providerURL(provider, target, w, h){
+function providerURL(provider, target, w, h, fresh){
   const full = withProtocol(target);
   const enc  = encodeURIComponent(full);
   switch (provider){
@@ -38,17 +38,25 @@ function providerURL(provider, target, w, h){
            + `&viewport.width=${w}&viewport.height=${h}&viewport.deviceScaleFactor=1`
            + `&waitUntil=networkidle0&waitForTimeout=2500&meta=false`;
     }
-    case 'thumio':
-      // viewportHeight pins the render viewport to the requested aspect — one true
-      // screenful, bottom edge included (crop alone would trim a taller render)
+    case 'thumio': {
+      // maxAge tells THUM.IO how old a render it's allowed to hand back from ITS
+      // OWN internal per-URL cache. Omitting this (the previous bug) let thum.io
+      // fall back to its own default — so a held-to-thumio world could keep
+      // serving a render from weeks ago no matter how often our own edge cache
+      // or KV store got refreshed, because we never actually asked thum.io for
+      // anything new. A forced refresh (fresh=… on this endpoint) asks for
+      // maxAge/0 — a genuinely new capture; an ordinary request caps it at a
+      // day, matching the once-a-day refresh cycle every other path assumes.
+      const maxAge = fresh ? 0 : 86400;
       return `https://image.thum.io/get/width/${w}/crop/${h}/viewportWidth/${w}/viewportHeight/${h}`
-           + `/wait/18/png/noanimate/${full}`;
+           + `/wait/18/maxAge/${maxAge}/png/noanimate/${full}`;
+    }
   }
 }
 
-async function tryCapture(provider, target, w, h){
+async function tryCapture(provider, target, w, h, fresh){
   try {
-    const res = await fetch(providerURL(provider, target, w, h), { redirect: 'follow' });
+    const res = await fetch(providerURL(provider, target, w, h, fresh), { redirect: 'follow' });
     if (!res.ok) return null;
     const type = res.headers.get('content-type') || '';
     if (!type.startsWith('image/')) return null;
@@ -87,7 +95,7 @@ export async function onRequestGet({ request, waitUntil }){
   // fetch() while a server-side request sails through).
   const chain = pinned ? ['thumio'] : ['microlink', 'thumio'];
   for (const provider of chain){
-    const shot = await tryCapture(provider, target, w, h);
+    const shot = await tryCapture(provider, target, w, h, !!fresh);
     if (!shot) continue;
     // A microlink (good) crop pins for a day; a thum.io FALLBACK pins only
     // briefly, so once microlink's daily quota resets the next capture upgrades
