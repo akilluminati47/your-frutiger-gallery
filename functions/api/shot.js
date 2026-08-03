@@ -25,32 +25,41 @@ function clampInt(v, lo, hi, dflt){
 }
 function withProtocol(u){ return /^https?:\/\//i.test(u) ? u : 'https://' + u; }
 
+// Every provider caches its render PER EXACT TARGET URL, so the only reliable
+// way to ask for a new picture is to ask about a slightly different URL. That
+// key is shared by both providers here (and matches /thumbs' own buster), so a
+// world renders ONCE per bucket no matter who asks:
+//   · ordinary request → the UTC day bucket: at most 24h stale, which is the
+//     cycle the KV store, the cron and the gallery all already assume;
+//   · forced request (?fresh=<key>) → the caller's own key: /thumbs' Fetch
+//     sends a nonce (a genuinely new render — what Fetch means), the nightly
+//     cron sends the day bucket so it shares the day's render instead of
+//     doubling it.
+// The site ignores the unknown param, so it costs nothing and changes nothing.
+const dayBucket = () => 'd' + Math.floor(Date.now() / 864e5);
+function keyedTarget(full, fresh){
+  return `${full}${full.includes('?') ? '&' : '?'}fgshot=${encodeURIComponent(fresh || dayBucket())}`;
+}
+
 function providerURL(provider, target, w, h, fresh){
-  const full = withProtocol(target);
+  const full = keyedTarget(withProtocol(target), fresh);
   const enc  = encodeURIComponent(full);
   switch (provider){
-    case 'microlink': {
-      // Daily-rotating target key so microlink can't serve a render older than a
-      // day (it caches per URL; a since-fixed page would otherwise persist). One
-      // key per day = same-day requests still share its cache, no extra quota.
-      const mEnc = encodeURIComponent(`${full}${full.includes('?') ? '&' : '?'}fgday=${Math.floor(Date.now() / 864e5)}`);
-      return `https://api.microlink.io/?url=${mEnc}&screenshot=true&embed=screenshot.url`
+    case 'microlink':
+      return `https://api.microlink.io/?url=${enc}&screenshot=true&embed=screenshot.url`
            + `&viewport.width=${w}&viewport.height=${h}&viewport.deviceScaleFactor=1`
            + `&waitUntil=networkidle0&waitForTimeout=2500&meta=false`;
-    }
-    case 'thumio': {
-      // maxAge tells THUM.IO how old a render it's allowed to hand back from ITS
-      // OWN internal per-URL cache. Omitting this (the previous bug) let thum.io
-      // fall back to its own default — so a held-to-thumio world could keep
-      // serving a render from weeks ago no matter how often our own edge cache
-      // or KV store got refreshed, because we never actually asked thum.io for
-      // anything new. A forced refresh (fresh=… on this endpoint) asks for
-      // maxAge/0 — a genuinely new capture; an ordinary request caps it at a
-      // day, matching the once-a-day refresh cycle every other path assumes.
-      const maxAge = fresh ? 0 : 86400;
+    case 'thumio':
+      // maxAge is thum.io's OWN per-URL cache window, and it is NOT a refresh
+      // knob: measured against a live clock page, `maxAge/0` replays the same
+      // byte-identical render minutes later, exactly like `maxAge/86400`. That
+      // is what let a held-to-thumio world serve a render from WEEKS ago while
+      // every timestamp downstream said "captured today" — the nightly cron
+      // faithfully re-uploaded thum.io's frozen picture under a fresh ts. The
+      // keyed target above is the real fix (a new URL is the only thing that
+      // gets a new render); maxAge stays low so it can only ever help.
       return `https://image.thum.io/get/width/${w}/crop/${h}/viewportWidth/${w}/viewportHeight/${h}`
-           + `/wait/18/maxAge/${maxAge}/png/noanimate/${full}`;
-    }
+           + `/wait/18/maxAge/0/png/noanimate/${full}`;
   }
 }
 
@@ -82,7 +91,12 @@ export async function onRequestGet({ request, waitUntil }){
   // its own key family: a pinned request wants SPECIFICALLY thum.io's render
   // (held worlds refresh through it), and must never be answered with a
   // day-pinned microlink entry sitting under the shared key.
-  const cacheKey = new Request(`https://fg-shot.cache/${encodeURIComponent(target)}?w=${w}&h=${h}${pinned ? '&prov=thumio' : ''}`);
+  // The DAY BUCKET rides the key too. Without it a day-rotated render (see
+  // keyedTarget) still had to wait out the previous day's edge entry — up to a
+  // second 24h of staleness stacked on top of the first. Now the edge entry
+  // rotates with the render it holds, so "one fresh render per world per day"
+  // is true end to end.
+  const cacheKey = new Request(`https://fg-shot.cache/${encodeURIComponent(target)}?w=${w}&h=${h}&b=${dayBucket()}${pinned ? '&prov=thumio' : ''}`);
 
   if (!fresh){
     const hit = await cache.match(cacheKey);
@@ -95,7 +109,7 @@ export async function onRequestGet({ request, waitUntil }){
   // fetch() while a server-side request sails through).
   const chain = pinned ? ['thumio'] : ['microlink', 'thumio'];
   for (const provider of chain){
-    const shot = await tryCapture(provider, target, w, h, !!fresh);
+    const shot = await tryCapture(provider, target, w, h, fresh);
     if (!shot) continue;
     // A microlink (good) crop pins for a day; a thum.io FALLBACK pins only
     // briefly, so once microlink's daily quota resets the next capture upgrades

@@ -91,16 +91,17 @@ function liveFrameSrc(u){
 function screenshotURL(provider, url, w, h, freshKey = ''){
   const maxAge = freshKey ? 0 : 86400;
   const full = withProtocol(url);
-  // Even a NON-fresh capture carries a daily-rotating key: microlink caches its
-  // render per target URL, so a bare URL lets a since-fixed page (e.g. the
-  // template back when it leaked the owner's config) live in microlink's cache
+  // Even a NON-fresh capture carries a daily-rotating key: EVERY provider caches
+  // its render per target URL, so a bare URL lets a since-fixed page (e.g. the
+  // template back when it leaked the owner's config) live in that cache
   // indefinitely and keep repopulating the store. Rotating this in lockstep with
-  // the KV 24h TTL (slotNow = Date.now()/864e5) caps microlink's cache at one
+  // the KV 24h TTL (slotNow = Date.now()/864e5) caps the provider's cache at one
   // day too — the site ignores the unknown param, and it's ONE key per day so
-  // same-day captures still share microlink's cache (no extra quota spent).
-  const captureUrl = freshKey
-    ? `${full}${full.includes('?') ? '&' : '?'}fgfresh=${encodeURIComponent(freshKey)}`
-    : `${full}${full.includes('?') ? '&' : '?'}fgday=${Math.floor(Date.now() / 864e5)}`;
+  // same-day captures still share the cached render (no extra quota spent).
+  // Same param and same bucket as /api/shot's keyedTarget, so a browser capture,
+  // a proxied one and the nightly cron all land on ONE render per world per day.
+  const captureUrl = `${full}${full.includes('?') ? '&' : '?'}fgshot=`
+    + encodeURIComponent(freshKey || 'd' + Math.floor(Date.now() / 864e5));
   const reqBust = freshKey ? `&fgfresh=${encodeURIComponent(freshKey)}` : '';
   const enc  = encodeURIComponent(captureUrl);
   // w is both the render viewport width AND the output width, h the matching crop,

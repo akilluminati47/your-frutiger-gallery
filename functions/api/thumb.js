@@ -12,6 +12,14 @@
 // KV's own 24h TTL IS the refresh cycle: a stored crop auto-expires after a day,
 // so the first returning guest past that finds a miss and re-captures. KV is on
 // the free Workers plan (no card, unlike R2), plenty for a set of small crops.
+// A re-touch (a PUT replaying stored bytes to survive a bad capture day) resets
+// that TTL, so MAX_LIFE_S below caps the total life of any one crop — otherwise
+// a world whose provider stayed down never expired and never got re-captured.
+// Note the OTHER half of "fresh every day", which does not live here: a capture
+// provider caches its render per exact target URL, so the crop arriving at this
+// endpoint is only as new as the URL it was rendered for. /api/shot stamps a
+// daily fgshot= key onto the target for exactly that reason — without it thum.io
+// replays one frozen render for weeks and every ts here reads "today".
 //
 //   GET /api/thumb?url=<target>
 //     • a stored crop (KV TTL keeps it <24h) → 200 image, Cache-Control tuned to
@@ -28,6 +36,21 @@
 const DAY_S   = 86400;
 const MAX_BYTES = 3_000_000;        // 3 MB cap per stored crop (KV allows up to 25 MB)
 const te = new TextEncoder();
+
+// Hard ceiling on how long ANY crop may live, counted from when it was actually
+// captured (metadata.ts), not from the last write. A re-touch — a PUT that
+// replays existing bytes under their original ts to reset the TTL, the cron's
+// bad-capture-day failsafe — used to buy a full fresh day every time, with no
+// limit: a world whose provider stayed down kept the same picture indefinitely
+// while every timestamp still read "today". Now the TTL is clamped to whatever
+// is left of this window, so a crop that can't be re-captured expires on
+// schedule and the store MISSES, which is what makes a visitor capture a new
+// one. Fresh captures stamp ts = now and are unaffected.
+const MAX_LIFE_S = 3 * DAY_S;
+const cappedTtl = (ttl, ts) => {
+  const left = Math.floor((ts + MAX_LIFE_S * 1000 - Date.now()) / 1000);
+  return Math.max(60, Math.min(ttl, left));   // KV's floor is 60s
+};
 
 // Up to TWO crops live per world: the ACTIVE one under thumb:<url> (what the
 // gallery serves — same key as ever) and the other provider's crop PARKED
@@ -273,8 +296,15 @@ export async function onRequest({ request, env }){
       // the promoted crop keeps its capture ts but gets a fresh ver (activation
       // stamp) so a running gallery sees the active slot changed even though the
       // crop itself was captured earlier
-      await store.put(objKey(target), alt.value, { expirationTtl: DAY_S, metadata: { ...alt.metadata, ver: Date.now() } });
-      if (act?.value) await store.put(altKey(target), act.value, { expirationTtl: DAY_S, metadata: act.metadata });
+      // both keep their own capture ts, so both are clamped by how old they
+      // really are — a swap promotes a crop, it doesn't rejuvenate it
+      await store.put(objKey(target), alt.value, {
+        expirationTtl: cappedTtl(DAY_S, alt.metadata?.ts || Date.now()),
+        metadata: { ...alt.metadata, ver: Date.now() },
+      });
+      if (act?.value) await store.put(altKey(target), act.value, {
+        expirationTtl: cappedTtl(DAY_S, act.metadata?.ts || Date.now()), metadata: act.metadata,
+      });
       else await store.delete(altKey(target));
       const active = provOf(alt.metadata);
       if (active === 'thumio') await store.put(prefKey(target), 'thumio');
@@ -306,7 +336,7 @@ export async function onRequest({ request, env }){
     // through here so a /thumbs Swap always finds a complete parked pair.
     if (u.searchParams.get('alt')){
       await store.put(altKey(target), buf, {
-        expirationTtl: DAY_S, metadata: { contentType: type, ts: metaTs, ver: metaVer, prov },
+        expirationTtl: cappedTtl(DAY_S, metaTs), metadata: { contentType: type, ts: metaTs, ver: metaVer, prov },
       });
       return new Response('parked', { status: 200, headers: { 'access-control-allow-origin': '*' } });
     }
@@ -335,29 +365,40 @@ export async function onRequest({ request, env }){
     else prefProv = (cur?.metadata ? provOf(cur.metadata) : null) || 'microlink';
 
     if (prov !== prefProv){
-      // the toggle OWNS the active slot: a non-preferred crop can never take
-      // it — not on a held world (even when the active crop has expired; this
-      // was the hole that let a visitor's microlink bump a thum.io hold), and
-      // never over a crop that's already showing. It parks as alt instead.
-      // Sole exception: an UNHELD world with an EMPTY slot takes the thum.io
-      // fallback (short TTL below) — a weak crop now beats a blank slab.
-      if (lock || storedPref || cur?.value){
+      // the toggle OWNS the active slot on locked or held worlds: a non-
+      // preferred crop can never take it — not on a locked/held world (even
+      // when the active crop has expired; this was the hole that let a
+      // visitor's microlink bump a thum.io hold). It parks as alt instead.
+      // Without a lock or hold there is no owner preference, so the existing
+      // crop is parked as alt and the new crop takes the active slot.
+      if (lock || storedPref){
         await store.put(altKey(target), buf, {
-          expirationTtl: DAY_S, metadata: { contentType: type, ts: metaTs, ver: metaVer, prov },
+          expirationTtl: cappedTtl(DAY_S, metaTs), metadata: { contentType: type, ts: metaTs, ver: metaVer, prov },
         });
         return new Response('parked', { status: 200, headers: { 'access-control-allow-origin': '*' } });
+      }
+      // unheld, unlocked — the existing crop (if any) moves to alt and the
+      // new crop replaces it in the active slot.  The world keeps ≤2 crops,
+      // one per provider, and the old alt (same provider as the incoming one)
+      // is silently overwritten — only the freshest of each provider matters.
+      if (cur?.value && provOf(cur.metadata) !== prov){
+        await store.put(altKey(target), cur.value, {
+          expirationTtl: cappedTtl(DAY_S, cur.metadata?.ts || Date.now()), metadata: cur.metadata,
+        });
       }
     } else if (cur?.value && provOf(cur.metadata) !== prov){
       // the preferred provider reclaims its slot from a stale fallback —
       // park the old crop, so the world keeps one per provider (≤2)
-      await store.put(altKey(target), cur.value, { expirationTtl: DAY_S, metadata: cur.metadata });
+      await store.put(altKey(target), cur.value, {
+        expirationTtl: cappedTtl(DAY_S, cur.metadata?.ts || Date.now()), metadata: cur.metadata,
+      });
     }
 
     // unheld thum.io fallbacks expire early: they self-heal an empty slot NOW,
     // and hand it to the next microlink capture in hours instead of a day
     const ttl = (prov === 'thumio' && prefProv !== 'thumio') ? 21600 : DAY_S;
     await store.put(objKey(target), buf, {
-      expirationTtl: ttl,                                   // auto-refresh cycle
+      expirationTtl: cappedTtl(ttl, metaTs),                // auto-refresh cycle, bounded by MAX_LIFE_S
       metadata: { contentType: type, ts: metaTs, ver: metaVer, prov },   // ver bumps the active slot for live re-checks
     });
     return new Response('stored', { status: 200, headers: { 'access-control-allow-origin': '*' } });

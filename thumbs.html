@@ -188,20 +188,26 @@ for (let i = 0; i < 14; i++){
 // providers cache their render per exact URL, and a bare URL would happily replay
 // a screenshot of the page as it USED to look (the stale-config poison) instead
 // of rendering it fresh. Costs one render per press — exactly what Fetch means.
-const freshTarget = url => {
+// The key is the same fgshot= param the gallery and /api/shot use, so a press
+// here and every later automatic capture speak one language — only the VALUE
+// differs: a nonce (this) versus the shared day bucket (everyone else).
+const freshKey = () => Date.now().toString(36);
+const freshTarget = (url, k) => {
   const full = /^https?:\/\//i.test(url) ? url : 'https://' + url;
-  return `${full}${full.includes('?') ? '&' : '?'}fgfresh=${Date.now().toString(36)}`;
+  return `${full}${full.includes('?') ? '&' : '?'}fgshot=${k}`;
 };
 const microlinkURL = url =>
-  `https://api.microlink.io/?url=${enc(freshTarget(url))}&screenshot=true&embed=screenshot.url`
+  `https://api.microlink.io/?url=${enc(freshTarget(url, freshKey()))}&screenshot=true&embed=screenshot.url`
   + `&viewport.width=${SHOT_W}&viewport.height=${SHOT_H}&viewport.deviceScaleFactor=1`
   + `&waitUntil=networkidle0&waitForTimeout=2500&meta=false`;
 // thum.io rides through our own /api/shot proxy: its hotlink guard 403s a
 // cross-origin browser fetch(), but the proxy captures server-side (16:9-pinned
-// viewport, same as everywhere). The fgfresh-busted target defeats thum.io's
-// upstream cache; &fresh= skips the proxy's own edge cache the same way.
+// viewport, same as everywhere). Pass the CLEAN target and let &fresh= do both
+// jobs — the proxy stamps that key onto the target (the only thing that defeats
+// thum.io's upstream cache, which ignores maxAge entirely) and skips its own
+// edge cache with it.
 const thumioURL = url =>
-  `/api/shot?url=${enc(freshTarget(url))}&w=${SHOT_W}&h=${SHOT_H}&prov=thumio&fresh=${Date.now().toString(36)}`;
+  `/api/shot?url=${enc(/^https?:\/\//i.test(url) ? url : 'https://' + url)}&w=${SHOT_W}&h=${SHOT_H}&prov=thumio&fresh=${freshKey()}`;
 
 // worlds = corridor projects + every toggled-on end-wall slot, LIVE ones
 // included: an interactive wall never shows its own crop on desktop, but its

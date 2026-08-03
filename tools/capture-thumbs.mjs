@@ -8,7 +8,9 @@
 //     brand-new/expired links get captured. (Crops are keyed by URL not slot, so
 //     a reorg that just moves/duplicates a link reuses its crop for free.)
 //   • DAILY (schedule) / manual (FILL_ONLY unset) — FULL refresh + touch-up:
-//     re-shoot both slots, re-touching the stored bytes when a capture is down.
+//     re-shoot both slots, re-touching the stored bytes when a capture is down —
+//     but only up to MAX_RETOUCH_MS, so a persistently-failing provider can no
+//     longer keep a weeks-old crop alive forever (see the constant).
 //
 // For each world it fills BOTH of the store's slots — the ACTIVE crop and the
 // PARKED (alt) one (fill mode skips a world outright once its ACTIVE slot exists):
@@ -54,25 +56,43 @@ if (!SITE){ console.log('SITE_URL not set — nothing to do.'); process.exit(0);
 const FILL_ONLY = process.env.FILL_ONLY === '1';
 
 const SHOT_W = 1600, SHOT_H = 900;
+
+// How long a crop may be kept alive by RE-TOUCHING alone (see warmOne). The
+// re-touch exists so one bad capture day can't blank a slab — but it reset the
+// 24h TTL with no ceiling, so a world whose provider was persistently down (a
+// 403 on that domain, a burst 429) had its crop held alive forever: the store
+// never missed, so no visitor ever re-captured either, and "KV's TTL IS the
+// refresh cycle" quietly stopped being true. Past this age we stop propping the
+// crop up and let it expire — the slab goes to whatever the next real capture
+// yields, which is the behaviour a store miss was always supposed to trigger.
+const MAX_RETOUCH_MS = 3 * 864e5;   // 3 days
+const tooOldToKeep = ts => {
+  const t = parseInt(ts || '', 10);
+  return Number.isFinite(t) && t > 0 && Date.now() - t > MAX_RETOUCH_MS;
+};
 const withProto = u => /^https?:\/\//i.test(u) ? u : 'https://' + u;
 const enc = encodeURIComponent;
 const dayKey = () => Math.floor(Date.now() / 864e5);   // rotates with the store's 24h TTL
-const microlinkURL = url => {
-  // Daily-rotating target key (matches the /api/thumb 24h TTL): microlink caches
-  // its render per URL, so a bare URL would let a since-fixed page — e.g. the
-  // template back when it leaked the owner's config — sit in microlink's cache
-  // and get re-uploaded here as "fresh" every night. One key per day caps that
-  // at 24h and costs no extra quota (the site ignores the unknown param).
+// Daily-rotating target key (matches the /api/thumb 24h TTL): EVERY provider
+// caches its render per exact URL, so a bare URL lets a since-fixed page sit in
+// the provider's cache and get re-uploaded here as "fresh" every night. One key
+// per day caps that at 24h and costs no extra quota (the site ignores the
+// unknown param). Same param name and same bucket as /api/shot's keyedTarget,
+// so this run and every visitor share one render per world per day.
+const dayTarget = url => {
   const full = withProto(url);
-  const target = `${full}${full.includes('?') ? '&' : '?'}fgday=${dayKey()}`;
-  return `https://api.microlink.io/?url=${enc(target)}&screenshot=true&embed=screenshot.url`
+  return `${full}${full.includes('?') ? '&' : '?'}fgshot=d${dayKey()}`;
+};
+const microlinkURL = url =>
+  `https://api.microlink.io/?url=${enc(dayTarget(url))}&screenshot=true&embed=screenshot.url`
     + `&viewport.width=${SHOT_W}&viewport.height=${SHOT_H}&viewport.deviceScaleFactor=1`
     + `&waitUntil=networkidle0&waitForTimeout=2500&meta=false`;
-};
 // thum.io renders only through the site's own proxy (its hotlink guard 403s a
 // direct cross-origin fetch), which is exactly what makes this side free. The
 // prov pin gets its own edge-cache family there, and fresh= rotates daily so
-// the proxy can never hand back a render older than the cycle being refreshed.
+// the proxy can never hand back a render older than the cycle being refreshed —
+// it is the day bucket, not a nonce, so the proxy keys thum.io's target to the
+// SAME url a visitor would and the world renders once a day, not twice.
 const thumioURL = url =>
   `${SITE}/api/shot?url=${enc(withProto(url))}&w=${SHOT_W}&h=${SHOT_H}&prov=thumio&fresh=d${dayKey()}`;
 
@@ -201,7 +221,7 @@ async function warmOne(url, siteDefault){
   let state;
   const hot = await capture(url, active);
   if (hot) state = await put(url, token, active, hot, false) ? 'fresh' : 'put-failed';
-  else if (existing && existingProv === active)
+  else if (existing && existingProv === active && !tooOldToKeep(existingTs))
     // re-touch to reset the TTL so a good crop never silently expires on a bad
     // capture day — but only when it IS the pinned provider's crop. Re-PUTting
     // the other one would merely park it and leave the active slot expiring.
@@ -209,6 +229,7 @@ async function warmOne(url, siteDefault){
     // fetched" image stays identifiable and the gallery doesn't re-download an
     // unchanged crop.
     state = await put(url, token, existingProv, { buf: existing, type: existingType }, false, existingTs, existingVer) ? 'kept' : 'put-failed';
+  else if (existing && tooOldToKeep(existingTs)) state = 'aged-out';   // stop propping it up; let the TTL take it
   else state = 'skip';                // capture failed and nothing worth keeping
 
   // ── the PARKED slot: the other provider, so ⇄ Swap stays instant ──
@@ -223,9 +244,9 @@ async function warmOne(url, siteDefault){
     // Re-PUT under its OWN true provider tag, not `other`, so a swap doesn't
     // mislabel it. Nothing parked → simply skip (a real visitor fills it).
     const spare = await getAlt(url);
-    altState = spare
-      ? (await put(url, token, spare.prov, spare, true, spare.ts, spare.ver) ? 'alt-kept' : 'alt-failed')
-      : 'no-alt';
+    altState = !spare ? 'no-alt'
+      : tooOldToKeep(spare.ts) ? 'alt-aged-out'          // same ceiling as the active slot
+      : (await put(url, token, spare.prov, spare, true, spare.ts, spare.ver) ? 'alt-kept' : 'alt-failed');
   }
 
   return `${state}/${altState}`;
