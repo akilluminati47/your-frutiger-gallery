@@ -137,17 +137,41 @@ async function put(url, token, prov, img, alt, ts, ver){
   } catch { return false; }
 }
 
+// The site's own RESOLVED owner config, read from the same two routes the site
+// itself uses, in the same order. /api/owner-config answers only from the
+// OWNER_CONFIG secret; /owner.config.json is the Function that falls back to a
+// COMMITTED owner.config.json — and an owner who retired the secret (as this
+// one did) is served entirely by the second. Asking only the first is how this
+// job spent months warming the TEMPLATE's ten default worlds (the config.js
+// scrape below) while the owner's real sixteen were never refreshed at all —
+// they stayed on whatever a passing visitor happened to capture. A template or
+// fork has neither route → both 404 → the scrape still covers it.
+let _cfg;
+async function ownerConfig(){
+  if (_cfg !== undefined) return _cfg;
+  for (const route of ['/api/owner-config', '/owner.config.json']){
+    try {
+      const r = await fetch(`${SITE}${route}`, { cache:'no-store' });
+      if (!r.ok) continue;
+      const cfg = await r.json();
+      if (cfg && typeof cfg === 'object') return (_cfg = cfg);
+    } catch {}
+  }
+  return (_cfg = null);
+}
+
 // World list: prefer the site's own resolved owner config, else scrape config.js.
 async function worlds(){
   const urls = new Set();
-  try {
-    const r = await fetch(`${SITE}/api/owner-config`);
-    if (r.ok){
-      const cfg = await r.json();
-      for (const p of cfg.projects || []) if (p.url) urls.add(p.url.trim());
-      for (const s of ['west','east']){ const w = cfg.walls?.[s]; if (w?.on && w.url && !w.live) urls.add(w.url.trim()); }
-    }
-  } catch {}
+  const cfg = await ownerConfig();
+  if (cfg){
+    for (const p of cfg.projects || []) if (p.url) urls.add(p.url.trim());
+    // LIVE walls included: a live slab still needs a crop — it is the portrait
+    // the mirrors bounce, and on touch the wall demotes to an ordinary captured
+    // world. Skipping them left the two most prominent slabs in the hall living
+    // on visitor captures alone.
+    for (const s of ['west','east']){ const w = cfg.walls?.[s]; if (w?.on && w.url) urls.add(w.url.trim()); }
+  }
   if (!urls.size){
     try {
       const txt = await (await fetch(`${SITE}/config.js`)).text();
@@ -167,13 +191,9 @@ async function worlds(){
 // The daily cron needs this when the active slot is empty (a fresh KV miss) so it
 // warms the same provider the gallery would use by default.
 async function defaultProvider(){
-  try {
-    const r = await fetch(`${SITE}/api/owner-config`);
-    if (r.ok){
-      const cfg = await r.json();
-      if (cfg.screenshotProvider === 'thumio' || cfg.screenshotProvider === 'microlink') return cfg.screenshotProvider;
-    }
-  } catch {}
+  const cfg = await ownerConfig();
+  if (cfg?.screenshotProvider === 'thumio' || cfg?.screenshotProvider === 'microlink')
+    return cfg.screenshotProvider;
   try {
     const txt = await (await fetch(`${SITE}/config.js`)).text();
     const m = txt.match(/screenshotProvider:\s*["'`](thumio|microlink)["'`]/);
