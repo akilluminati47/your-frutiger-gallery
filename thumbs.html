@@ -506,7 +506,7 @@ $('#provSel').addEventListener('click', async () => {
 });
 
 // ── click-to-expand lightbox: grow from the card's spot to XXL, click to shrink ──
-const zoom = $('#zoom'), zoomImg = zoom.querySelector('img');
+const zoom = $('#zoom'), zoomImg = zoom.querySelector('img'), zoomHint = zoom.querySelector('.hint');
 let zoomState = null;
 const rectOf = el => { const r = el.getBoundingClientRect(); return { left:r.left, top:r.top, width:r.width, height:r.height }; };
 const place = r => { zoomImg.style.left=r.left+'px'; zoomImg.style.top=r.top+'px'; zoomImg.style.width=r.width+'px'; zoomImg.style.height=r.height+'px'; };
@@ -569,9 +569,20 @@ function setHover(el){
   if (t) sfx.hover();
 }
 const atPoint = (x, y) => document.elementFromPoint(x, y)?.closest?.(INTERACTIVE) || null;
-addEventListener('mousemove', e => {
+
+// ONE device drives the circle at a time. Without this baton the pad loop —
+// which runs every frame once a stick has ever moved — rewrites the position
+// on the very next rAF after a mousemove, so the mouse could never take the
+// cursor back. Whoever moves last owns it, and the handoff carries the
+// position across (pc is kept in sync) so the circle never teleports.
+let src = null;                       // 'mouse' | 'pad' | 'touch'
+function claim(who, x, y){
+  src = who; pc.x = x; pc.y = y;
   document.body.classList.add('cursor-live');
-  cross.style.left = e.clientX + 'px'; cross.style.top = e.clientY + 'px'; cross.classList.add('show');
+  cross.style.left = x + 'px'; cross.style.top = y + 'px'; cross.classList.add('show');
+}
+addEventListener('mousemove', e => {
+  claim('mouse', e.clientX, e.clientY);
   setHover(atPoint(e.clientX, e.clientY));
 }, { passive:true });
 document.addEventListener('mouseleave', () => { cross.classList.remove('show'); setHover(null); });
@@ -580,39 +591,50 @@ addEventListener('click', e => { if (e.target.closest(INTERACTIVE) && !e.target.
 // touch: a finger drives the circle; the native tap still fires the control
 addEventListener('touchstart', e => {
   const t = e.touches[0]; if (!t) return;
-  cross.style.left = t.clientX + 'px'; cross.style.top = t.clientY + 'px'; cross.classList.add('show');
+  claim('touch', t.clientX, t.clientY);
   cross.classList.toggle('active', !!atPoint(t.clientX, t.clientY));
 }, { passive:true });
 addEventListener('touchmove', e => {
   const t = e.touches[0]; if (!t) return;
-  cross.style.left = t.clientX + 'px'; cross.style.top = t.clientY + 'px';
+  claim('touch', t.clientX, t.clientY);
   cross.classList.toggle('active', !!atPoint(t.clientX, t.clientY));
 }, { passive:true });
 addEventListener('touchend', () => setTimeout(() => cross.classList.remove('show'), 350));
 
-// gamepad: left stick moves the circle, A clicks what it's over, right stick scrolls
-let padIndex = null, aPrev = false, lastPadT = performance.now();
-const pc = { x: innerWidth/2, y: innerHeight/2, ready:false };
-addEventListener('gamepadconnected',    e => { padIndex = e.gamepad.index; sfx.init(); });
-addEventListener('gamepaddisconnected', e => { if (padIndex === e.gamepad.index){ padIndex = null; cross.classList.remove('show'); setHover(null); } });
+// gamepad: left stick moves the circle, A clicks what it's over, B backs out of
+// the zoom, right stick scrolls
+let padIndex = null, aPrev = false, bPrev = false, lastPadT = performance.now();
+const pc = { x: innerWidth/2, y: innerHeight/2 };
+addEventListener('gamepadconnected',    e => { padIndex = e.gamepad.index; sfx.init();
+  zoomHint.textContent = 'click anywhere or press B to close'; });
+addEventListener('gamepaddisconnected', e => { if (padIndex === e.gamepad.index){ padIndex = null;
+  if (src === 'pad'){ src = null; cross.classList.remove('show'); setHover(null); } } });
 function padLoop(now){
   const dt = Math.min(0.05, (now - lastPadT) / 1000); lastPadT = now;
   const gp = (padIndex != null && navigator.getGamepads) ? navigator.getGamepads()[padIndex] : null;
   if (gp){
     const dz = v => Math.abs(v) < 0.14 ? 0 : v;
     const lx = dz(gp.axes[0] || 0), ly = dz(gp.axes[1] || 0), ry = dz(gp.axes[3] || 0);
-    if (lx || ly) pc.ready = true;
-    pc.x = Math.max(0, Math.min(innerWidth,  pc.x + lx * 950 * dt));
-    pc.y = Math.max(0, Math.min(innerHeight, pc.y + ly * 950 * dt));
-    if (ry) scrollBy(0, ry * 900 * dt);
-    if (pc.ready){
+    const a  = !!gp.buttons[0]?.pressed, b = !!gp.buttons[1]?.pressed;
+    // the pad only takes the cursor back on real input — a resting stick must
+    // not stomp the mouse every frame. A held A counts as activity so a press
+    // that starts on the pad's own circle still lands.
+    if (lx || ly || ry || a || aPrev || b || bPrev) src = 'pad';
+    if (src === 'pad'){
+      pc.x = Math.max(0, Math.min(innerWidth,  pc.x + lx * 950 * dt));
+      pc.y = Math.max(0, Math.min(innerHeight, pc.y + ly * 950 * dt));
+      if (ry) scrollBy(0, ry * 900 * dt);
       document.body.classList.add('cursor-live');
       cross.style.left = pc.x + 'px'; cross.style.top = pc.y + 'px'; cross.classList.add('show');
       setHover(atPoint(pc.x, pc.y));
-      const a = !!gp.buttons[0]?.pressed;
-      if (a && !aPrev && hoverEl){ sfx.press(); hoverEl.click(); }
-      aPrev = a;
+      // the zoom overlay isn't INTERACTIVE, so the circle can never hover a way
+      // out of it: whoever opened the preview with A closes it with B — or with
+      // A, since nothing behind the overlay is reachable anyway.
+      if (zoomState && ((b && !bPrev) || (a && !aPrev))){ sfx.press(); closeZoom(); }
+      else if (a && !aPrev && hoverEl){ sfx.press(); hoverEl.click(); }
     }
+    aPrev = a; bPrev = b;   // tracked even while another device owns the cursor,
+                            // so a release can't strand the baton on the pad
   }
   requestAnimationFrame(padLoop);
 }
